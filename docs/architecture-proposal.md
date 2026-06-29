@@ -110,17 +110,16 @@ panCollapse convert \
   [--score-window N] \
   [--min-splice-jump N] \
   [--max-traversals-per-read N] \
+  [--raw-cb-length N] \
+  [--raw-umi-length N] \
   [--threads N]
 ```
 
 `--strand` is required so V1 does not hide library-orientation judgment behind a default.
 Defaults: `--assignment all`, `--score-window 0`, `--min-splice-jump 20`,
-`--max-traversals-per-read 100000`, raw CB and UMI lengths matching the Phase 2
-fixture lengths used by the implementation test, and deterministic single-writer output.
-The CLI must include explicit
-controls for raw CB length and raw UMI length; exact raw-length option spelling is not
-set by this document. Tag-source and tag-name overrides are not part of the active V1
-barcode/UMI source contract.
+`--max-traversals-per-read 100000`, `--raw-cb-length 16`, `--raw-umi-length 12`, and
+deterministic single-writer output. Tag-source and tag-name overrides are not part of the
+active V1 barcode/UMI source contract.
 
 ## Data flow
 

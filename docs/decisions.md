@@ -521,8 +521,10 @@ consumes GAMP plus the matching `.xg`, emits mapper-style RAD plus a two-column
 across thread counts are deferred to Phase 3.
 
 **Decision:** Raw cell-barcode and UMI lengths are CLI-controlled values. Their defaults
-match the Phase 2 fixture lengths used by the implementation test, and parsed read-name
-values must match the configured lengths before being written to RAD.
+are `--raw-cb-length 16` and `--raw-umi-length 12` for Phase 2, matching the approved
+fixture read `read000_AAACCCAAGTTTGGGA_AAAAAAAAAAAA` with raw CB `AAACCCAAGTTTGGGA` and
+raw UMI `AAAAAAAAAAAA`. Parsed read-name values must match the configured lengths before
+being written to RAD.
 
 **Decision:** USA output is not a Phase 2 feature. USA output should be developed only
 when unspliced target generation enters scope.

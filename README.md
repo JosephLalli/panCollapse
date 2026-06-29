@@ -43,7 +43,7 @@ project is licensed under Apache License 2.0.
 
 ## Current status
 
-Phase 1 executable behavioral contracts are complete and Phase 2 planning is in progress.
-Do not begin Phase 2 production source, fixture generation, RAD generation, or
-vertical-slice implementation until the implementation gate and exact Phase 2 fixture
-CB/UMI values are approved.
+Phase 1 executable behavioral contracts are complete and the focused Phase 2
+vertical-slice plan is documented. Do not begin Phase 2 production source, fixture
+generation, RAD generation, or vertical-slice implementation until the implementation
+gate is approved.

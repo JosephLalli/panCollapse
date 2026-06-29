@@ -21,6 +21,7 @@ choices.
 | D5 | User | Phase 2 is single-threaded. Multithreading is deferred to Phase 3. |
 | D6 | User | Byte-identical output comparison across thread counts is deferred to Phase 3. |
 | D7 | User | USA output is not a Phase 2 feature. Phase 2 uses a two-column transcript-to-gene map and asserts a 1-cell x 1-gene matrix with `GENE_A=1`. USA output is developed only when unspliced target generation enters scope. |
+| D8 | User | Phase 2 uses `--raw-cb-length 16` and `--raw-umi-length 12`. The fixture read name is `read000_AAACCCAAGTTTGGGA_AAAAAAAAAAAA`, with raw CB `AAACCCAAGTTTGGGA` and raw UMI `AAAAAAAAAAAA`. |
 | D9 | User | Update the active product, input/output, architecture, validation, progress, decisions, and glossary docs to state raw read-name CB/UMI extraction, and mark older tag-centric Phase 1 barcode assumptions as superseded for V1. |
 
 ## PanSC Read-Name Evidence
@@ -93,8 +94,11 @@ Fixture files are generated under the CTest build directory.
 | source transcript | `SRC_A` |
 | canonical transcript | `TX_A` |
 | canonical gene | `GENE_A` |
-| raw CB length | CLI-configured; default matches the Phase 2 fixture CB length |
-| raw UMI length | CLI-configured; default matches the Phase 2 fixture UMI length |
+| read name | `read000_AAACCCAAGTTTGGGA_AAAAAAAAAAAA` |
+| raw CB | `AAACCCAAGTTTGGGA` |
+| raw UMI | `AAAAAAAAAAAA` |
+| raw CB length | `--raw-cb-length 16` |
+| raw UMI length | `--raw-umi-length 12` |
 | aligned block | one reference-consuming block, expected source interval `[310,330)` |
 | score | `40` |
 | manifest row | `chrFixture<TAB>SRC_A<TAB>TX_A<TAB>GENE_A` |
@@ -126,8 +130,7 @@ readiness.
 
 ## Implementation Sequence
 
-Do not start this sequence until the gate state permits Phase 2 implementation and the
-fixture's exact raw CB/UMI values are approved.
+Do not start this sequence until the gate state permits Phase 2 implementation.
 
 1. Add the smallest production entry point and parsing path needed for one read group.
 2. Add raw read-name CB/UMI extraction and validate parsed values against the configured
@@ -166,7 +169,7 @@ Required assertions:
 
 - `pc_out/map.rad` exists.
 - `pc_out/tx2gene.tsv` has exactly `TX_A<TAB>GENE_A`.
-- RAD `cblen` and `ulen` match the configured Phase 2 fixture lengths.
+- RAD `cblen=16` and `ulen=12`.
 - the single RAD record contains `bc`, `umi`, `refs=[TX_A_ID]`, and one corresponding
   synthetic-forward `dirs` entry.
 - alevin-fry completes `generate-permit-list`, `collate`, and `quant`.

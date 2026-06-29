@@ -60,8 +60,7 @@ The final V1 CLI must accept:
    identity as a source coordinate path plus source transcript ID.
 5. **Output destination** for mapper-style uncollated RAD and associated metadata/logs.
 6. **Raw molecule-identity lengths** for the cell barcode and UMI. The CLI provides
-   explicit controls for these lengths; defaults must match the fixture lengths used by
-   the implementation test.
+   `--raw-cb-length` and `--raw-umi-length`; Phase 2 defaults are 16 and 12.
 
 GCSA/LCP and distance indexes may be required upstream to produce the GAMP with
 `vg mpmap`, commonly alongside the same `.xg` used by panCollapse. Once GAMP exists,

@@ -15,6 +15,7 @@ prescribing the code architecture.
 - The raw barcode and UMI are parsed from the right side of the name; panCollapse does
   not correct either value.
 - Parsed raw barcode and UMI values must match the configured barcode and UMI lengths.
+  Phase 2 defaults are `--raw-cb-length 16` and `--raw-umi-length 12`.
 - All alternatives for the read are considered before target eligibility is finalized.
 - Complete traversal uses both ordinary `next` edges and scored `connection` arcs.
   Traversal score is the sum of selected subpath scores plus selected connection scores;
@@ -104,7 +105,8 @@ orientation policy is documented in `docs/architecture-proposal.md` and
 
 The final CLI should write or expose:
 
-- configured raw barcode and UMI lengths, which determine RAD `cblen` and `ulen`;
+- configured raw barcode and UMI lengths, which determine RAD `cblen` and `ulen`
+  (`16` and `12` by default in Phase 2);
 - target dictionary and transcript-to-gene mapping provenance;
 - a run summary with counts from Section 12 of the product spec;
 - version/build information;

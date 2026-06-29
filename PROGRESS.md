@@ -19,8 +19,8 @@ is stopped before Phase 2 implementation.
 - CB/UMI come from the GAMP name field as observed raw values prepared upstream.
   panCollapse does not correct cell barcodes or UMIs; alevin-fry performs permit-list
   construction/cell-barcode correction and UMI deduplication/resolution downstream.
-- Raw CB and UMI lengths are CLI-controlled values with defaults matching the fixture
-  lengths used by the implementation test.
+- Raw CB and UMI lengths are CLI-controlled values. Phase 2 defaults are
+  `--raw-cb-length 16` and `--raw-umi-length 12`.
 - Intronic and exon–intron-boundary evidence can make a transcript compatible.
 - Strand policy is selectable: sense, antisense, or both.
 - Copy/path collapse uses an explicit deterministic manifest.
@@ -46,15 +46,12 @@ is stopped before Phase 2 implementation.
 
 ## Next action
 
-Complete skeptical oracle review of the Phase 2 planning docs, then ask the user directly
-for any remaining CLI option spelling or numeric default approvals needed before
-implementation.
+Run final verification and commit the approved D8 documentation update.
 
 ## Required stop
 
 Do not begin Phase 2 production panCollapse source, fixture generation, RAD generation,
-or vertical-slice implementation until the implementation gate, exact fixture raw CB/UMI
-values, numeric length defaults, and length-option spellings are approved.
+or vertical-slice implementation until the implementation gate is approved.
 
 ## Phase 0 artifacts
 
@@ -183,6 +180,7 @@ values, numeric length defaults, and length-option spellings are approved.
 - 2026-06-28: Phase 2 planning started. User approved raw read-name CB/UMI extraction,
   build-dir-only fixtures, single-thread Phase 2 execution, no Phase 2 USA output, and
   active-doc cleanup away from corrected-tag barcode sourcing.
-- 2026-06-29: User clarified that raw CB and UMI lengths are CLI-controlled values with
-  defaults matching the fixture lengths used by the implementation test, and asked for
-  RAD `refs`/`dirs` semantics to be included in the contracts.
+- 2026-06-29: User clarified that raw CB and UMI lengths are CLI-controlled values and
+  approved `--raw-cb-length 16`, `--raw-umi-length 12`, and fixture read
+  `read000_AAACCCAAGTTTGGGA_AAAAAAAAAAAA`. The user also asked for RAD `refs`/`dirs`
+  semantics to be included in the contracts.

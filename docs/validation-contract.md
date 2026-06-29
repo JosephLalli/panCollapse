@@ -25,7 +25,8 @@ Before implementation:
   the original read name may contain underscores.
 - extracted values are the observed raw values and are written to RAD without correction.
 - raw CB and UMI lengths are explicit CLI-controlled values; parsed values must match
-  those configured lengths.
+  those configured lengths. Phase 2 defaults are `--raw-cb-length 16` and
+  `--raw-umi-length 12`.
 - panCollapse does not perform permit-list construction, cell-barcode correction, or UMI
   deduplication/resolution; alevin-fry performs those steps downstream.
 - missing CB or UMI field: skip and count by default; fail in strict mode.
@@ -79,7 +80,8 @@ A tiny fixture must prove:
 2. permit-list generation and collation complete.
 3. quantification with a two-column transcript-to-gene map completes.
 4. the final exact cell-by-gene matrix matches the expected UMI counts.
-5. RAD `cblen` and `ulen` match the configured raw CB and UMI lengths.
+5. RAD `cblen` and `ulen` match the configured raw CB and UMI lengths; Phase 2 asserts
+   `cblen=16` and `ulen=12`.
 6. no USA/splicing-state rows are emitted in V1.
 7. Phase 2 uses one thread; repeated runs across supported thread counts are a Phase 3
    and final V1 acceptance requirement.
