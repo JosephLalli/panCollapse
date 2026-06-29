@@ -46,7 +46,7 @@ is stopped before Phase 2 implementation.
 
 ## Next action
 
-Run final verification and commit the approved D8 documentation update.
+Human review of the focused Phase 2 vertical-slice plan and implementation gate.
 
 ## Required stop
 
