@@ -1,7 +1,7 @@
 # Phase 2 Implementation Plan
 
-Status: draft. This document records the approved Phase 2 direction. It omits any
-unapproved choices.
+Status: ready for human review. This document records the approved Phase 2 direction.
+It omits any unapproved choices.
 
 Phase 2 begins only after **Gate Behavior Specified** has passed. It implements one thin
 happy path, proves RAD interoperability with alevin-fry, and stops before broadening into

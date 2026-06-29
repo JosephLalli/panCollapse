@@ -2,7 +2,8 @@
 
 ## Current phase
 
-**Phase 1 executable behavioral contract is complete. Phase 2 planning is in progress.**
+**Phase 1 executable behavioral contract is complete. The Phase 2 plan is ready for human
+review.**
 
 No production source, public panCollapse headers, or checked-in generated fixtures,
 GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have been created. The repository
