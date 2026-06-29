@@ -2,12 +2,12 @@
 
 ## Current phase
 
-**Phase 1 executable behavioral contract is complete. The Phase 2 plan is ready for human
-review.**
+**Phase 2 thin vertical implementation is complete and locally verified.**
 
-No production source, public panCollapse headers, or checked-in generated fixtures,
-GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have been created. The repository
-is stopped before Phase 2 implementation.
+Production source now exists for the approved Phase 2 vertical slice. No public
+panCollapse headers or checked-in generated fixtures, GAMP, XG, GCSA, distance-index,
+GBZ, or RAD outputs have been created; generated graph/RAD artifacts remain confined to
+ignored build directories.
 
 ## Settled product decisions
 
@@ -47,12 +47,13 @@ is stopped before Phase 2 implementation.
 
 ## Next action
 
-Human review of the focused Phase 2 vertical-slice plan and implementation gate.
+Final oracle review, workspace verification, and commit for Gate Vertical Slice Proven.
 
 ## Required stop
 
-Do not begin Phase 2 production panCollapse source, fixture generation, RAD generation,
-or vertical-slice implementation until the implementation gate is approved.
+Do not broaden beyond the approved Phase 2 vertical slice until Gate Vertical Slice
+Proven is reviewed. Phase 3 work must proceed one independently testable behavior at a
+time.
 
 ## Phase 0 artifacts
 
@@ -94,10 +95,28 @@ or vertical-slice implementation until the implementation gate is approved.
 - `docs/phase2/implementation-plan.md` — focused vertical-slice plan using GAMP plus the
   matching `.xg`, build-dir-only fixtures, raw read-name CB/UMI extraction, single-thread
   execution, configured raw CB/UMI lengths, two-column `tx2gene.tsv`, and a 1-cell x
-  1-gene alevin-fry assertion.
+  1-gene alevin-fry assertion. It also records the user-approved Phase 2 strand scope:
+  `--strand sense` is implemented, while `antisense` and `both` emit to-be-implemented
+  errors and are deferred to Phase 3 research and implementation.
 - RAD docs now explicitly state that production writing is native C++, while libradicl
   and alevin-fry are validation oracles. They also document per-record `bc`, `umi`,
   `refs`, and `dirs` semantics.
+
+## Phase 2 implementation artifacts
+
+- `src/main.cpp` and `src/CMakeLists.txt` — minimal VG-backed `panCollapse convert`
+  executable for the approved one-read vertical slice.
+- `tests/vg/phase2_fixture_writer.cpp` — build-dir-only GFA, GTF, collapse manifest, and
+  JSON GAMP fixture generator.
+- `tests/vg/phase2_quant_verify.py` — strict Phase 2 verifier for `tx2gene.tsv`, RAD
+  header/file tags, packed raw CB/UMI, `refs=[TX_A_ID]`, synthetic-forward `dirs`, and
+  the final 1-cell x 1-gene alevin-fry matrix.
+- `tests/vg/phase2_expect_strand_tbi.sh` — negative check that `--strand antisense` and
+  `--strand both` fail with a Phase 3 to-be-implemented error in Phase 2.
+- `tests/vg/CMakeLists.txt` — CTest chain for fixture generation, local `vg` conversion
+  to `.xg` and binary GAMP, primary and repeat single-thread `panCollapse convert` runs,
+  byte-for-byte output comparison, alevin-fry permit-list/collate/quant, and strict
+  output verification.
 
 ## Phase 0 verification
 
@@ -140,31 +159,44 @@ or vertical-slice implementation until the implementation gate is approved.
   This includes the VG link smoke and the build-dir-only GAMP/XG/GTF projection smoke.
 - Workspace verification passed: `./scripts/verify-workspace.sh`.
 
+## Phase 2 verification
+
+- Low-cost explorer agents completed the CMake/CTest fixture-wiring check and the
+  alevin-fry output-file/path check before implementation integration.
+- Oracle review found and the implementation resolved blockers in RAD/companion verifier
+  coverage, exact projection evidence, source-vs-canonical gene handling, deferred strand
+  modes, decision/progress bookkeeping, and single-thread reproducibility.
+- Pure build/test passed:
+  `cmake --build build-pure`;
+  `ctest --test-dir build-pure -L pure --output-on-failure`.
+- Full local VG/alevin-fry test suite passed:
+  `cmake --build build`;
+  `ctest --test-dir build --output-on-failure`.
+  The full suite currently contains 18 tests, including the Phase 2 rejected-strand
+  checks, primary and repeat `panCollapse convert` runs, byte-identical comparison of
+  `map.rad`, `tx2gene.tsv`, and `summary.tsv`, and alevin-fry
+  `generate-permit-list`, `collate`, and `quant`.
+- Direct RAD/quant evidence is covered by `phase2_quant_verify.py`: `cblen=16`,
+  `ulen=12`, raw CB `AAACCCAAGTTTGGGA`, raw UMI `AAAAAAAAAAAA`, one target `TX_A`,
+  forward direction, `tx2gene.tsv` equal to `TX_A<TAB>GENE_A`, and a final
+  `GENE_A=1` matrix for one cell.
+
 ## Gate checklist snapshot
 
-- Every settled behavior has an explicit fixture and expected result: yes, split across
-  `docs/phase1/compatibility-fixtures.md`, `policy-fixtures.md`, and
-  `input-diagnostics-fixtures.md`.
-- Outside-first/last-exon and positive transcript-model anchor represented: yes,
-  `CMP-09`.
-- Raw read-name CB/UMI parsing, skip/strict/fail behavior, and complete manifest
-  coverage represented: in progress for the Phase 2 plan. Older Phase 1 `TAG-*`
-  corrected/raw annotation-tag fixtures are historical under D038; manifest coverage
-  remains represented by `MAN-01` through `MAN-07`.
-- Policy ordering score/collapse/uniqueness is unambiguous: yes, `SC-*`, `COL-*`, and
-  `POL-*`.
-- CLI snapshot, option defaults, traversal cap, and exit surface are explicit: yes,
-  `docs/phase1/cli-run-contract.md`.
-- RAD interoperability has exact expected matrix: yes,
-  `docs/phase1/rad-interop-fixture.md`.
-- Failure and diagnostic behavior is testable for Phase 1 historical contracts; raw
-  read-name molecule-identity diagnostics are being recentered under D038 before Phase 2
-  implementation.
-- Build/test skeleton matches approved architecture: yes, pure/VG tests are separated and
-  the VG link smoke passes against the local build family.
-- Production panCollapse source, checked-in generated fixtures, and RAD outputs absent:
-  yes.
-- Human gate approval still required before Phase 2.
+- Gate Architecture Approved: passed in Phase 0.
+- Gate Behavior Specified: passed in Phase 1.
+- Gate Vertical Slice Proven: locally satisfied by the current Phase 2 implementation and
+  test evidence; final oracle review and commit remain for this session.
+- Phase 2 exact happy path: implemented and verified for one name-grouped GAMP record,
+  one source transcript, one canonical target, raw read-name CB/UMI extraction, RAD
+  emission, and alevin-fry quantification.
+- Phase 2 single-thread reproducibility: represented by repeat conversion and
+  byte-for-byte comparison of `map.rad`, `tx2gene.tsv`, and `summary.tsv`.
+- Production source is present only for the approved vertical slice. Checked-in generated
+  graph/RAD artifacts remain absent.
+- Phase 3 strand work: `antisense` and `both` remain V1 requirements, but Phase 2 emits
+  to-be-implemented errors for them under D041. Phase 3 must research the best
+  implementation strategy before development.
 
 ## Session log
 
@@ -185,3 +217,9 @@ or vertical-slice implementation until the implementation gate is approved.
   approved `--raw-cb-length 16`, `--raw-umi-length 12`, and fixture read
   `read000_AAACCCAAGTTTGGGA_AAAAAAAAAAAA`. The user also asked for RAD `refs`/`dirs`
   semantics to be included in the contracts.
+- 2026-06-29: Phase 2 implementation completed for the approved vertical slice. The
+  build-dir-only fixture creates GFA/GTF/manifest/JSON GAMP inputs, local `vg` produces
+  `.xg` and binary GAMP, `panCollapse convert` emits `map.rad`, `tx2gene.tsv`, and
+  `summary.tsv`, a repeat single-thread run is byte-identical, and alevin-fry produces
+  the expected 1-cell x 1-gene matrix. User approved deferring `antisense` and `both`
+  strand modes to Phase 3 with to-be-implemented errors in Phase 2.

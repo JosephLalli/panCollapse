@@ -141,7 +141,9 @@ After Gate Vertical Slice Proven, add one independently testable behavior at a t
 
 - multipath traversal and score aggregation;
 - intronic and boundary compatibility;
-- strand modes;
+- strand modes: before implementing `antisense` or `both`, research the best way to map
+  GAMP/query orientation and source-path/transcript orientation into the approved strand
+  settings, then add focused tests for each mode;
 - manifest collapse;
 - all assignment policies;
 - name-grouping validation;

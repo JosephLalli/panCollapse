@@ -563,6 +563,22 @@ the downstream `--expected-ori` workflow.
 permit-list generation and collation, while `refs` drives target-to-gene evidence through
 the supplied mapping.
 
+### D041 — Phase 2 strand-mode deferral
+
+**Decision source:** User.
+
+**Decision:** Phase 2 implements only the approved `--strand sense` vertical-slice
+behavior. `--strand antisense` and `--strand both` must fail with a to-be-implemented
+error rather than silently behaving like `sense`.
+
+**Decision:** Phase 3 will implement `antisense` and `both`, but only after researching
+the best way to map GAMP/query orientation and source-path/transcript orientation into
+the approved strand settings.
+
+**Rationale:** The V1 product contract still includes all three strand modes. Phase 2 is
+intentionally narrower: it proves the single happy path without exposing unimplemented
+strand settings as if they were correct.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

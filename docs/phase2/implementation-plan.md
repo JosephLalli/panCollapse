@@ -1,7 +1,7 @@
 # Phase 2 Implementation Plan
 
-Status: ready for human review. This document records the approved Phase 2 direction.
-It omits any unapproved choices.
+Status: approved and implemented. This document records the approved Phase 2 direction
+and the vertical-slice checks that prove it. It omits any unapproved choices.
 
 Phase 2 begins only after **Gate Behavior Specified** has passed. It implements one thin
 happy path, proves RAD interoperability with alevin-fry, and stops before broadening into
@@ -23,6 +23,7 @@ choices.
 | D7 | User | USA output is not a Phase 2 feature. Phase 2 uses a two-column transcript-to-gene map and asserts a 1-cell x 1-gene matrix with `GENE_A=1`. USA output is developed only when unspliced target generation enters scope. |
 | D8 | User | Phase 2 uses `--raw-cb-length 16` and `--raw-umi-length 12`. The fixture read name is `read000_AAACCCAAGTTTGGGA_AAAAAAAAAAAA`, with raw CB `AAACCCAAGTTTGGGA` and raw UMI `AAAAAAAAAAAA`. |
 | D9 | User | Update the active product, input/output, architecture, validation, progress, decisions, and glossary docs to state raw read-name CB/UMI extraction, and mark older tag-centric Phase 1 barcode assumptions as superseded for V1. |
+| D10 | User | Phase 2 accepts only `--strand sense`. `antisense` and `both` strand modes return a to-be-implemented error and are deferred to Phase 3, where the best implementation strategy must be researched before development. |
 
 ## PanSC Read-Name Evidence
 
@@ -69,6 +70,7 @@ Phase 2 does not implement:
 - broad missing/malformed barcode diagnostics;
 - multithreading;
 - byte-identical multi-thread output comparison;
+- `antisense` or `both` strand modes beyond a to-be-implemented error;
 - USA output or splicing-state labels;
 - GBZ/GBWT input as a replacement for `.xg`;
 - custom annotation indexes;
@@ -99,6 +101,7 @@ Fixture files are generated under the CTest build directory.
 | raw UMI | `AAAAAAAAAAAA` |
 | raw CB length | `--raw-cb-length 16` |
 | raw UMI length | `--raw-umi-length 12` |
+| strand mode | `--strand sense` |
 | aligned block | one reference-consuming block, expected source interval `[310,330)` |
 | score | `40` |
 | manifest row | `chrFixture<TAB>SRC_A<TAB>TX_A<TAB>GENE_A` |

@@ -10,6 +10,11 @@ option(PANCOLLAPSE_ENABLE_VG_TESTS "Enable tests that compile and link local VG 
 
 include(CTest)
 
+if(PANCOLLAPSE_ENABLE_VG_TESTS)
+  include("${PROJECT_SOURCE_DIR}/cmake/PanCollapseVg.cmake")
+  add_subdirectory(src)
+endif()
+
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()

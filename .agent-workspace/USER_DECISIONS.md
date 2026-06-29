@@ -44,6 +44,12 @@ byte-identical regardless of thread count.
 D039 defers multithreading and thread-count byte comparison out of Phase 2 and into
 Phase 3.
 
+## Phase 2 strand scope
+
+D041 limits Phase 2 execution to `--strand sense`. `--strand antisense` and
+`--strand both` return to-be-implemented errors in Phase 2 and are deferred to Phase 3,
+where the implementation approach must be researched before coding.
+
 ## License
 
 The project is licensed under Apache License 2.0.
