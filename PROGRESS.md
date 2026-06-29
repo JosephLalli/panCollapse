@@ -47,7 +47,8 @@ ignored build directories.
 
 ## Next action
 
-Final oracle review, workspace verification, and commit for Gate Vertical Slice Proven.
+Begin Phase 3 planning/work only after choosing one independently testable behavior and
+loading the relevant contracts.
 
 ## Required stop
 
@@ -185,8 +186,8 @@ time.
 
 - Gate Architecture Approved: passed in Phase 0.
 - Gate Behavior Specified: passed in Phase 1.
-- Gate Vertical Slice Proven: locally satisfied by the current Phase 2 implementation and
-  test evidence; final oracle review and commit remain for this session.
+- Gate Vertical Slice Proven: passed locally by the current Phase 2 implementation,
+  final oracle review, and committed test evidence.
 - Phase 2 exact happy path: implemented and verified for one name-grouped GAMP record,
   one source transcript, one canonical target, raw read-name CB/UMI extraction, RAD
   emission, and alevin-fry quantification.
