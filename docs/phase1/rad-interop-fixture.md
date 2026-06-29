@@ -4,6 +4,10 @@ This fixture defines the smallest alevin-fry interoperability target for V1 RAD 
 It is a contract for the future writer and fixture generator; no binary RAD fixture is
 checked in during Phase 1.
 
+Supersession note: D039 narrows Phase 2 RAD interoperability to one single-threaded
+1-cell x 1-gene vertical slice. Thread-count byte comparison remains a Phase 3/final V1
+requirement.
+
 ## RAD Input Directory
 
 Directory: `rad-in/`
@@ -40,6 +44,11 @@ Classic mapper-style uncollated `RnaShort`:
 - alignment tag `compressed_ori_refid:U32`
 - one chunk with `nrec=3`
 - all retained hits encoded as synthetic forward hits with `ref_id | 0x80000000`
+
+Conceptually, every record carries `bc`, `umi`, `refs`, and `dirs`. The `refs` values are
+zero-based IDs into the RAD header target dictionary, and `dirs` is the parallel
+orientation vector decoded from the high bit of each `compressed_ori_refid`. This fixture
+uses all-forward `dirs` under the current V1 synthetic-orientation policy.
 
 | record | CB | packed CB | UMI | packed UMI | target refs | compressed refs |
 |---|---|---:|---|---:|---|---|

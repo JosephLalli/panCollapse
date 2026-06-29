@@ -2,7 +2,11 @@
 
 These fixtures are pure policy contracts. They should be testable without VG headers,
 GAMP parsing, GTF parsing, or XG projection by supplying candidate source identities,
-scores, tags, and manifest rows directly.
+scores, molecule identity, and manifest rows directly.
+
+Supersession note: tag-era diagnostic examples are historical under D038. Current V1
+implementation should express molecule-identity skips in terms of raw CB/UMI parsed from
+the GAMP name field.
 
 ## Shared Canonical Map
 

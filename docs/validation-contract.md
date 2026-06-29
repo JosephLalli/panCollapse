@@ -20,19 +20,18 @@ Before implementation:
 
 ## 2. Barcode and UMI cases
 
-- `CB` + `UB` present: use corrected pair.
-- corrected and raw pairs present: use corrected pair and record the policy.
-- only `CR` + `UR` present: use raw pair.
-- corrected `CB` + `UB` present in one supported annotation source and raw `CR` + `UR`
-  present in another: use corrected pair.
-- same tag present in direct annotations and SAM-style `tags` with different values:
-  non-coherent tag failure.
-- mixed `CB` + `UR`: skip the group by default; fail in strict mode; never mix.
-- missing one tag: skip and count by default; fail in strict mode.
-- malformed annotation type or length: skip and count by default; fail in strict mode.
-- mixed selected CB or UMI lengths after global lengths are established: skip and count by
+- RNA GAMP name field follows `<original_read_name>_<raw_CB>_<raw_UMI>`.
+- parsing uses the rightmost two underscore-delimited fields for raw CB and raw UMI, so
+  the original read name may contain underscores.
+- extracted values are the observed raw values and are written to RAD without correction.
+- raw CB and UMI lengths are explicit CLI-controlled values; parsed values must match
+  those configured lengths.
+- panCollapse does not perform permit-list construction, cell-barcode correction, or UMI
+  deduplication/resolution; alevin-fry performs those steps downstream.
+- missing CB or UMI field: skip and count by default; fail in strict mode.
+- malformed or unsupported CB/UMI value: skip and count by default; fail in strict mode.
+- raw CB or UMI length mismatch against the configured lengths: skip and count by
   default; fail in strict mode.
-- records in one read group disagree on selected CB or UMI: hard failure.
 
 ## 3. Grouping cases
 
@@ -80,9 +79,10 @@ A tiny fixture must prove:
 2. permit-list generation and collation complete.
 3. quantification with a two-column transcript-to-gene map completes.
 4. the final exact cell-by-gene matrix matches the expected UMI counts.
-5. no USA/splicing-state rows are emitted in V1.
-6. repeated runs with supported thread counts produce byte-identical RAD and companion
-   artifacts.
+5. RAD `cblen` and `ulen` match the configured raw CB and UMI lengths.
+6. no USA/splicing-state rows are emitted in V1.
+7. Phase 2 uses one thread; repeated runs across supported thread counts are a Phase 3
+   and final V1 acceptance requirement.
 
 ## 8. Failure and diagnostics
 

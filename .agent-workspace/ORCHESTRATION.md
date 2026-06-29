@@ -23,7 +23,7 @@ Any change to these shared contracts must be routed through the decision log:
 
 - required inputs;
 - collapse-manifest schema;
-- barcode/UMI tag policy;
+- barcode/UMI source policy;
 - compatibility semantics;
 - score eligibility;
 - assignment policies;

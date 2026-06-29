@@ -99,7 +99,7 @@ Begins only after passing Gate Architecture Approved.
 ### P1.1 — Synthetic fixture specification
 
 Design a minimal graph/GTF/GAMP test matrix covering every compatibility, strand,
-score-window, collapse, tag-detection, ordering, and assignment-policy rule. Expected
+score-window, collapse, raw molecule-identity parsing, ordering, and assignment-policy rule. Expected
 outputs must be expressed as transcript target sets and observable diagnostics before
 fixture generation code is written.
 
@@ -125,8 +125,8 @@ review before substantive implementation.
 Begins only after passing Gate Behavior Specified.
 
 Implement one end-to-end happy path for a single name-grouped read with one compatible
-canonical transcript and valid corrected tags. Emit RAD and prove alevin-fry can consume
-it. Do not broaden behavior until this path is green.
+canonical transcript and valid raw CB/UMI values carried in the GAMP name field. Emit RAD
+and prove alevin-fry can consume it. Do not broaden behavior until this path is green.
 
 ### Gate Vertical Slice Proven
 

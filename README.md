@@ -13,6 +13,7 @@ skeleton. Production implementation has not begun.
 The V1 product will:
 
 - consume GAMP records from 10x 3′ single-cell or single-nucleus experiments;
+- extract observed raw cell barcodes and UMIs from the GAMP name field;
 - retain transcript-level compatibility sets, including compatibility inferred from
   annotated introns;
 - collapse graph/haplotype/copy-specific transcript paths through an explicit manifest;
@@ -36,11 +37,13 @@ project is licensed under Apache License 2.0.
 4. [`docs/decisions.md`](docs/decisions.md) — settled decisions and open forks.
 5. [`docs/validation-contract.md`](docs/validation-contract.md) — acceptance criteria.
 6. [`docs/phase1/README.md`](docs/phase1/README.md) — Phase 1 focused contract routing.
-7. [`docs/roadmap.md`](docs/roadmap.md) — explicitly deferred versions and optimizations.
+7. [`docs/phase2/implementation-plan.md`](docs/phase2/implementation-plan.md) — focused
+   Phase 2 vertical-slice plan.
+8. [`docs/roadmap.md`](docs/roadmap.md) — explicitly deferred versions and optimizations.
 
 ## Current status
 
-Phase 1 executable behavioral contracts are complete and the repository is stopped at
-**Gate Behavior Specified** for human review. Do not begin Phase 2 production source,
-fixture generation, RAD generation, or vertical-slice implementation until that gate is
-approved.
+Phase 1 executable behavioral contracts are complete and Phase 2 planning is in progress.
+Do not begin Phase 2 production source, fixture generation, RAD generation, or
+vertical-slice implementation until the implementation gate and exact Phase 2 fixture
+CB/UMI values are approved.

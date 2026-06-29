@@ -3,6 +3,9 @@
 All seven product questions presented on 2026-06-28 were answered **A**. These choices
 are binding V1 behavior unless superseded by a later entry in `docs/decisions.md`.
 
+D038 supersedes the barcode/UMI tag-source portions below: V1 reads observed raw CB/UMI
+from the GAMP name field, not corrected/raw GAMP annotation tags.
+
 ## Outside-span compatibility anchor
 
 At least one aligned reference-consuming base must overlap an exon or implied intron of
@@ -37,6 +40,9 @@ and preserve all eligible transcripts from that gene in the RAD target set.
 
 For identical inputs and configuration, RAD and companion artifacts must be
 byte-identical regardless of thread count.
+
+D039 defers multithreading and thread-count byte comparison out of Phase 2 and into
+Phase 3.
 
 ## License
 

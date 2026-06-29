@@ -19,7 +19,7 @@ single-cell quantifiers with the transcript-level target sets they expect.
 V1 supports:
 
 - 10x 3′ v2/v3-style experiments where the cDNA read is represented in GAMP;
-- cell barcode and UMI retrieval from GAMP annotations;
+- raw cell barcode and UMI retrieval from the GAMP name field;
 - transcript compatibility inferred from both annotated exons and annotated introns;
 - an explicit transcript/path-copy collapse manifest;
 - score-based eligibility with tied-best behavior by default;
@@ -59,25 +59,30 @@ The final V1 CLI must accept:
    identities to canonical transcript IDs and genes. Phase 0 resolves the source
    identity as a source coordinate path plus source transcript ID.
 5. **Output destination** for mapper-style uncollated RAD and associated metadata/logs.
+6. **Raw molecule-identity lengths** for the cell barcode and UMI. The CLI provides
+   explicit controls for these lengths; defaults must match the fixture lengths used by
+   the implementation test.
 
 GCSA/LCP and distance indexes may be required upstream to produce the GAMP with
 `vg mpmap`, commonly alongside the same `.xg` used by panCollapse. Once GAMP exists,
 they are not V1 panCollapse inputs. The implementation must not require GFF3, GBZ as a
 substitute for `.xg`, or a newly generated custom lookup index in V1.
 
-## 5. Barcode and UMI annotations
+## 5. Barcode and UMI source
 
-The implementation must automatically detect a coherent tag pair:
+Upstream FASTQ preparation writes the observed raw cell barcode and UMI into the
+biological read name before alignment. panCollapse reads those uncorrected values from
+the GAMP name field and writes them to RAD:
 
-- prefer corrected tags `CB` and `UB` when both are available;
-- otherwise use raw tags `CR` and `UR` when both are available;
-- do not silently combine corrected and raw members of different pairs;
-- report missing, malformed, conflicting, or mixed tag states in diagnostics;
-- skip a read group with missing, malformed, or non-coherent tags by default and count the
-  reason;
-- provide a strict CLI mode that makes those skippable tag failures abort the run;
-- fail the run when records in one read-name group disagree on the selected CB or UMI;
-- document any VG annotation-name translation needed to access these values.
+- RNA read-name convention: `<original_read_name>_<raw_CB>_<raw_UMI>`.
+- The barcode and UMI are parsed from the right side of the name so the original read
+  name may contain underscores.
+- Parsed raw barcode and UMI values must match the configured barcode and UMI lengths.
+- panCollapse does not correct cell barcodes or UMIs and does not build a permit list.
+- alevin-fry performs permit-list construction and cell-barcode correction, followed by
+  UMI deduplication/resolution during quantification.
+- missing, malformed, or unsupported raw barcode/UMI fields are reported in diagnostics;
+- strict failure behavior for malformed molecule identity remains a CLI-controlled mode.
 
 ## 6. Read grouping
 
@@ -195,6 +200,11 @@ Target IDs in RAD are canonical transcript IDs from the collapse manifest. A sta
 two-column transcript-to-gene map allows alevin-fry to produce the final cell-by-gene
 matrix. V1 does not attach splicing-state labels.
 
+Each emitted read record carries the raw cell barcode, raw UMI, compatible target IDs,
+and one orientation value per target. Target IDs are indices into the RAD header target
+dictionary, not genomic coordinates. Orientation values are target-level RAD metadata
+consumed by alevin-fry's expected-orientation filtering.
+
 The exact RAD header, record fields, orientation encoding, chunking, and metadata are
 external contracts to verify from current primary sources during Phase 0. For identical
 inputs and configuration, RAD and companion artifacts must be byte-identical regardless
@@ -206,8 +216,8 @@ The final tool must provide machine-readable or clearly parseable summary counts
 least:
 
 - input records and read groups;
-- read groups skipped for missing, malformed, or non-coherent CB/UMI annotations;
-- hard failures for conflicting CB/UMI values within a read group;
+- read groups skipped for missing, malformed, or unsupported raw CB/UMI values parsed
+  from the GAMP name field;
 - grouping violations;
 - groups with no compatible transcript;
 - compatible targets removed by score-window filtering (`score_removed_targets`);
@@ -235,7 +245,8 @@ The V1 product is complete only when:
 - all behavioral fixtures in `docs/validation-contract.md` pass;
 - a tiny generated RAD file is accepted by the current supported alevin-fry workflow;
 - the output gene matrix matches the exact expected result;
-- name-grouping, tag, collapse, score, strand, and assignment-policy failures are tested;
+- name-grouping, raw molecule-identity parsing, configured-length mismatch, collapse,
+  score, strand, and assignment-policy failures are tested;
 - performance is characterized on a bounded pilot;
 - deterministic-output tests prove byte-identical artifacts across supported thread
   counts;

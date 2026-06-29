@@ -4,6 +4,10 @@ These fixtures cover tag selection, grouping validation, manifest validation, an
 accounting. They are split by whether they can be exercised as pure policy or need GAMP/XG
 fixtures.
 
+Supersession note: the barcode/UMI tag-source cases in this document are historical
+Phase 1 contract text. D038 supersedes them for V1 implementation: panCollapse reads
+observed raw CB/UMI from the GAMP name field, not corrected/raw GAMP annotation tags.
+
 ## Barcode And UMI
 
 Unless stated, a compatible target `TX_A` is otherwise available.

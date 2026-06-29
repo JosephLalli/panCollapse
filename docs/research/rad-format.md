@@ -53,12 +53,29 @@ Record:
 - Encoded UMI.
 - `naln` values of `u32 compressed_ori_refid`.
 
+Conceptual read record:
+
+- `bc`: encoded raw cell barcode.
+- `umi`: encoded raw UMI.
+- `refs`: zero-based target IDs into the RAD header target dictionary.
+- `dirs`: a parallel orientation vector; `dirs[i]` describes the orientation of
+  `refs[i]`.
+
+`refs` are compatibility target IDs, not genomic coordinates. In panCollapse V1, they are
+indices into the lexicographically sorted canonical transcript target dictionary, such as
+the ID for `TX_A`. alevin-fry later maps these target IDs to genes or gene states through
+the supplied transcript-to-gene map.
+
 Alignment encoding:
 
 - `compressed_ori_refid = ref_id | 0x80000000` for forward.
 - `compressed_ori_refid = ref_id` for reverse.
 - `ref_id` is zero-based into header `ref_names`.
 - Header target count must be less than `2^31`.
+- libradicl reads the high bit into `dirs[i]` and the lower 31 bits into `refs[i]`.
+- Every emitted `refs[i]` must have a corresponding `dirs[i]`.
+- Direction is target-level RAD metadata consumed by alevin-fry's expected-orientation
+  filtering. Do not derive it from an arbitrary graph-node orientation.
 
 Barcode and UMI packing:
 
@@ -68,8 +85,8 @@ Barcode and UMI packing:
 - Widths follow alevin-fry conversion: length 1..4 -> U8, 5..8 -> U16, 9..16 -> U32,
   17..32 -> U64, and >32 unsupported in V1.
 - 16 bp cell barcodes and 10 or 12 bp UMIs fit in U32.
-- Mixed selected CB/UMI lengths after global lengths are established are tag failures:
-  skipped by default and fatal in strict mode.
+- Raw CB/UMI length mismatch against the configured lengths is a molecule-identity
+  failure, skipped by default and fatal in strict mode.
 
 Chunk:
 
@@ -100,7 +117,10 @@ alevin-fry generate-permit-list --expected-ori fw ...
 If original alignment orientation is preserved in a later version, use
 `--expected-ori both` or `--expected-ori either` as appropriate.
 The all-forward orientation is synthetic: it means the hit survived panCollapse's own
-strand policy, not that the original mapper orientation was forward.
+strand policy, not that the original mapper orientation or an arbitrary graph-node
+orientation was forward. If a later human-approved decision preserves target-relative
+alignment orientation in `dirs`, the downstream expected-orientation mode must be
+revisited.
 
 ## Primary source citations
 
@@ -122,6 +142,12 @@ strand policy, not that the original mapper orientation was forward.
 - Record layout and orientation:
   `/mnt/ssd/lalli/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libradicl-0.13.0/src/record.rs:661-692`,
   `:1007-1012`, `:1042-1060`, `:1064-1088`.
+- Conceptual fields `bc`, `umi`, `dirs`, and `refs`:
+  `/mnt/ssd/lalli/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libradicl-0.13.0/src/record.rs:484-488`.
+- High-bit direction and lower-31-bit reference split:
+  `/mnt/ssd/lalli/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libradicl-0.13.0/src/utils.rs:15-16`,
+  `/mnt/ssd/lalli/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libradicl-0.13.0/src/record.rs:1054-1060`,
+  `:1077-1086`, `:1460-1496`.
 - Chunk framing:
   `/mnt/ssd/lalli/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libradicl-0.13.0/src/chunk.rs:145-157`,
   `:169-224`.

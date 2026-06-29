@@ -10,6 +10,11 @@ prescribing the code architecture.
 - Binary VG multipath alignment stream.
 - Records for a read name are contiguous.
 - The converter validates recurrence of a previously completed name.
+- For RNA inputs in V1, the GAMP name field carries the observed raw molecule identity as
+  `<original_read_name>_<raw_CB>_<raw_UMI>`.
+- The raw barcode and UMI are parsed from the right side of the name; panCollapse does
+  not correct either value.
+- Parsed raw barcode and UMI values must match the configured barcode and UMI lengths.
 - All alternatives for the read are considered before target eligibility is finalized.
 - Complete traversal uses both ordinary `next` edges and scored `connection` arcs.
   Traversal score is the sum of selected subpath scores plus selected connection scores;
@@ -67,17 +72,14 @@ Requirements:
 
 ### Barcode and UMI
 
-Accepted coherent pairs:
+The raw cell barcode and raw UMI come from the GAMP name field, not from GAMP annotation
+tags. RNA names follow `<original_read_name>_<raw_CB>_<raw_UMI>`, parsed from the right.
+Values are written to RAD as observed. panCollapse does not correct, permit-list, repair,
+or mix barcode/UMI values.
 
-```text
-CB + UB   corrected values, preferred
-CR + UR   raw values, fallback
-```
-
-Missing, malformed, or non-coherent pairs are skipped per read group by default and
-counted. A strict CLI option makes those conditions fatal. If records sharing one read
-name disagree on the selected CB or UMI, the run fails. Values are never silently
-repaired or mixed.
+Missing, malformed, or unsupported raw barcode/UMI values are skipped per read group by
+default and counted. Length mismatch against the configured raw barcode or UMI length is
+malformed. A strict CLI mode makes those conditions fatal.
 
 ## Output obligations
 
@@ -85,15 +87,24 @@ repaired or mixed.
 
 - mapper-style, uncollated RAD;
 - canonical transcript target dictionary;
-- cell barcode and UMI tags in the schema expected by alevin-fry;
-- complete eligible transcript target set after collapse and policy filtering;
+- raw cell barcode and raw UMI encoded in the schema expected by alevin-fry;
+- complete eligible transcript target set after collapse and policy filtering, encoded as
+  zero-based target IDs into the RAD header;
+- one orientation value for every emitted target ID;
 - no transcript likelihood weights and no splicing-state target labels in V1;
 - byte-identical output for identical inputs/configuration across supported thread counts.
+
+Conceptually, each emitted read record contains `bc`, `umi`, `refs`, and `dirs`. `refs`
+is the read's target compatibility set, not genomic coordinates. `dirs` is parallel to
+`refs` and is consumed by alevin-fry's expected-orientation filtering. Current V1
+orientation policy is documented in `docs/architecture-proposal.md` and
+`docs/research/rad-format.md`.
 
 ### Companion artifacts
 
 The final CLI should write or expose:
 
+- configured raw barcode and UMI lengths, which determine RAD `cblen` and `ulen`;
 - target dictionary and transcript-to-gene mapping provenance;
 - a run summary with counts from Section 12 of the product spec;
 - version/build information;
@@ -110,10 +121,8 @@ Hard failure is expected for:
   identities;
 - annotation/index identity mismatches that invalidate assignments;
 - inability to encode standards-conformant RAD;
-- conflicting selected CB or UMI values among records in one read group;
-- unsupported global tag configuration when no explicit override can identify a coherent
-  pair;
 - traversal cap overflow.
 
-Skippable per-read conditions are missing, malformed, or non-coherent CB/UMI annotations.
-They must be counted and become fatal under strict tag handling.
+Skippable per-read conditions are missing, malformed, or unsupported raw CB/UMI values in
+the GAMP name field. They must be counted and become fatal under strict molecule-identity
+handling.

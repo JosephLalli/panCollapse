@@ -480,6 +480,87 @@ agents a narrow interface bundle. The traversal cap prevents unbounded DAG enume
 without silently discarding multimapping evidence, and compatible-only scoring follows the
 product score definition.
 
+## Phase 2 planning decisions
+
+### D038 — Raw read-name barcode and UMI source
+
+**Decision source:** User.
+
+**Decision:** panCollapse extracts the uncorrected raw cell barcode and raw UMI from the
+GAMP name field and writes those observed values to RAD. Upstream FASTQ preparation is
+responsible for placing the raw values in the read name before alignment. panCollapse
+does not correct cell barcodes or UMIs, does not build a permit list, and does not perform
+UMI deduplication or resolution. alevin-fry performs permit-list construction and
+cell-barcode correction, followed by UMI deduplication/resolution during quantification.
+
+**Decision:** The related PanSC RNA convention is
+`<original_read_name>_<raw_CB>_<raw_UMI>`, parsed from the right side of the name. This is
+the active V1 barcode/UMI source model.
+
+**Decision:** D038 supersedes the tag-source portions of D009, D017, D018, D028, D031,
+and D037 for V1 implementation. Older Phase 1 barcode/UMI fixture text that describes
+corrected/raw GAMP annotation selection is historical and must not guide implementation
+without a new human-approved decision.
+
+**Rationale:** The user clarified that upstream FASTQ preparation preserves the raw
+barcode and UMI in the GAMP name field, and that downstream alevin-fry, not panCollapse,
+owns correction and UMI resolution.
+
+### D039 — Phase 2 vertical-slice scope
+
+**Decision source:** User.
+
+**Decision:** The Phase 2 planning artifact is `docs/phase2/implementation-plan.md`.
+Phase 2 uses a minimal happy path based on `GRP-01`, D038 raw read-name molecule
+identity, `MAN-01`, `CMP-01`, and `SC-01`. It uses build-dir-only generated fixtures,
+consumes GAMP plus the matching `.xg`, emits mapper-style RAD plus a two-column
+`tx2gene.tsv`, and proves alevin-fry consumption with a 1-cell x 1-gene matrix where
+`GENE_A=1`.
+
+**Decision:** Phase 2 is single-threaded. Multithreading and byte-identical comparison
+across thread counts are deferred to Phase 3.
+
+**Decision:** Raw cell-barcode and UMI lengths are CLI-controlled values. Their defaults
+match the Phase 2 fixture lengths used by the implementation test, and parsed read-name
+values must match the configured lengths before being written to RAD.
+
+**Decision:** USA output is not a Phase 2 feature. USA output should be developed only
+when unspliced target generation enters scope.
+
+**Decision:** The active product, input/output, architecture, validation, progress,
+decision, and glossary docs should be updated to reflect D038.
+
+**Rationale:** The vertical slice should prove the smallest end-to-end mapper-to-RAD-to-
+alevin-fry path before broadening into the full V1 behavior matrix. Single-threaded
+execution and no-USA output keep Phase 2 focused on the approved happy path.
+
+### D040 — RAD record fields and orientation semantics
+
+**Decision source:** User clarification and research evidence from local
+libradicl v0.13.0 / alevin-fry v0.15.0 source.
+
+**Decision:** panCollapse keeps the D029 writer boundary: implement a native minimal C++
+writer for the fixed classic `RnaShort` RAD schema, and use libradicl plus alevin-fry as
+validation oracles rather than production dependencies.
+
+**Decision:** Each emitted RAD read record conceptually contains `bc`, `umi`, `refs`, and
+`dirs`. `refs` is the read's compatibility target set as zero-based IDs into the RAD
+header target dictionary, not genomic coordinates. `dirs` is parallel to `refs`; each
+`dirs[i]` describes the orientation associated with `refs[i]`. On the wire, the high bit
+of `compressed_ori_refid` carries the direction and the lower 31 bits carry the target
+ID.
+
+**Decision:** Every emitted target ID must have a corresponding orientation value.
+Direction must be target-level RAD metadata and must not be derived from arbitrary graph
+node orientation. The current D029 V1 policy still encodes all retained targets as
+synthetic forward after panCollapse strand filtering; changing to preserved
+target-relative orientation requires a later human-approved decision because it affects
+the downstream `--expected-ori` workflow.
+
+**Rationale:** alevin-fry uses `dirs` during expected-orientation filtering in
+permit-list generation and collation, while `refs` drives target-to-gene evidence through
+the supplied mapping.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current
@@ -532,13 +613,17 @@ Verify how string annotations are represented and accessed in current VG APIs. P
 explicit CLI overrides for nonstandard barcode and UMI annotation names while preserving
 corrected/raw pair auto-detection by default.
 
+Historical note: D038 supersedes this barcode/UMI source question for V1. GAMP annotation
+access remains useful only for non-barcode metadata or future approved extensions.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.
 F003 is resolved by D025. F004 is resolved by D029. F005 is resolved by D027, D033, and
-D034. F006 is resolved by D023, D024, and D032. F007 is resolved by D028. No remaining
-Phase 0 architecture fork is known from the current proposal, but human approval is still
-required before production code, build files, or fixtures begin.
+D034. F006 is resolved by D023, D024, and D032. F007 was originally resolved by D028 and
+is superseded for barcode/UMI sourcing by D038. No remaining Phase 0 architecture fork is
+known from the current proposal, but human approval is still required before production
+code, build files, or fixtures begin.
 
 All externally observable V1 product choices raised during workspace setup are now
 settled in D016–D022 and `.agent-workspace/USER_DECISIONS.md`. Future review or

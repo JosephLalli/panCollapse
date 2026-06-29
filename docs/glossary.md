@@ -14,6 +14,9 @@ there are several graph paths, copy paths, or transcript isoforms.
 **Mapper-style RAD** — RAD produced by a mapper before alevin-fry collation and UMI
 resolution.
 
+**Raw read-name molecule identity** — The uncorrected cell barcode and UMI carried in the
+GAMP name field by upstream FASTQ preparation, written by panCollapse to RAD as observed.
+
 **Name-grouped** — All serialized records for one read name are adjacent, and a completed
 name never recurs later.
 
@@ -30,4 +33,6 @@ evidence.
 
 **Transcript-unique** — Exactly one eligible canonical transcript remains.
 
-**USA** — Unspliced/spliced/ambiguous quantification. Explicitly outside V1.
+**USA output** — An output/reference convention that can represent unspliced, spliced,
+and ambiguous molecule status. Outside Phase 2 and outside V1 unless unspliced target
+generation enters scope by later approval.

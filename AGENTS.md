@@ -12,6 +12,9 @@ This file is intentionally short; load detailed documents only when relevant.
 - Prefer using standard vg indexes; a custom lookup index is not part of V1.
 - Update `PROGRESS.md` and `docs/decisions.md` before ending a substantive session.
 - Stop for human review wherever correctness depends on biological or product judgment.
+- If a design decision requires explicit user approval, ask the user directly. Do not
+  record unapproved decision options in project docs unless the user expressly defers the
+  decision.
 
 ## Read on demand
 
@@ -22,6 +25,7 @@ This file is intentionally short; load detailed documents only when relevant.
 | Transcript compatibility semantics | `docs/compatibility-semantics.md` |
 | Settled decisions and open forks | `docs/decisions.md` |
 | Validation and acceptance criteria | `docs/validation-contract.md` |
+| Phase 2 vertical-slice plan | `docs/phase2/implementation-plan.md` |
 | Staged implementation plan | `TASKS.md` |
 | Current state | `PROGRESS.md` |
 | Delegation policy | `.agent-workspace/ORCHESTRATION.md` |

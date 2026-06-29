@@ -26,7 +26,8 @@ Pass only when:
 - every settled behavior has an explicit fixture and expected result;
 - the outside-first/last-exon rule and required positive transcript-model anchor are
   represented;
-- tag skip/strict/fail behavior and complete manifest coverage are represented;
+- raw read-name barcode/UMI parsing, skip/strict/fail behavior, and complete manifest
+  coverage are represented;
 - policy ordering—score, collapse, uniqueness—is unambiguous;
 - RAD interoperability has an exact expected matrix;
 - failure and diagnostic behavior are testable;
@@ -38,11 +39,13 @@ Human review plus machine checks.
 
 Pass only when:
 
-- a single name-grouped, tagged read reaches a canonical transcript RAD record;
+- a single name-grouped read with raw CB/UMI in the GAMP name field reaches a canonical
+  transcript RAD record;
 - the supported alevin-fry version consumes the output;
 - the exact expected gene matrix is produced;
 - build and tests are reproducible;
-- output is byte-identical across supported thread counts;
+- Phase 2 single-threaded output is reproducible; multithreaded byte comparison is a
+  Phase 3 gate item;
 - implementation review finds no hidden scope expansion.
 
 ## Later increments

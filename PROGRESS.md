@@ -2,11 +2,11 @@
 
 ## Current phase
 
-**Phase 1 executable behavioral contract is complete.**
+**Phase 1 executable behavioral contract is complete. Phase 2 planning is in progress.**
 
 No production source, public panCollapse headers, or checked-in generated fixtures,
 GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have been created. The repository
-is stopped at **Gate Behavior Specified** for human review.
+is stopped before Phase 2 implementation.
 
 ## Settled product decisions
 
@@ -16,7 +16,11 @@ is stopped at **Gate Behavior Specified** for human review.
 - GTF annotation; no GFF3 requirement in V1.
 - V1 uses preexisting VG/index files and does not build a custom lookup index.
 - Input GAMP must be grouped by read name; the tool validates this contract.
-- CB/UMI come from GAMP annotations; corrected tags are preferred, with raw-tag fallback.
+- CB/UMI come from the GAMP name field as observed raw values prepared upstream.
+  panCollapse does not correct cell barcodes or UMIs; alevin-fry performs permit-list
+  construction/cell-barcode correction and UMI deduplication/resolution downstream.
+- Raw CB and UMI lengths are CLI-controlled values with defaults matching the fixture
+  lengths used by the implementation test.
 - Intronic and exon–intron-boundary evidence can make a transcript compatible.
 - Strand policy is selectable: sense, antisense, or both.
 - Copy/path collapse uses an explicit deterministic manifest.
@@ -31,22 +35,26 @@ is stopped at **Gate Behavior Specified** for human review.
 - V1 does not classify spliced versus unspliced molecules.
 - Transcript overhang is allowed only when at least one aligned base overlaps that
   transcript's exon/intron model.
-- Missing or malformed CB/UMI groups are skipped and counted by default, with a strict
-  failure mode; conflicting values within one read group always fail.
+- Missing, malformed, or unsupported raw CB/UMI values parsed from the GAMP name field
+  are skipped and counted by default, with a strict failure mode.
 - Collapse-manifest coverage is mandatory and explicit.
 - `starsolo-default` is an exact alias for post-collapse `unique-gene`.
-- Output must be byte-identical across supported thread counts.
+- Final V1 output must be byte-identical across supported thread counts. Phase 2 is
+  single-threaded; multithreading and thread-count byte comparison are deferred to
+  Phase 3.
 - License: Apache-2.0.
 
 ## Next action
 
-Human review of **Gate Behavior Specified** using `.agent-workspace/GATES.md`.
+Complete skeptical oracle review of the Phase 2 planning docs, then ask the user directly
+for any remaining CLI option spelling or numeric default approvals needed before
+implementation.
 
 ## Required stop
 
-Remain stopped at **Gate Behavior Specified**. Do not begin Phase 2, production
-panCollapse source, fixture generation, RAD generation, or vertical-slice implementation
-until a human approves the gate.
+Do not begin Phase 2 production panCollapse source, fixture generation, RAD generation,
+or vertical-slice implementation until the implementation gate, exact fixture raw CB/UMI
+values, numeric length defaults, and length-option spellings are approved.
 
 ## Phase 0 artifacts
 
@@ -82,6 +90,16 @@ until a human approves the gate.
 - `CMakeLists.txt`, `cmake/PanCollapseVg.cmake`, and `tests/` — Phase 1 build/test
   skeleton with one pure policy smoke, one VG link smoke, and one build-dir-only
   GAMP/XG/GTF projection smoke.
+
+## Phase 2 planning artifacts
+
+- `docs/phase2/implementation-plan.md` — focused vertical-slice plan using GAMP plus the
+  matching `.xg`, build-dir-only fixtures, raw read-name CB/UMI extraction, single-thread
+  execution, configured raw CB/UMI lengths, two-column `tx2gene.tsv`, and a 1-cell x
+  1-gene alevin-fry assertion.
+- RAD docs now explicitly state that production writing is native C++, while libradicl
+  and alevin-fry are validation oracles. They also document per-record `bc`, `umi`,
+  `refs`, and `dirs` semantics.
 
 ## Phase 0 verification
 
@@ -131,16 +149,19 @@ until a human approves the gate.
   `input-diagnostics-fixtures.md`.
 - Outside-first/last-exon and positive transcript-model anchor represented: yes,
   `CMP-09`.
-- Tag skip/strict/fail behavior and complete manifest coverage represented: yes,
-  `TAG-04` through `TAG-09` and `MAN-01` through `MAN-07`.
+- Raw read-name CB/UMI parsing, skip/strict/fail behavior, and complete manifest
+  coverage represented: in progress for the Phase 2 plan. Older Phase 1 `TAG-*`
+  corrected/raw annotation-tag fixtures are historical under D038; manifest coverage
+  remains represented by `MAN-01` through `MAN-07`.
 - Policy ordering score/collapse/uniqueness is unambiguous: yes, `SC-*`, `COL-*`, and
   `POL-*`.
 - CLI snapshot, option defaults, traversal cap, and exit surface are explicit: yes,
   `docs/phase1/cli-run-contract.md`.
 - RAD interoperability has exact expected matrix: yes,
   `docs/phase1/rad-interop-fixture.md`.
-- Failure and diagnostic behavior is testable: yes, grouping, manifest, tag, and summary
-  fixtures specify expected diagnostics.
+- Failure and diagnostic behavior is testable for Phase 1 historical contracts; raw
+  read-name molecule-identity diagnostics are being recentered under D038 before Phase 2
+  implementation.
 - Build/test skeleton matches approved architecture: yes, pure/VG tests are separated and
   the VG link smoke passes against the local build family.
 - Production panCollapse source, checked-in generated fixtures, and RAD outputs absent:
@@ -159,3 +180,9 @@ until a human approves the gate.
 - 2026-06-28: Phase 1 behavior contract completed with focused fixture documents, RAD
   interoperability fixture contract, CMake/CTest skeleton, and passing pure/VG smoke
   tests. Stopped at Gate Behavior Specified for human review.
+- 2026-06-28: Phase 2 planning started. User approved raw read-name CB/UMI extraction,
+  build-dir-only fixtures, single-thread Phase 2 execution, no Phase 2 USA output, and
+  active-doc cleanup away from corrected-tag barcode sourcing.
+- 2026-06-29: User clarified that raw CB and UMI lengths are CLI-controlled values with
+  defaults matching the fixture lengths used by the implementation test, and asked for
+  RAD `refs`/`dirs` semantics to be included in the contracts.

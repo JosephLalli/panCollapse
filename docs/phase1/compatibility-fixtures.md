@@ -4,6 +4,9 @@ These fixtures specify VG-dependent projection and transcript-compatibility beha
 They are conceptual until fixture-generation code is approved after Gate Behavior
 Specified.
 
+Supersession note: the `--tag-failures` default shown below is historical under D038.
+Current V1 molecule identity comes from raw CB/UMI parsed from the GAMP name field.
+
 ## Shared Synthetic Model
 
 Coordinates are 0-based half-open path coordinates on visible source path `chrFixture`

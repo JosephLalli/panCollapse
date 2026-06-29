@@ -110,17 +110,17 @@ panCollapse convert \
   [--score-window N] \
   [--min-splice-jump N] \
   [--max-traversals-per-read N] \
-  [--tag-failures skip|fail] \
-  [--tag-source auto|annotation|tags] \
-  [--barcode-tag NAME --umi-tag NAME] \
   [--threads N]
 ```
 
 `--strand` is required so V1 does not hide library-orientation judgment behind a default.
-Defaults: `--assignment all`, `--score-window 0`, `--tag-failures skip`,
-`--min-splice-jump 20`, `--max-traversals-per-read 100000`, `--tag-source auto`, and
-deterministic single-writer output. If either tag override is supplied, both barcode and
-UMI tag names must be supplied.
+Defaults: `--assignment all`, `--score-window 0`, `--min-splice-jump 20`,
+`--max-traversals-per-read 100000`, raw CB and UMI lengths matching the Phase 2
+fixture lengths used by the implementation test, and deterministic single-writer output.
+The CLI must include explicit
+controls for raw CB length and raw UMI length; exact raw-length option spelling is not
+set by this document. Tag-source and tag-name overrides are not part of the active V1
+barcode/UMI source contract.
 
 ## Data flow
 
@@ -132,8 +132,8 @@ UMI tag names must be supplied.
 3. Open `.xg` as `xg::XG` and use it through `handlegraph::PathPositionHandleGraph`.
 4. Stream GAMP with `vg::io::for_each<vg::MultipathAlignment>` and form adjacent
    read-name groups. Track completed names and fail if a name recurs later.
-5. For each read group, validate a coherent CB/UMI, enumerate complete compatible
-   traversals, project aligned reference-consuming spans to source paths, evaluate
+5. For each read group, extract raw CB/UMI from the GAMP name field, enumerate complete
+   compatible traversals, project aligned reference-consuming spans to source paths, evaluate
    compatibility for source transcript identities, collapse source transcript identities
    to canonical transcripts, score targets, apply assignment policy, sort/deduplicate
    retained target IDs, and enqueue a RAD record.
@@ -216,21 +216,25 @@ above 500, and a prototype shows at least 2x end-to-end speedup.
 
 ## Barcode and UMI handling
 
-Default auto-detection parses both direct annotation `Struct` fields and SAM-style tags
-under annotation key `tags` as produced by `vg mpmap -C`, then chooses by tag semantics
-rather than source order. For each record, candidate values for `CB`, `UB`, `CR`, and
-`UR` are merged by tag name across sources. If direct and SAM-style sources provide the
-same tag with different normalized string values, the record is non-coherent.
+Upstream FASTQ preparation carries the observed raw molecule identity in the biological
+read name before VG alignment. For RNA, the GAMP name field follows:
 
-Only complete pairs are candidates: corrected `CB`/`UB` and raw `CR`/`UR`. At read-group
-level, coherent agreeing corrected values are selected when present. Raw values are used
-only when no corrected-tag evidence appears anywhere in the group and all records have
-coherent agreeing raw values. If corrected and raw pairs are both coherent but disagree,
-the corrected pair is selected and the disagreement is counted as non-selected evidence.
-Missing, malformed, non-coherent, source-conflicting, or mixed-length selected tag values
-are skipped and counted by default; `--tag-failures fail` makes them fatal. Disagreement
-among records within one read-name group for the selected CB or UMI is always fatal. CLI
-overrides select explicit tag names and source.
+```text
+<original_read_name>_<raw_CB>_<raw_UMI>
+```
+
+panCollapse parses the raw cell barcode and raw UMI from the right side of the GAMP name
+field and writes those observed values to RAD. It does not correct cell barcodes or UMIs,
+does not build a permit list, and does not deduplicate UMIs. alevin-fry performs
+permit-list construction and cell-barcode correction, followed by UMI
+deduplication/resolution during quantification.
+
+The raw CB and UMI lengths are explicit CLI-controlled values. Parsed values whose
+lengths differ from the configured lengths are malformed molecule identities. The same
+configured lengths are written to RAD file tags as `cblen` and `ulen`.
+
+The older corrected/raw tag-selection model is superseded for V1. Tag-source and tag-name
+overrides are not part of the active barcode/UMI source contract.
 
 ## RAD output
 
@@ -256,21 +260,38 @@ The RAD schema is fixed:
 - record: `u32 naln`, encoded CB, encoded UMI, then `naln` `u32 compressed_ori_refid`
   values.
 
+Conceptually, each alevin-fry read record contains four pieces of per-read information:
+
+- `bc`: the raw cell barcode encoded according to the configured CB length;
+- `umi`: the raw UMI encoded according to the configured UMI length;
+- `refs`: the read's accepted compatibility target IDs;
+- `dirs`: a parallel orientation vector where `dirs[i]` describes the orientation of
+  `refs[i]`.
+
+`refs` are zero-based indices into the RAD header target dictionary, not genomic
+coordinates. In panCollapse V1 they refer to canonical transcript targets after collapse.
+alevin-fry maps them to genes or gene-state IDs using `tx2gene.tsv`.
+
 `compressed_ori_refid` is `ref_id | 0x80000000` for forward and `ref_id` for reverse.
 Barcode and UMI bases are packed as A=00, C=01, G=10, T=11 with the last base in the least
 significant bits; `N` is encoded as A=00 for parity with alevin-fry conversion. Widths are
 selected from length 1..4 -> U8, 5..8 -> U16, 9..16 -> U32, and 17..32 -> U64. Lengths
-greater than 32 are unsupported in V1. Once global selected CB/UMI lengths are
-established, mixed selected lengths are skippable tag failures by default and fatal in
-strict mode. Chunks are emitted in deterministic order; `num_chunks` is exact and
-backpatched.
+greater than 32 are unsupported in V1. Raw CB/UMI length mismatch against the configured
+lengths is a skippable raw-identity failure by default and fatal in strict mode. Chunks
+are emitted in deterministic order; `num_chunks` is exact and backpatched.
+
+For every retained target, panCollapse must emit both a `ref_id` and a direction bit.
+libradicl decodes the high bit into `dirs[i]` and the lower 31 bits into `refs[i]`;
+alevin-fry uses `dirs` for expected-orientation filtering during permit-list generation
+and collation. Do not derive `dirs` from arbitrary graph-node orientation.
 
 For V1, all retained hits are encoded with the forward orientation bit set. The downstream
 workflow should use `alevin-fry generate-permit-list --expected-ori fw` because
-panCollapse already applies strand policy. This RAD orientation is synthetic and means
-"retained by panCollapse's strand policy"; it is not a preservation of original mapper
-strand. If original orientation is preserved later, the downstream orientation mode must
-be revisited. Target IDs are sorted and deduplicated per read before writing.
+panCollapse already applies strand policy. This RAD orientation is synthetic target-level
+metadata and means "retained by panCollapse's strand policy"; it is not a preservation of
+original mapper strand. If a later human-approved decision preserves target-relative
+alignment orientation in `dirs`, the downstream expected-orientation mode must be
+revisited. Target IDs are sorted and deduplicated per read before writing.
 
 ## Determinism and threading
 
@@ -283,11 +304,11 @@ concurrent appends. Logs and summary stats must be stable across supported threa
 
 Hard failures include unreadable/incompatible inputs, GAMP group recurrence, contradictory
 manifest rows, missing manifest rows for compatible source identities, annotation/index
-identity mismatch, invalid RAD encoding, selected tag conflicts within a group, and
-unsupported explicit tag configuration. Skippable per-read tag failures are counted and
-become hard failures under `--tag-failures fail`.
+identity mismatch, and invalid RAD encoding. Skippable per-read raw CB/UMI parse or
+encoding failures are counted and become hard failures under strict molecule-identity
+handling.
 
-The summary must include input record/read-group counts, tag skip reasons, grouping
+The summary must include input record/read-group counts, raw CB/UMI skip reasons, grouping
 violations, no-compatible-transcript groups, compatible targets removed by score-window
 filtering (`score_removed_targets`), policy removals, emitted groups, targets per emitted
 group, manifest misses, and annotation/index consistency failures.
@@ -321,12 +342,14 @@ cap overflow, exonic, intronic, exon/intron crossing, isoform exonic versus intr
 annotated versus absent splice junction, outside overhang with an anchor,
 parent-gene-only negative, strand modes, multiple source transcript identities collapsed
 without score inflation, missing manifest hard failure, GAMP group recurrence failure,
-tag skip/strict/conflict cases, mixed selected CB/UMI lengths, and source transcript
-identity validation.
+raw read-name CB/UMI parsing and malformed-input handling, mixed raw CB/UMI lengths,
+and source transcript identity validation. Older tag-centric Phase 1 barcode fixtures are
+superseded by the raw read-name barcode source decision for V1.
 
 RAD validation must include a tiny end-to-end `alevin-fry generate-permit-list`,
 `collate`, and `quant` run using `out/map.rad` and `out/tx2gene.tsv`, with an exact
-expected gene matrix and byte-identical outputs across supported thread counts.
+expected gene matrix. Phase 2 performs this proof with one thread; byte-identical outputs
+across supported thread counts are deferred to Phase 3 and final V1 acceptance.
 
 ## Risks for gate review
 

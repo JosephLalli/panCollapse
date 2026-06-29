@@ -4,6 +4,11 @@ This document is the Phase 1 CLI snapshot required for **Gate Behavior Specified
 collects the user-facing run contract without forcing fixture implementers to load every
 Phase 1 fixture document.
 
+Supersession note: D038 supersedes the barcode/UMI tag-source portions of this Phase 1
+snapshot for V1 implementation. panCollapse reads observed raw CB/UMI from the GAMP name
+field; corrected/raw GAMP annotation tag selection and tag-name overrides are historical
+Phase 1 text unless a later human-approved decision restores them.
+
 ## Command Snapshot
 
 ```text

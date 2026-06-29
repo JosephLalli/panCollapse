@@ -32,6 +32,9 @@ documents needed for a bounded task.
   inputs.
 - GBZ/GBWT are future-only alternatives unless a later approved decision proves equivalent
   path-position behavior.
+- Barcode/UMI source text in Phase 1 tag fixtures and CLI snapshots is superseded by
+  D038: V1 reads observed raw CB/UMI from the GAMP name field, not corrected/raw GAMP
+  annotation tags.
 - Fixture expectations must be settled before production behavior code is written.
 - Pure policy tests must not include VG headers or link VG libraries.
 - VG-dependent tests must be labeled separately from pure tests.
