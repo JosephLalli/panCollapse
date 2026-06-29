@@ -1,0 +1,342 @@
+# Architecture Proposal
+
+**Status:** Proposed for Gate Architecture Approved. At the end of Phase 0, no
+production source, build files, fixtures, or generated outputs were included.
+
+Phase 1 has since added the focused behavior contracts and CMake/CTest smoke skeleton
+listed in `PROGRESS.md` and `docs/phase1/`.
+
+## Scope and dependency boundary
+
+V1 is a standalone C++20 converter over existing mapper outputs. It does not build VG,
+create mapping indexes, create a panCollapse-specific persistent index, surject through
+BAM, or introduce a RAD library dependency at runtime.
+
+The VG programming wiki's ecosystem-library guidance supports using public vg-adjacent
+interfaces and libraries instead of broad `vg/src` internals. For V1, that means
+protobuf GAMP streaming, handlegraph path-position APIs, and XG, not vendoring libbdsg,
+GBWTGraph, or the full VG source tree.
+
+The supported VG boundary is the local checkout/build family:
+
+- source: `/mnt/ssd/lalli/usr/local/src/vg`
+- binary: `/mnt/ssd/lalli/usr/local/bin/vg`
+- version: `v1.75.0-68-ge82694b69 "Spike"`
+- commit: `e82694b699988205d5105231240db000f9655335`
+- describe: `v1.75.0-68-ge82694b69-dirty`
+- compiler/runtime: GCC 15.2.0, libstd++ 20250808
+- HTSlib: headers 101990, library 1.19.1-29-g3cfe8769
+
+The dirty checkout and dependency tree mean compatibility is scoped to this build family,
+not to arbitrary VG installations with the same release tag. Phase 1 must start with a
+compile/link smoke test before broader behavior work.
+
+Future CMake work, after this gate, should discover the local build with:
+
+```text
+CMAKE_PREFIX_PATH=/mnt/ssd/lalli/usr/local/src/vg
+PKG_CONFIG_PATH=/mnt/ssd/lalli/usr/local/src/vg/lib/pkgconfig
+```
+
+The smoke-validated link boundary is `find_package(VGio)`, `find_package(libhandlegraph)`,
+`VGio::VGio`, the exported libhandlegraph target, and a local imported static target for
+`/mnt/ssd/lalli/usr/local/src/vg/lib/libxg.a` with
+`/mnt/ssd/lalli/usr/local/src/vg/include`. A throwaway Phase 0 probe outside the repo
+linked `VGio::VGio`, `libhandlegraph::handlegraph_shared`, `libxg.a`,
+`PkgConfig::SDSL`, `PkgConfig::DIVSUFSORT`, `PkgConfig::DIVSUFSORT64`,
+`OpenMP::OpenMP_CXX`, `pthread`, `m`, and `atomic`, then instantiated
+`vg::MultipathAlignment` and `xg::XG`. Phase 1 recreated this as tracked build smoke
+before behavior implementation. Phase 1 projection smoke additionally found that
+protobuf repeated-field access from local headers requires the Abseil
+`absl_log_internal_check_op` pkg-config target and its transitives. Avoid full `libvg.a`
+and VG internal
+`multipath_alignment_t` unless that smoke proves the narrower boundary impossible.
+
+## Exact V1 inputs
+
+Required converter inputs:
+
+- name-grouped single-end GAMP from the same graph/node-id space used for coordinate
+  lookup;
+- `.xg` for that graph, implementing `handlegraph::PathPositionHandleGraph` with visible
+  source coordinate paths;
+- GTF annotation;
+- collapse manifest keyed to source transcript identities: exact `.xg` source path names
+  plus source transcript IDs from the GTF;
+- output directory.
+
+The manifest is a required headered TSV:
+
+```text
+source_path_name<TAB>source_transcript_id<TAB>canonical_transcript_id<TAB>canonical_gene_id
+```
+
+Fields may not contain tabs or newlines. Each source transcript model is keyed by
+`(source_path_name, source_transcript_id)`. `source_path_name` must exactly match both a
+visible `.xg` path name and the GTF seqname for that source coordinate system.
+`source_transcript_id` must match the configured GTF `transcript_id` attribute on exon
+records. Contradictory duplicates for one source key are errors; repeated identical rows
+are diagnostic-only duplicates. One canonical transcript mapped to multiple genes is an
+error. Identity mappings are valid only when explicitly listed.
+
+The required `.xg` paths are source-coordinate paths used by the GTF, such as reference,
+haplotype, or copy paths. They are not GBZ/GBWT-only compressed paths and they are not
+mature spliced transcript paths for V1 compatibility evaluation.
+
+The expected upstream `vg mpmap` artifact set for RNA/splice-variation graphs commonly
+uses `-x graph.xg -g graph.gcsa -d graph.dist` to produce `reads.gamp`. The panCollapse
+converter boundary begins after that mapping step: it requires `reads.gamp` and
+`graph.xg`, and excludes `.gcsa`/`.gcsa.lcp`, `.dist`, `.snarls`, and minimizer indexes
+from the V1 converter inputs. GBZ/GBWT is a separate future coordinate-index question,
+not part of this V1 `mpmap` artifact contract, and is not accepted as a sole replacement
+for `.xg` unless a later decision proves equivalent path-position behavior.
+
+V1 does not add `.gcsa` or `.dist` provenance CLI flags. The run summary records the
+actual panCollapse input identities: GAMP, XG, GTF, manifest, configuration, and build
+version. Mapper-side index provenance remains the responsibility of the upstream mapping
+workflow unless a later metadata-file input is explicitly approved.
+
+## Proposed CLI
+
+```text
+panCollapse convert \
+  --gamp reads.gamp \
+  --xg graph.xg \
+  --gtf annotation.gtf \
+  --collapse-manifest collapse.tsv \
+  --out-dir out \
+  --strand sense|antisense|both \
+  [--assignment all|unique-transcript|unique-gene|starsolo-default] \
+  [--score-window N] \
+  [--min-splice-jump N] \
+  [--max-traversals-per-read N] \
+  [--tag-failures skip|fail] \
+  [--tag-source auto|annotation|tags] \
+  [--barcode-tag NAME --umi-tag NAME] \
+  [--threads N]
+```
+
+`--strand` is required so V1 does not hide library-orientation judgment behind a default.
+Defaults: `--assignment all`, `--score-window 0`, `--tag-failures skip`,
+`--min-splice-jump 20`, `--max-traversals-per-read 100000`, `--tag-source auto`, and
+deterministic single-writer output. If either tag override is supplied, both barcode and
+UMI tag names must be supplied.
+
+## Data flow
+
+1. Load and validate the manifest. Build a deterministic RAD target dictionary from
+   lexicographically sorted canonical transcript IDs and emit a `tx2gene.tsv` row for
+   every target.
+2. Parse GTF into in-memory transcript structures using GTF/path coordinates as
+   canonical. Convert 1-based inclusive GTF intervals to 0-based half-open intervals.
+3. Open `.xg` as `xg::XG` and use it through `handlegraph::PathPositionHandleGraph`.
+4. Stream GAMP with `vg::io::for_each<vg::MultipathAlignment>` and form adjacent
+   read-name groups. Track completed names and fail if a name recurs later.
+5. For each read group, validate a coherent CB/UMI, enumerate complete compatible
+   traversals, project aligned reference-consuming spans to source paths, evaluate
+   compatibility for source transcript identities, collapse source transcript identities
+   to canonical transcripts, score targets, apply assignment policy, sort/deduplicate
+   retained target IDs, and enqueue a RAD record.
+6. Commit records to `out/map.rad` in input group sequence and write stable summary
+   diagnostics.
+
+## GAMP grouping and traversal
+
+For the current single-end `vg mpmap -F GAMP` implementation, all alignments emitted for
+one input read are contiguous even with mapper threads, but global read order is not
+guaranteed. Duplicate input names can recur later, so V1 validates both adjacency and
+non-recurrence and fails clearly on violation. There is no supported VG command that
+name-groups GAMP for this purpose; `vg gamsort` sorts GAM/GAF by graph position or random
+order and must not be prescribed as the remedy.
+
+A GAMP record is traversed as a DAG over `MultipathAlignment.subpath`:
+
+- start nodes are `start[]` when present, otherwise subpaths with no incoming `next` or
+  `connection`;
+- outgoing edges include both `Subpath.next` and `Subpath.connection`;
+- a complete traversal reaches a sink with no outgoing edge;
+- traversal score is the sum of selected `Subpath.score` values plus
+  `Connection.score` values for selected connection edges;
+- `next` edges add no transition score.
+
+For each read group, V1 enumerates complete traversals subject to a safety cap before
+compatibility filtering. The default cap is `--max-traversals-per-read 100000`. Cap
+overflow is a hard failure unless a later decision approves a lossy mode. A collapsed
+target's best score is the maximum compatible traversal score observed for any source
+path mapping to that canonical transcript. The read-group best is the maximum score among
+compatible canonical transcript targets after collapse; incompatible traversals do not
+contribute to it. Tied best targets are retained by default; `--score-window N` retains
+targets within `N` of the read-group best. All tied compatible targets and multimapping
+evidence are preserved.
+
+## Annotation lookup and compatibility
+
+The annotation model is in memory only:
+
+- `TranscriptModel`: source path name, source transcript ID, canonical transcript/gene
+  targets from the manifest, strand, merged exons, implied introns, model intervals, and
+  annotated splice junction set;
+- `PathAnnotation`: per-source-path sorted interval structures plus a junction hash.
+
+This is not a persistent custom index. For each traversal, reference-consuming edit spans
+are projected through `PathPositionHandleGraph::for_each_step_position_on_handle`,
+filtered to source paths present in both the manifest and GTF. Do not use nearest-path
+search. Multiple path projections are preserved.
+
+Compatibility is evaluated before collapse at source transcript identity:
+
+- selected strand mode must pass;
+- at least one projected reference-consuming interval must overlap the transcript's exon
+  or implied-intron model;
+- every observed splice jump must be present in that transcript's annotated junction set;
+- outside-first/last-exon overhang is allowed once the positive model anchor exists;
+- parent-gene-only overlap is never sufficient.
+
+Strand modes are relative to the sequenced GAMP query after projection to source path
+coordinates; panCollapse does not infer library chemistry. For each projected aligned
+block, query the graph with the mapping `Position.node_id` and `Position.is_reverse`. The
+block is forward on the source path when the path step orientation matches the queried
+handle orientation; otherwise it is reverse. A `+` transcript is forward on its source
+path and a `-` transcript is reverse. `sense` keeps query-forward equal to
+transcript-forward, `antisense` keeps the opposite, and `both` disables this filter.
+
+Observed splice jumps are evaluated before collapse on one source transcript model.
+Adjacent projected aligned blocks on the same source path create a candidate skipped
+interval when they have a positive path-coordinate gap in traversal order. The junction
+key is the skipped 0-based half-open path interval. A selected GAMP `connection` edge
+always marks that gap as an observed splice. A non-connection same-path gap is treated as
+a deletion unless its length is at least `--min-splice-jump` (default 20), in which case
+it is an observed splice jump. Every observed splice key must match an adjacent-exon
+intron key in the candidate transcript.
+
+Custom annotation indexing remains out of V1. Revisit only after a pilot shows annotation
+lookup above 50 percent of wall time or CPU, median lookup above 50 us/read group,
+p95 above 500 us/read group, or p95 projected source-path occurrences per aligned node
+above 500, and a prototype shows at least 2x end-to-end speedup.
+
+## Barcode and UMI handling
+
+Default auto-detection parses both direct annotation `Struct` fields and SAM-style tags
+under annotation key `tags` as produced by `vg mpmap -C`, then chooses by tag semantics
+rather than source order. For each record, candidate values for `CB`, `UB`, `CR`, and
+`UR` are merged by tag name across sources. If direct and SAM-style sources provide the
+same tag with different normalized string values, the record is non-coherent.
+
+Only complete pairs are candidates: corrected `CB`/`UB` and raw `CR`/`UR`. At read-group
+level, coherent agreeing corrected values are selected when present. Raw values are used
+only when no corrected-tag evidence appears anywhere in the group and all records have
+coherent agreeing raw values. If corrected and raw pairs are both coherent but disagree,
+the corrected pair is selected and the disagreement is counted as non-selected evidence.
+Missing, malformed, non-coherent, source-conflicting, or mixed-length selected tag values
+are skipped and counted by default; `--tag-failures fail` makes them fatal. Disagreement
+among records within one read-name group for the selected CB or UMI is always fatal. CLI
+overrides select explicit tag names and source.
+
+## RAD output
+
+V1 writes `out/map.rad` and `out/tx2gene.tsv`. The implementation should be a native
+minimal C++ writer for fixed classic RnaShort, uncompressed mapper-style RAD. Baseline
+compatibility is alevin-fry v0.15.0 with libradicl v0.13.0; those projects are validation
+oracles, not production dependencies.
+
+The RAD schema is fixed:
+
+- no magic/version prefix;
+- header: `is_paired` u8 set to 0, `ref_count` u64 little-endian, each reference name as
+  u16 little-endian length plus bytes, and `num_chunks` u64 little-endian placeholder
+  backpatched on close;
+- three tag sections immediately after the header, in order: file, read, alignment;
+- each tag section is `u16 num_tags`, then for each tag `u16 tag_name_len`, tag bytes,
+  and `u8 type_id`; array type ID 7 additionally writes one length type ID byte and one
+  element type ID byte, though V1 does not need arrays;
+- file tags and immediately following file values: `cblen:U16` then `ulen:U16`;
+- read tags: `b:<integer>` and `u:<integer>` for barcode and UMI widths;
+- alignment tag: `compressed_ori_refid:U32`;
+- chunk: `u32 nbytes` including the 8-byte chunk header, `u32 nrec`, then records;
+- record: `u32 naln`, encoded CB, encoded UMI, then `naln` `u32 compressed_ori_refid`
+  values.
+
+`compressed_ori_refid` is `ref_id | 0x80000000` for forward and `ref_id` for reverse.
+Barcode and UMI bases are packed as A=00, C=01, G=10, T=11 with the last base in the least
+significant bits; `N` is encoded as A=00 for parity with alevin-fry conversion. Widths are
+selected from length 1..4 -> U8, 5..8 -> U16, 9..16 -> U32, and 17..32 -> U64. Lengths
+greater than 32 are unsupported in V1. Once global selected CB/UMI lengths are
+established, mixed selected lengths are skippable tag failures by default and fatal in
+strict mode. Chunks are emitted in deterministic order; `num_chunks` is exact and
+backpatched.
+
+For V1, all retained hits are encoded with the forward orientation bit set. The downstream
+workflow should use `alevin-fry generate-permit-list --expected-ori fw` because
+panCollapse already applies strand policy. This RAD orientation is synthetic and means
+"retained by panCollapse's strand policy"; it is not a preservation of original mapper
+strand. If original orientation is preserved later, the downstream orientation mode must
+be revisited. Target IDs are sorted and deduplicated per read before writing.
+
+## Determinism and threading
+
+The target dictionary is sorted by canonical transcript ID. Read-group order follows the
+input GAMP group stream. Parallel workers may compute groups, but the RAD writer commits
+results strictly by group sequence. Chunks are assembled in that sequence with no
+concurrent appends. Logs and summary stats must be stable across supported thread counts.
+
+## Diagnostics and failures
+
+Hard failures include unreadable/incompatible inputs, GAMP group recurrence, contradictory
+manifest rows, missing manifest rows for compatible source identities, annotation/index
+identity mismatch, invalid RAD encoding, selected tag conflicts within a group, and
+unsupported explicit tag configuration. Skippable per-read tag failures are counted and
+become hard failures under `--tag-failures fail`.
+
+The summary must include input record/read-group counts, tag skip reasons, grouping
+violations, no-compatible-transcript groups, compatible targets removed by score-window
+filtering (`score_removed_targets`), policy removals, emitted groups, targets per emitted
+group, manifest misses, and annotation/index consistency failures.
+
+## Alternatives rejected
+
+- Requiring GCSA/LCP, distance, snarls, or minimizer indexes as V1 converter inputs:
+  these are upstream `vg mpmap` concerns. They may be available next to the GAMP, but
+  panCollapse does not need them after mapping and does not accept them as V1 provenance
+  flags.
+- Accepting GBZ/GBWTGraph-only V1 coordinate input: the VG API wiki shows normal
+  `HandleGraph` access for GBZ, but panCollapse requires path-position lookup; local XG
+  already provides `PathPositionHandleGraph`, while GBZ would require a separate
+  dependency boundary and projection proof.
+- Using `vg gamsort` as a name-grouping remedy: it does not provide GAMP read-name
+  grouping for this contract.
+- Building a persistent panCollapse annotation index in V1: product scope rejects it
+  until profiling and a separate decision justify the complexity.
+- Linking the full VG executable/library surface by default: the narrower VGio,
+  handlegraph, and xg boundary has a passing throwaway smoke and is less exposed to
+  internal API churn, but it must be represented by a tracked Phase 1 build smoke.
+- Depending on alevin-fry/libradicl writer code at runtime: the fixed schema is small,
+  while the external projects remain better suited as interoperability oracles.
+
+## Phase 1 validation plan
+
+Phase 1 starts with a tracked compile/link smoke for the VGio/handlegraph/imported-XG
+boundary and a build-dir-only GAMP/XG/GTF projection smoke before fixture broadening.
+The Phase 1 skeleton has now added those smokes. Behavioral fixtures must cover traversal
+cap overflow, exonic, intronic, exon/intron crossing, isoform exonic versus intronic,
+annotated versus absent splice junction, outside overhang with an anchor,
+parent-gene-only negative, strand modes, multiple source transcript identities collapsed
+without score inflation, missing manifest hard failure, GAMP group recurrence failure,
+tag skip/strict/conflict cases, mixed selected CB/UMI lengths, and source transcript
+identity validation.
+
+RAD validation must include a tiny end-to-end `alevin-fry generate-permit-list`,
+`collate`, and `quant` run using `out/map.rad` and `out/tx2gene.tsv`, with an exact
+expected gene matrix and byte-identical outputs across supported thread counts.
+
+## Risks for gate review
+
+- The VG checkout is dirty; support should remain pinned to this build family until
+  compatibility against another build is proven.
+- Multipath traversal can grow combinatorially; Phase 1 needs an explicit cap behavior.
+- Source path names and source transcript IDs are the join keys across `.xg`, GTF, and
+  manifest; fixture coverage must catch subtle naming mismatches. Availability of
+  `.gcsa`/`.dist` from the upstream mapper does not help this coordinate join.
+- The all-forward RAD orientation policy is synthetic and relies on panCollapse strand
+  filtering plus the downstream `--expected-ori fw` workflow.
+- Projection multiplicity may dominate runtime on dense graphs; the pilot thresholds
+  above define when to reopen the no-custom-index decision.

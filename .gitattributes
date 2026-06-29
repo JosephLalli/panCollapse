@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.gamp binary
+*.gam binary
+*.gbz binary
+*.gbwt binary
+*.xg binary
+*.rad binary

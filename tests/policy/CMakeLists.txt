@@ -1,0 +1,4 @@
+add_executable(target_set_policy_smoke target_set_policy_smoke.cpp)
+
+add_test(NAME target_set_policy_smoke COMMAND target_set_policy_smoke)
+set_tests_properties(target_set_policy_smoke PROPERTIES LABELS "pure;policy")

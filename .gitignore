@@ -1,0 +1,30 @@
+# Build products
+/build/
+/build-*/
+/cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
+
+# Test and profiling outputs
+Testing/
+coverage/
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+
+# Generated data and local indexes
+/work/
+/results/
+/tmp/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Local environment
+.env
+.env.*
+!.env.example
