@@ -625,6 +625,27 @@ historical tag-failure terminology. This keeps active V1 diagnostics aligned wit
 panCollapse reads observed raw CB/UMI from the GAMP name field, while tag-based
 corrected/raw selection remains historical unless a later decision restores it.
 
+### D044 — GAMP-to-RAD assignment surface is all-only
+
+**Decision source:** User.
+
+**Decision:** Active GAMP-to-RAD output preserves the full compatible transcript target
+set. `all` is the default assignment behavior and the only active assignment option for
+RAD output.
+
+**Decision:** `unique-transcript`, `unique-gene`, and `starsolo-default` are not active
+GAMP-to-RAD V1 behaviors. They should remain documented only as to-be-implemented future
+options, potentially relevant if panCollapse later expands beyond GAMP-to-RAD conversion
+to other output formats. If those values are accepted on the current RAD conversion CLI,
+they must fail clearly as to-be-implemented rather than filtering RAD records.
+
+**Decision:** D044 supersedes D012 and D020 for active GAMP-to-RAD implementation and
+supersedes any Phase 1 fixture text that required uniqueness-policy RAD filtering or
+uniqueness-policy removal counters.
+
+**Rationale:** RAD output should carry compatibility evidence for downstream tools rather
+than prefiltering to transcript- or gene-unique evidence inside panCollapse.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

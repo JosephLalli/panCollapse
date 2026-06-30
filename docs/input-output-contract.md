@@ -90,7 +90,7 @@ the default, while `fail` makes those conditions fatal.
 - mapper-style, uncollated RAD;
 - canonical transcript target dictionary;
 - raw cell barcode and raw UMI encoded in the schema expected by alevin-fry;
-- complete eligible transcript target set after collapse and policy filtering, encoded as
+- complete eligible transcript target set after collapse and score filtering, encoded as
   zero-based target IDs into the RAD header;
 - one orientation value for every emitted target ID;
 - no transcript likelihood weights and no splicing-state target labels in V1;
@@ -103,6 +103,10 @@ preserves the actual read alignment orientation relative to each emitted target;
 not synthesize all-forward directions after a panCollapse-side strand filter. A read group
 with mixed orientations for the same emitted target is dropped and counted in the current
 implementation scope.
+
+RAD output uses the all-compatible-target assignment behavior. `--assignment all`, when
+present, is equivalent to the default. Transcript- or gene-uniqueness modes are deferred
+outside the active GAMP-to-RAD converter and must not filter RAD records in V1.
 
 ### Companion artifacts
 

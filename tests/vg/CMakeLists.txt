@@ -399,11 +399,36 @@ add_test(
     --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_multi.tsv"
     --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_multi_target"
     --raw-cb-length 16
-    --raw-umi-length 12)
+    --raw-umi-length 12
+    --assignment all)
 set_tests_properties(phase3_multi_target_convert PROPERTIES
   LABELS "vg;phase3;orientation"
   FIXTURES_REQUIRED phase2_vertical_slice_data
   FIXTURES_SETUP phase3_multi_target_rad)
+
+add_test(
+  NAME phase3_multi_target_default_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_multi_target.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_multi.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_multi.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_multi_target_default"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_multi_target_default_convert PROPERTIES
+  LABELS "vg;phase3;orientation"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_multi_target_rad)
+
+add_test(
+  NAME phase3_assignment_all_matches_default
+  COMMAND /bin/sh -c
+    "cmp -s pc_multi_target/map.rad pc_multi_target_default/map.rad && cmp -s pc_multi_target/tx2gene.tsv pc_multi_target_default/tx2gene.tsv && cmp -s pc_multi_target/summary.tsv pc_multi_target_default/summary.tsv"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_assignment_all_matches_default PROPERTIES
+  LABELS "vg;phase3;orientation"
+  FIXTURES_REQUIRED phase3_multi_target_rad)
 
 add_test(
   NAME phase3_multi_target_verify
@@ -876,6 +901,50 @@ add_test(
     12x
     "--raw-umi-length must be an unsigned integer")
 set_tests_properties(phase3_cli_invalid_raw_umi_trailing_junk PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_assignment_unique_transcript_deferred
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_assignment_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    unique-transcript
+    "assignment policy 'unique-transcript' is to be implemented outside GAMP-to-RAD conversion")
+set_tests_properties(phase3_assignment_unique_transcript_deferred PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_assignment_unique_gene_deferred
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_assignment_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    unique-gene
+    "assignment policy 'unique-gene' is to be implemented outside GAMP-to-RAD conversion")
+set_tests_properties(phase3_assignment_unique_gene_deferred PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_assignment_starsolo_default_deferred
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_assignment_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    starsolo-default
+    "assignment policy 'starsolo-default' is to be implemented outside GAMP-to-RAD conversion")
+set_tests_properties(phase3_assignment_starsolo_default_deferred PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_assignment_unknown_usage_error
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_assignment_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    bogus
+    "usage: panCollapse convert")
+set_tests_properties(phase3_assignment_unknown_usage_error PROPERTIES
   LABELS "vg;phase3;cli"
   FIXTURES_REQUIRED phase2_vertical_slice_data)
 

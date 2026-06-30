@@ -68,13 +68,15 @@ read group and emitted target must be dropped and counted.
 - contradictory manifest rows fail.
 - one canonical transcript mapped to multiple genes fails.
 
-## 6. Assignment-policy cases
+## 6. Assignment-surface cases
 
-- `all`: retain complete eligible transcript set across multiple genes.
-- `unique-transcript`: one transcript passes, more than one does not.
-- `unique-gene`: multiple transcripts from one gene pass and all remain in RAD.
-- `unique-gene`: transcripts from two genes do not pass.
-- `starsolo-default`: exactly matches `unique-gene` for every fixture.
+- default assignment behavior retains the complete eligible transcript target set,
+  including targets from multiple genes;
+- explicit `--assignment all` is accepted and produces the same RAD output as the
+  default;
+- `unique-transcript`, `unique-gene`, and `starsolo-default` fail clearly as
+  to-be-implemented for the active GAMP-to-RAD converter;
+- no RAD fixture should prefilter compatible targets by transcript or gene uniqueness.
 
 ## 7. RAD interoperability
 

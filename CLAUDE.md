@@ -7,8 +7,9 @@ an index, not the full manual; read detailed files only when working in their ar
 
 - Verify external APIs and formats before designing against them.
 - Do not write production code until Gate Architecture Approved has passed.
-- Preserve multimapping evidence; collapse equivalent graph/copy paths before evaluating
-  transcript- or gene-level uniqueness.
+- Preserve multimapping evidence. Active GAMP-to-RAD output emits all compatible retained
+  RAD targets after compatibility, collapse, and score filtering; transcript- and
+  gene-uniqueness modes are deferred/to-be-implemented.
 - Use existing VG/index and GTF inputs in V1; do not introduce a custom lookup index
   without measured evidence and human approval.
 - Update `PROGRESS.md` and `docs/decisions.md` before ending a substantive session.

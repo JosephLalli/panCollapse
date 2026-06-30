@@ -105,7 +105,7 @@ panCollapse convert \
   --gtf annotation.gtf \
   --collapse-manifest collapse.tsv \
   --out-dir out \
-  [--assignment all|unique-transcript|unique-gene|starsolo-default] \
+  [--assignment all] \
   [--score-window N] \
   [--min-splice-jump N] \
   [--max-traversals-per-read N] \
@@ -135,7 +135,7 @@ active V1 barcode/UMI source contract.
 5. For each read group, extract raw CB/UMI from the GAMP name field, enumerate complete
    compatible traversals, project aligned reference-consuming spans to source paths, evaluate
    compatibility for source transcript identities, collapse source transcript identities
-   to canonical transcripts, score targets, apply assignment policy, sort/deduplicate
+   to canonical transcripts, score targets, preserve all retained targets, sort/deduplicate
    retained target IDs, and enqueue a RAD record.
 6. Commit records to `out/map.rad` in input group sequence and write stable summary
    diagnostics.
@@ -307,8 +307,8 @@ handling.
 
 The summary must include input record/read-group counts, raw CB/UMI skip reasons, grouping
 violations, no-compatible-transcript groups, compatible targets removed by score-window
-filtering (`score_removed_targets`), policy removals, emitted groups, targets per emitted
-group, manifest misses, and annotation/index consistency failures.
+filtering (`score_removed_targets`), emitted groups, targets per emitted group, manifest
+misses, and annotation/index consistency failures.
 
 ## Alternatives rejected
 

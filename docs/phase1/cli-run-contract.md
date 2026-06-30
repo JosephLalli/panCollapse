@@ -17,6 +17,11 @@ Supersession note: D043 replaces historical tag-failure diagnostics for active V
 molecule identity. Use `--molecule-identity-failures skip|fail` and the
 `raw_molecule_*` counters for GAMP-name CB/UMI parsing.
 
+Supersession note: D044 narrows active GAMP-to-RAD assignment behavior to `all` only.
+`unique-transcript`, `unique-gene`, and `starsolo-default` are to-be-implemented future
+options outside the active RAD converter, and their historical policy-removal counters
+are not active V1 RAD-output requirements.
+
 ## Command Snapshot
 
 ```text
@@ -26,7 +31,7 @@ panCollapse convert \
   --gtf annotation.gtf \
   --collapse-manifest collapse.tsv \
   --out-dir out \
-  [--assignment all|unique-transcript|unique-gene|starsolo-default] \
+  [--assignment all] \
   [--score-window N] \
   [--min-splice-jump N] \
   [--max-traversals-per-read N] \
@@ -51,7 +56,7 @@ converter inputs after GAMP exists.
 
 | Option | Default | Validation |
 |---|---|---|
-| `--assignment` | `all` | one of `all`, `unique-transcript`, `unique-gene`, `starsolo-default` |
+| `--assignment` | `all` | active RAD converter accepts `all`; `unique-transcript`, `unique-gene`, and `starsolo-default` fail as to-be-implemented |
 | `--score-window` | `0` | integer `>= 0` |
 | `--min-splice-jump` | `20` | integer `>= 1` |
 | `--max-traversals-per-read` | `100000` | integer `>= 1` |
@@ -98,8 +103,6 @@ counters, but these names must remain unambiguous.
 | `no_compatible_transcript_groups` | groups with no compatible transcript after projection | success |
 | `mixed_orientation_dropped_groups` | groups dropped because an emitted target has mixed target-relative orientations | success |
 | `score_removed_targets` | compatible targets removed by score-window filtering | success |
-| `policy_removed_unique_transcript_groups` | groups removed by `unique-transcript` | success |
-| `policy_removed_unique_gene_groups` | groups removed by `unique-gene` or `starsolo-default` | success |
 | `manifest_missing_source_identities` | compatible source identities missing manifest rows | hard failure |
 | `manifest_contradictory_rows` | one source identity maps to conflicting canonical targets | hard failure |
 | `manifest_duplicate_rows` | repeated identical manifest rows | success |

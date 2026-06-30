@@ -19,7 +19,7 @@ documents needed for a bounded task.
 |---|---|
 | CLI, options, exits, and diagnostics surface | `docs/input-output-contract.md`, `docs/architecture-proposal.md`, `docs/phase1/cli-run-contract.md` |
 | VG traversal, projection, and biological compatibility | `docs/compatibility-semantics.md`, `docs/research/annotation-lookup-performance.md`, `docs/phase1/compatibility-fixtures.md`, `docs/phase1/cli-run-contract.md` |
-| Score, collapse, assignment, target ordering | `docs/compatibility-semantics.md`, `docs/phase1/policy-fixtures.md`, `docs/phase1/cli-run-contract.md` |
+| Score, collapse, all-only RAD assignment surface, target ordering | `docs/compatibility-semantics.md`, `docs/phase1/policy-fixtures.md`, `docs/phase1/cli-run-contract.md` |
 | Barcode/UMI, grouping, manifest, diagnostics | `docs/validation-contract.md`, `docs/phase1/input-diagnostics-fixtures.md`, `docs/phase1/cli-run-contract.md` |
 | RAD writer and alevin-fry interoperability | `docs/research/rad-format.md`, `docs/phase1/rad-interop-fixture.md` |
 | Build and test integration | `docs/architecture-proposal.md`, `docs/research/vg-integration.md`, `docs/phase1/build-test-plan.md` |
@@ -43,3 +43,5 @@ documents needed for a bounded task.
 - D042 removes the active V1 `--strand` surface. panCollapse preserves RAD `dirs` from
   target-relative orientation; `--max-traversals-per-read` defaults to `100000` with hard
   failure on overflow.
+- D044 narrows active GAMP-to-RAD assignment behavior to `all` only. Historical
+  uniqueness policies are future/to-be-implemented outside the active RAD converter.

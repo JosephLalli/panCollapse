@@ -32,6 +32,13 @@ fallback.
 
 ## `starsolo-default` policy
 
+D044 supersedes this policy for active GAMP-to-RAD output. RAD conversion now preserves
+all compatible retained targets; `all` is the default and only active RAD assignment
+behavior. `starsolo-default`, `unique-gene`, and `unique-transcript` are deferred
+to-be-implemented modes outside active RAD conversion.
+
+Historical decision:
+
 `starsolo-default` is an exact alias for post-score-filtering, post-collapse
 `unique-gene`: retain a read when all eligible canonical transcripts belong to one gene,
 and preserve all eligible transcripts from that gene in the RAD target set.

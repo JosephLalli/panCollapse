@@ -141,7 +141,7 @@ struct ProjectedTraversal {
     throw std::runtime_error(
         "usage: panCollapse convert --gamp reads.gamp --xg graph.xg --gtf annotation.gtf "
         "--collapse-manifest collapse.tsv --out-dir out [--raw-cb-length N] [--raw-umi-length N] "
-        "[--score-window N] [--min-splice-jump N] [--max-traversals-per-read N] "
+        "[--assignment all] [--score-window N] [--min-splice-jump N] [--max-traversals-per-read N] "
         "[--molecule-identity-failures skip|fail]");
 }
 
@@ -188,6 +188,16 @@ Options parse_options(int argc, char** argv) {
             options.manifest = require_value("--collapse-manifest");
         } else if (arg == "--out-dir") {
             options.out_dir = require_value("--out-dir");
+        } else if (arg == "--assignment") {
+            const std::string value = require_value("--assignment");
+            if (value == "all") {
+                continue;
+            }
+            if (value == "unique-transcript" || value == "unique-gene" || value == "starsolo-default") {
+                throw std::runtime_error("assignment policy '" + value +
+                                         "' is to be implemented outside GAMP-to-RAD conversion");
+            }
+            usage_error();
         } else if (arg == "--raw-cb-length") {
             options.raw_cb_length = parse_size_option("--raw-cb-length", require_value("--raw-cb-length"));
         } else if (arg == "--raw-umi-length") {

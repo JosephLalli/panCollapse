@@ -26,8 +26,8 @@ V1 supports:
 - preservation of multimapping transcript equivalence classes;
 - mapper-style, uncollated RAD output for alevin-fry;
 - preservation of target-relative read orientation in RAD `dirs`;
-- selectable assignment policies: all, unique transcript, unique gene, and a mode intended
-  to mirror STARsolo's default unique-gene behavior.
+- full compatible transcript target sets in RAD output; `all` is the only active
+  assignment behavior for GAMP-to-RAD conversion.
 
 ## 3. Explicit non-goals
 
@@ -142,7 +142,7 @@ copies or haplotypes.
 
 Every compatible source identity must have an explicit manifest row. Missing coverage is
 a hard error; there is no implicit identity fallback. The manifest is applied before
-transcript- or gene-level uniqueness is evaluated.
+RAD target emission.
 
 For V1 compatibility evaluation, the source path is a visible source-coordinate path used
 by the GTF, not a mature spliced transcript path by itself. The transcript model is
@@ -171,19 +171,14 @@ probabilistic weighting is required in V1, and RAD output is an unweighted targe
 
 ## 10. Assignment policies
 
-Eligibility filtering and copy collapse happen before assignment-policy evaluation.
+Active GAMP-to-RAD output uses only the `all` assignment behavior. After compatibility,
+source-to-canonical collapse, and score filtering, panCollapse emits every eligible
+canonical transcript target that remains.
 
-- `all` — default. Emit every eligible canonical transcript target.
-- `unique-transcript` — emit only when exactly one eligible canonical transcript remains.
-- `unique-gene` — emit when all eligible canonical transcripts map to exactly one gene;
-  preserve all eligible transcripts from that gene in the RAD record.
-- `starsolo-default` — exact alias for `unique-gene` in V1. After score filtering and
-  copy collapse, retain the read when all eligible canonical transcripts belong to one
-  gene, preserving all eligible transcripts from that gene in the RAD record.
-
-A read that has many graph paths, haplotype paths, or transcript isoforms but only one
-canonical gene is gene-unique. It must not be discarded merely because the pangenome
-represents equivalent evidence multiple ways.
+`unique-transcript`, `unique-gene`, and `starsolo-default` are to-be-implemented future
+options outside the active GAMP-to-RAD behavior. They may become relevant if panCollapse
+later expands to non-RAD output formats, but they must not prefilter RAD compatibility
+records in V1.
 
 ## 11. Output
 
@@ -223,7 +218,6 @@ least:
 - groups with no compatible transcript;
 - groups dropped because one emitted target has mixed target-relative orientations;
 - compatible targets removed by score-window filtering (`score_removed_targets`);
-- groups removed by each uniqueness policy;
 - groups emitted and number of targets per emitted group;
 - manifest misses and annotation/index consistency failures.
 
@@ -248,7 +242,8 @@ The V1 product is complete only when:
 - a tiny generated RAD file is accepted by the current supported alevin-fry workflow;
 - the output gene matrix matches the exact expected result;
 - name-grouping, raw molecule-identity parsing, configured-length mismatch, collapse,
-  score, target-relative orientation, and assignment-policy failures are tested;
+  score, target-relative orientation, all-mode RAD assignment, and deferred assignment
+  option failures are tested;
 - performance is characterized on a bounded pilot;
 - deterministic-output tests prove byte-identical artifacts across supported thread
   counts;

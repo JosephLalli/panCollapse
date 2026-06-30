@@ -2,14 +2,16 @@
 
 ## Current phase
 
-**Phase 3 traversal/scoring plus intron/splice compatibility component is locally
-verified and oracle-reviewed.**
+**Phase 3 all-compatible-target RAD assignment surface is locally verified and
+oracle-reviewed, awaiting commit.**
 
 Production source now exists for the approved Phase 2 vertical slice and the selected
 Phase 3 orientation, molecule-identity, traversal/scoring, and intron/splice
-compatibility behaviors. No public panCollapse headers or checked-in generated fixtures,
-GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have been created; generated
-graph/RAD artifacts remain confined to ignored build directories.
+compatibility behaviors. The user-approved all-compatible-target RAD assignment surface
+is implemented locally: `all` is accepted/default, and deferred uniqueness modes fail as
+to-be-implemented. No public panCollapse headers or checked-in generated fixtures, GAMP,
+XG, GCSA, distance-index, GBZ, or RAD outputs have been created; generated graph/RAD
+artifacts remain confined to ignored build directories.
 
 ## Settled product decisions
 
@@ -44,7 +46,9 @@ graph/RAD artifacts remain confined to ignored build directories.
   are skipped and counted by default; `--molecule-identity-failures fail` converts those
   conditions into hard failures.
 - Collapse-manifest coverage is mandatory and explicit.
-- `starsolo-default` is an exact alias for post-collapse `unique-gene`.
+- GAMP-to-RAD output uses all-compatible-target assignment. `all` is the default and only
+  active RAD assignment behavior; `unique-transcript`, `unique-gene`, and
+  `starsolo-default` are deferred to-be-implemented modes outside active RAD conversion.
 - Final V1 output must be byte-identical across supported thread counts. Phase 2 is
   single-threaded; multithreading and thread-count byte comparison are deferred to
   Phase 3.
@@ -52,14 +56,14 @@ graph/RAD artifacts remain confined to ignored build directories.
 
 ## Next action
 
-Ask for explicit human approval of the next independently testable Phase 3 behavior
-before broadening production code beyond the verified traversal/scoring and
-intron/splice compatibility slice.
+Commit the oracle-reviewed all-only RAD assignment surface after final workspace
+verification.
 
 ## Required stop
 
-Do not broaden beyond the currently selected Phase 3 behaviors without explicit human
-approval. Phase 3 work must proceed one independently testable behavior at a time.
+Do not broaden beyond the currently selected all-only RAD assignment-surface behavior
+without explicit human approval. Phase 3 work must proceed one independently testable
+behavior at a time.
 
 ## Phase 0 artifacts
 
@@ -247,6 +251,25 @@ approval. Phase 3 work must proceed one independently testable behavior at a tim
   values, trailing junk, empty values, and overflow; the added CLI failure tests cover the
   reported cases. Oracle re-review passed with no blocking or non-blocking findings.
 
+## Phase 3 assignment-surface verification
+
+- D044 supersedes the historical uniqueness-policy plan for active GAMP-to-RAD behavior:
+  RAD output preserves all compatible retained targets. `--assignment all` is accepted
+  and equivalent to the default; `unique-transcript`, `unique-gene`, and
+  `starsolo-default` fail with a to-be-implemented diagnostic.
+- The full local VG/alevin-fry suite passed:
+  `ctest --test-dir build --output-on-failure`.
+  The suite currently contains 101 tests, including explicit `--assignment all` coverage
+  on the multi-target RAD/alevin-fry fixture, a default-vs-explicit-`all` byte comparison,
+  unknown-assignment usage-error coverage, and deferred-mode failure tests for all three
+  inactive uniqueness modes.
+- The first high-cost oracle review found stale removal-counter/uniqueness wording and
+  missing assignment-surface evidence. The stale wording was corrected, the missing CTest
+  coverage was added, and high-cost oracle re-review passed with no blocking findings.
+- Pure build/test passed:
+  `ctest --test-dir build-pure -L pure --output-on-failure`.
+  Workspace verification passed: `./scripts/verify-workspace.sh`.
+
 ## Gate checklist snapshot
 
 - Gate Architecture Approved: passed in Phase 0.
@@ -263,6 +286,10 @@ approval. Phase 3 work must proceed one independently testable behavior at a tim
   multi-target RAD records, target-relative `dirs`, complete GAMP traversal enumeration,
   score-window filtering, and exon/intron/splice compatibility are implemented.
   Checked-in generated graph/RAD artifacts remain absent.
+- D044 supersedes the old assignment-policy plan for active GAMP-to-RAD behavior:
+  preserve all compatible retained targets in RAD, accept/default to `all`, and treat
+  `unique-transcript`, `unique-gene`, and `starsolo-default` as to-be-implemented future
+  modes rather than RAD filters.
 - Phase 3 orientation work supersedes the old strand-mode plan under D042: remove
   `--strand`, preserve target-relative RAD `dirs`, and drop/count mixed-orientation
   evidence for one emitted target.
@@ -312,3 +339,7 @@ approval. Phase 3 work must proceed one independently testable behavior at a tim
   with build-dir generated RPVG-derived and vg tiny fixtures. Full local VG/alevin-fry
   tests passed with 95 tests after strict numeric CLI parser coverage was added, and
   pure tests passed. High-cost oracle re-review passed.
+- 2026-06-30: User superseded historical assignment-policy scope for active GAMP-to-RAD
+  behavior: RAD output preserves all compatible retained targets; uniqueness modes are
+  deferred outside active RAD conversion. Local full suite passed with 101 tests after
+  addressing first-pass oracle findings; high-cost oracle re-review passed.

@@ -99,7 +99,7 @@ Begins only after passing Gate Architecture Approved.
 ### P1.1 — Synthetic fixture specification
 
 Design a minimal graph/GTF/GAMP test matrix covering every compatibility, strand,
-score-window, collapse, raw molecule-identity parsing, ordering, and assignment-policy rule. Expected
+score-window, collapse, raw molecule-identity parsing, ordering, and active assignment-surface rule. Expected
 outputs must be expressed as transcript target sets and observable diagnostics before
 fixture generation code is written.
 
@@ -145,7 +145,8 @@ After Gate Vertical Slice Proven, add one independently testable behavior at a t
   forward and reverse orientation in `dirs`, drop/count mixed-orientation evidence for
   the same emitted target, and verify downstream alevin-fry behavior with focused tests;
 - manifest collapse;
-- all assignment policies;
+- all-compatible-target RAD assignment surface, with deferred uniqueness modes returning
+  to-be-implemented errors;
 - name-grouping validation;
 - diagnostics and summary metrics, including `--molecule-identity-failures skip|fail`
   and raw molecule-identity skip counters;

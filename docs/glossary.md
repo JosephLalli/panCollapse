@@ -8,8 +8,9 @@ transcript identities to canonical transcript and gene identities.
 
 **GAMP** — VG's serialized `MultipathAlignment` stream format.
 
-**Gene-unique** — All eligible canonical transcript targets belong to one gene, even if
-there are several graph paths, copy paths, or transcript isoforms.
+**Gene-unique** — Future/non-RAD concept: all eligible canonical transcript targets
+belong to one gene, even if there are several graph paths, copy paths, or transcript
+isoforms. Active GAMP-to-RAD output does not filter on this property.
 
 **Mapper-style RAD** — RAD produced by a mapper before alevin-fry collation and UMI
 resolution.
@@ -32,7 +33,8 @@ with a transcript's exon/intron structure and splice-junction rules. In V1 this 
 intronic evidence and preserves target-relative orientation in RAD rather than filtering
 by panCollapse-side strand mode.
 
-**Transcript-unique** — Exactly one eligible canonical transcript remains.
+**Transcript-unique** — Future/non-RAD concept: exactly one eligible canonical transcript
+remains. Active GAMP-to-RAD output does not filter on this property.
 
 **USA output** — An output/reference convention that can represent unspliced, spliced,
 and ambiguous molecule status. Outside Phase 2 and outside V1 unless unspliced target

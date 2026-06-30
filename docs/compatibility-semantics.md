@@ -43,9 +43,11 @@ alevin-fry expected-orientation handling can make library-orientation decisions.
 - The implementation must not multiply evidence merely because one biological target is
   represented by multiple equivalent graph or haplotype paths.
 
-## Transcript versus gene uniqueness
+## Historical/Future Transcript Versus Gene Uniqueness
 
-Uniqueness is evaluated after target scoring and manifest collapse.
+D044 removes transcript- and gene-uniqueness filtering from active GAMP-to-RAD output.
+The definitions below are retained only as future context if panCollapse later expands
+beyond RAD compatibility-set emission.
 
 ```text
 many graph paths -> many source transcript paths -> canonical transcripts -> genes

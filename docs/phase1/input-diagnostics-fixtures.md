@@ -55,7 +55,7 @@ Unless stated, a compatible target `TX_A` is otherwise available.
 - Do not combine corrected and raw tags into a synthetic pair.
 - Do not silently repair malformed CB/UMI values.
 - Completed read names must not recur later.
-- Manifest is applied before transcript- or gene-level uniqueness.
+- Manifest is applied before RAD target emission.
 - Missing source identity coverage is fatal, not a skipped read.
 - Every hard failure has a stable nonzero exit status and an actionable message.
 - Hard-failure tests assert the stable counter name either in a pre-abort summary or in

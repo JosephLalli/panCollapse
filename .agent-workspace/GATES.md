@@ -28,7 +28,8 @@ Pass only when:
   represented;
 - raw read-name barcode/UMI parsing, skip/strict/fail behavior, and complete manifest
   coverage are represented;
-- policy ordering—score, collapse, uniqueness—is unambiguous;
+- policy ordering is unambiguous. D044 supersedes the historical uniqueness-policy item:
+  active GAMP-to-RAD output uses the all-compatible-target assignment surface;
 - RAD interoperability has an exact expected matrix;
 - failure and diagnostic behavior are testable;
 - the build/test skeleton matches the approved architecture.
