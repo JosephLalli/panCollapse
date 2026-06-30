@@ -62,6 +62,34 @@ int main(int argc, char** argv) {
                         "chrFixture\tSRC_A\tTX_A\tGENE_A\n"
                         "chrFixtureB\tSRC_B\tTX_B\tGENE_B\n");
 
+        write_text_file(work_dir / "collapse_multi_missing.tsv",
+                        "source_path_name\tsource_transcript_id\tcanonical_transcript_id\tcanonical_gene_id\n"
+                        "chrFixture\tSRC_A\tTX_A\tGENE_A\n");
+
+        write_text_file(work_dir / "collapse_contradictory.tsv",
+                        "source_path_name\tsource_transcript_id\tcanonical_transcript_id\tcanonical_gene_id\n"
+                        "chrFixture\tSRC_A\tTX_A\tGENE_A\n"
+                        "chrFixture\tSRC_A\tTX_CONFLICT\tGENE_A\n");
+
+        write_text_file(work_dir / "collapse_gene_conflict.tsv",
+                        "source_path_name\tsource_transcript_id\tcanonical_transcript_id\tcanonical_gene_id\n"
+                        "chrFixture\tSRC_A\tTX_SHARED\tGENE_A\n"
+                        "chrFixtureB\tSRC_B\tTX_SHARED\tGENE_B\n");
+
+        write_text_file(work_dir / "annotation_collapse_shared.gtf",
+                        "chrFixture\tpanCollapse\texon\t301\t350\t.\t+\t.\t"
+                        "gene_id \"GENE_SHARED\"; transcript_id \"SRC_SHARED_A\";\n"
+                        "chrFixtureB\tpanCollapse\texon\t301\t350\t.\t+\t.\t"
+                        "gene_id \"GENE_SHARED\"; transcript_id \"SRC_SHARED_B\";\n"
+                        "chrFixtureRev\tpanCollapse\texon\t301\t350\t.\t+\t.\t"
+                        "gene_id \"GENE_OTHER\"; transcript_id \"SRC_OTHER\";\n");
+
+        write_text_file(work_dir / "collapse_shared.tsv",
+                        "source_path_name\tsource_transcript_id\tcanonical_transcript_id\tcanonical_gene_id\n"
+                        "chrFixture\tSRC_SHARED_A\tTX_SHARED\tGENE_SHARED\n"
+                        "chrFixtureB\tSRC_SHARED_B\tTX_SHARED\tGENE_SHARED\n"
+                        "chrFixtureRev\tSRC_OTHER\tTX_OTHER\tGENE_OTHER\n");
+
         write_text_file(work_dir / "annotation_revpath.gtf",
                         "chrFixtureRev\tpanCollapse\texon\t301\t350\t.\t+\t.\t"
                         "gene_id \"GENE_REV\"; transcript_id \"SRC_REV\";\n");
@@ -212,6 +240,46 @@ int main(int argc, char** argv) {
                         "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"
                         "{\"node_id\":2,\"offset\":70,\"is_reverse\":true},\"edit\":"
                         "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":40}]}\n");
+
+        write_text_file(work_dir / "read_collapse_shared_max.gamp.json",
+                        "{\"name\":\"read021_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"
+                        "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"
+                        "{\"node_id\":1,\"offset\":310,\"is_reverse\":false},\"edit\":"
+                        "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":30}]}\n"
+                        "{\"name\":\"read021_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"
+                        "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"
+                        "{\"node_id\":2,\"offset\":310,\"is_reverse\":false},\"edit\":"
+                        "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":40}]}\n"
+                        "{\"name\":\"read021_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"
+                        "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"
+                        "{\"node_id\":3,\"offset\":310,\"is_reverse\":true},\"edit\":"
+                        "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":38}]}\n"
+                        "{\"name\":\"read023_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"
+                        "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"
+                        "{\"node_id\":1,\"offset\":310,\"is_reverse\":false},\"edit\":"
+                        "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":40}]}\n"
+                        "{\"name\":\"read023_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"
+                        "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"
+                        "{\"node_id\":2,\"offset\":310,\"is_reverse\":false},\"edit\":"
+                        "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":30}]}\n"
+                        "{\"name\":\"read023_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"
+                        "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"
+                        "{\"node_id\":3,\"offset\":310,\"is_reverse\":true},\"edit\":"
+                        "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":38}]}\n");
+
+        write_text_file(work_dir / "read_collapse_shared_no_sum.gamp.json",
+                        "{\"name\":\"read022_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"
+                        "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"
+                        "{\"node_id\":1,\"offset\":310,\"is_reverse\":false},\"edit\":"
+                        "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":20}]}\n"
+                        "{\"name\":\"read022_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"
+                        "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"
+                        "{\"node_id\":2,\"offset\":310,\"is_reverse\":false},\"edit\":"
+                        "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":20}]}\n"
+                        "{\"name\":\"read022_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"
+                        "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"
+                        "{\"node_id\":3,\"offset\":310,\"is_reverse\":true},\"edit\":"
+                        "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":30}]}\n");
 
         write_text_file(work_dir / "read_no_compatible.gamp.json",
                         "{\"name\":\"read008_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"

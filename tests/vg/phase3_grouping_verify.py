@@ -163,6 +163,36 @@ def verify_multi_target(pc_out: Path) -> None:
         fail(f"unexpected multi-target RAD records: refs={refs!r}, records={records!r}")
 
 
+def verify_collapse_shared(pc_out: Path, expected_target: str, expected_groups: int = 1) -> None:
+    expected_summary = {
+        "input_records": str(expected_groups * 3),
+        "input_read_groups": str(expected_groups),
+        "emitted_groups": str(expected_groups),
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "0",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "score_removed_targets": str(expected_groups),
+        "traversal_cap_exceeded_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "TX_OTHER\tGENE_OTHER\nTX_SHARED\tGENE_SHARED\n":
+        fail("unexpected collapse-shared tx2gene.tsv contents")
+    refs, records = read_rad_records(pc_out)
+    expected_records = {
+        "TX_OTHER": [[RAD_FORWARD_MASK]] * expected_groups,
+        "TX_SHARED": [[RAD_FORWARD_MASK | 1]] * expected_groups,
+    }[expected_target]
+    if refs != ["TX_OTHER", "TX_SHARED"] or records != expected_records:
+        fail(f"unexpected collapse-shared RAD records: refs={refs!r}, records={records!r}")
+
+
 def verify_multi_target_quant(alevin_dir: Path) -> None:
     rows = (alevin_dir / "quants_mat_rows.txt").read_text().splitlines()
     cols = (alevin_dir / "quants_mat_cols.txt").read_text().splitlines()
@@ -551,6 +581,8 @@ def main(argv: list[str]) -> int:
     if len(argv) != 3 or argv[1] not in {
         "two-groups",
         "multi-target",
+        "collapse-shared-max",
+        "collapse-shared-no-sum",
         "multi-target-quant",
         "no-compatible",
         "bad-molecule-skip",
@@ -570,14 +602,19 @@ def main(argv: list[str]) -> int:
     }:
         fail(
             "usage: phase3_grouping_verify.py "
-            "two-groups|multi-target|multi-target-quant|no-compatible|bad-molecule-skip|reverse-path|"
-            "n-base|connection-score|connection-score-window|short-gap|long-gap|long-gap-min31|"
-            "connection-insert|overhang|parent-only|rpvg-default|rpvg-window|tiny-splice-intron PATH"
+            "two-groups|multi-target|collapse-shared-max|collapse-shared-no-sum|multi-target-quant|"
+            "no-compatible|bad-molecule-skip|reverse-path|n-base|connection-score|connection-score-window|"
+            "short-gap|long-gap|long-gap-min31|connection-insert|overhang|parent-only|rpvg-default|"
+            "rpvg-window|tiny-splice-intron PATH"
         )
     if argv[1] == "two-groups":
         verify_two_groups(Path(argv[2]))
     elif argv[1] == "multi-target":
         verify_multi_target(Path(argv[2]))
+    elif argv[1] == "collapse-shared-max":
+        verify_collapse_shared(Path(argv[2]), "TX_SHARED", expected_groups=2)
+    elif argv[1] == "collapse-shared-no-sum":
+        verify_collapse_shared(Path(argv[2]), "TX_OTHER")
     elif argv[1] == "multi-target-quant":
         verify_multi_target_quant(Path(argv[2]))
     elif argv[1] == "no-compatible":

@@ -2,16 +2,18 @@
 
 ## Current phase
 
-**Phase 3 all-compatible-target RAD assignment surface is locally verified and
-oracle-reviewed, awaiting commit.**
+**Phase 3 manifest/collapse validation evidence is locally verified and oracle-reviewed,
+awaiting commit.**
 
 Production source now exists for the approved Phase 2 vertical slice and the selected
 Phase 3 orientation, molecule-identity, traversal/scoring, and intron/splice
 compatibility behaviors. The user-approved all-compatible-target RAD assignment surface
 is implemented locally: `all` is accepted/default, and deferred uniqueness modes fail as
-to-be-implemented. No public panCollapse headers or checked-in generated fixtures, GAMP,
-XG, GCSA, distance-index, GBZ, or RAD outputs have been created; generated graph/RAD
-artifacts remain confined to ignored build directories.
+to-be-implemented. The manifest/collapse validation slice now has local test coverage for
+max-score source collapse, no score summing across collapsed sources, missing manifest
+rows, contradictory rows, and canonical-gene conflicts. No public panCollapse headers or
+checked-in generated fixtures, GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have
+been created; generated graph/RAD artifacts remain confined to ignored build directories.
 
 ## Settled product decisions
 
@@ -56,7 +58,7 @@ artifacts remain confined to ignored build directories.
 
 ## Next action
 
-Commit the oracle-reviewed all-only RAD assignment surface after final workspace
+Commit the oracle-reviewed manifest/collapse validation slice after final workspace
 verification.
 
 ## Required stop
@@ -270,6 +272,24 @@ behavior at a time.
   `ctest --test-dir build-pure -L pure --output-on-failure`.
   Workspace verification passed: `./scripts/verify-workspace.sh`.
 
+## Phase 3 manifest/collapse verification
+
+- The implementation already enforced the manifest source key and mapped compatible source
+  identities to canonical RAD targets. The new validation slice adds direct fixtures for
+  Section 5 manifest/collapse requirements.
+- The local manifest-focused suite passed:
+  `ctest --test-dir build -L manifest --output-on-failure`.
+  It covers two source transcript identities collapsing to one canonical target using the
+  maximum source score, graph/source multiplicity not inflating a collapsed target score by
+  summing, missing source identity hard failure, contradictory manifest row hard failure,
+  and canonical transcript mapped to multiple genes hard failure.
+- The full local VG/alevin-fry suite passed:
+  `ctest --test-dir build --output-on-failure`.
+  The suite currently contains 110 tests.
+- High-cost oracle review initially found that the max-score fixture could pass a
+  last-compatible-source-wins bug. The fixture now covers both low-to-high and high-to-low
+  collapsed-source score order, and oracle re-review passed with no blocking findings.
+
 ## Gate checklist snapshot
 
 - Gate Architecture Approved: passed in Phase 0.
@@ -286,6 +306,9 @@ behavior at a time.
   multi-target RAD records, target-relative `dirs`, complete GAMP traversal enumeration,
   score-window filtering, and exon/intron/splice compatibility are implemented.
   Checked-in generated graph/RAD artifacts remain absent.
+- Manifest/collapse validation now directly verifies max-score collapse, no score summing
+  across collapsed source identities, missing source identity failure, contradictory row
+  failure, and canonical-gene conflict failure.
 - D044 supersedes the old assignment-policy plan for active GAMP-to-RAD behavior:
   preserve all compatible retained targets in RAD, accept/default to `all`, and treat
   `unique-transcript`, `unique-gene`, and `starsolo-default` as to-be-implemented future
@@ -343,3 +366,6 @@ behavior at a time.
   behavior: RAD output preserves all compatible retained targets; uniqueness modes are
   deferred outside active RAD conversion. Local full suite passed with 101 tests after
   addressing first-pass oracle findings; high-cost oracle re-review passed.
+- 2026-06-30: Added direct Phase 3 manifest/collapse validation fixtures. Local manifest
+  label passed and full local VG/alevin-fry suite passed with 110 tests after addressing
+  first-pass oracle findings; high-cost oracle re-review passed.

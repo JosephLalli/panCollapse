@@ -128,6 +128,24 @@ set_tests_properties(phase3_multi_target_gamp_builder PROPERTIES
   FIXTURES_SETUP phase2_vertical_slice_data)
 
 add_test(
+  NAME phase3_collapse_shared_max_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_collapse_shared_max.gamp.json > reads_collapse_shared_max.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_collapse_shared_max_gamp_builder PROPERTIES
+  LABELS "vg;phase3;manifest"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_collapse_shared_no_sum_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_collapse_shared_no_sum.gamp.json > reads_collapse_shared_no_sum.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_collapse_shared_no_sum_gamp_builder PROPERTIES
+  LABELS "vg;phase3;manifest"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
   NAME phase3_no_compatible_gamp_builder
   COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_no_compatible.gamp.json > reads_no_compatible.gamp"
   WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
@@ -438,6 +456,93 @@ add_test(
 set_tests_properties(phase3_multi_target_verify PROPERTIES
   LABELS "vg;phase3;orientation"
   FIXTURES_REQUIRED phase3_multi_target_rad)
+
+add_test(
+  NAME phase3_collapse_shared_max_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_collapse_shared_max.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_collapse_shared.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_shared.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_collapse_shared_max"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_collapse_shared_max_convert PROPERTIES
+  LABELS "vg;phase3;manifest"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_collapse_shared_max_rad)
+
+add_test(
+  NAME phase3_collapse_shared_max_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    collapse-shared-max
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_collapse_shared_max")
+set_tests_properties(phase3_collapse_shared_max_verify PROPERTIES
+  LABELS "vg;phase3;manifest"
+  FIXTURES_REQUIRED phase3_collapse_shared_max_rad)
+
+add_test(
+  NAME phase3_collapse_shared_no_sum_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_collapse_shared_no_sum.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_collapse_shared.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_shared.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_collapse_shared_no_sum"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_collapse_shared_no_sum_convert PROPERTIES
+  LABELS "vg;phase3;manifest"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_collapse_shared_no_sum_rad)
+
+add_test(
+  NAME phase3_collapse_shared_no_sum_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    collapse-shared-no-sum
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_collapse_shared_no_sum")
+set_tests_properties(phase3_collapse_shared_no_sum_verify PROPERTIES
+  LABELS "vg;phase3;manifest"
+  FIXTURES_REQUIRED phase3_collapse_shared_no_sum_rad)
+
+add_test(
+  NAME phase3_manifest_missing_source_failure
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_manifest_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    reads_multi_target.gamp
+    annotation_multi.gtf
+    collapse_multi_missing.tsv
+    manifest_missing_source_identities)
+set_tests_properties(phase3_manifest_missing_source_failure PROPERTIES
+  LABELS "vg;phase3;manifest"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_manifest_contradictory_rows_failure
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_manifest_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    reads.gamp
+    annotation.gtf
+    collapse_contradictory.tsv
+    manifest_contradictory_rows)
+set_tests_properties(phase3_manifest_contradictory_rows_failure PROPERTIES
+  LABELS "vg;phase3;manifest"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_manifest_gene_conflict_failure
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_manifest_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    reads_multi_target.gamp
+    annotation_multi.gtf
+    collapse_gene_conflict.tsv
+    manifest_gene_conflicts)
+set_tests_properties(phase3_manifest_gene_conflict_failure PROPERTIES
+  LABELS "vg;phase3;manifest"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
 
 add_test(
   NAME phase3_no_compatible_convert
