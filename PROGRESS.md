@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 3 orientation component is in progress and locally verified.**
+**Phase 3 orientation component is locally verified and committed.**
 
 Production source now exists for the approved Phase 2 vertical slice and the selected
 Phase 3 orientation/molecule-identity behaviors. No public panCollapse headers or
@@ -51,8 +51,9 @@ directories.
 
 ## Next action
 
-Complete oracle review of the current Phase 3 orientation/molecule-identity diff, then
-commit if the review and verification remain clean.
+Ask for explicit human approval of the next independently testable Phase 3 behavior
+before broadening production code beyond the committed orientation and raw
+molecule-identity slice.
 
 ## Required stop
 
@@ -162,6 +163,8 @@ approval. Phase 3 work must proceed one independently testable behavior at a tim
   `ctest --test-dir build --output-on-failure`.
   This includes the VG link smoke and the build-dir-only GAMP/XG/GTF projection smoke.
 - Workspace verification passed: `./scripts/verify-workspace.sh`.
+- Oracle re-review passed with no findings, and the verified slice was committed as
+  `7396cca Implement Phase 3 orientation slice`.
 
 ## Phase 2 verification
 
@@ -268,3 +271,5 @@ approval. Phase 3 work must proceed one independently testable behavior at a tim
   `--molecule-identity-failures skip|fail`, default `skip`, with stable
   `raw_molecule_*` counters. The implementation now skips/counts missing, malformed,
   and unsupported raw CB/UMI groups by default and fails strictly under `fail`.
+- 2026-06-30: Phase 3 orientation and raw molecule-identity slice was oracle-reviewed,
+  verified locally, and committed as `7396cca`.
