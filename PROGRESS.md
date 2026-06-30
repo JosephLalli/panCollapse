@@ -2,8 +2,8 @@
 
 ## Current phase
 
-**Phase 3 manifest/collapse validation evidence is locally verified and oracle-reviewed,
-awaiting commit.**
+**Phase 3 manifest/collapse validation evidence is locally verified, oracle-reviewed,
+and committed.**
 
 Production source now exists for the approved Phase 2 vertical slice and the selected
 Phase 3 orientation, molecule-identity, traversal/scoring, and intron/splice
@@ -58,14 +58,14 @@ been created; generated graph/RAD artifacts remain confined to ignored build dir
 
 ## Next action
 
-Commit the oracle-reviewed manifest/collapse validation slice after final workspace
-verification.
+Obtain explicit human approval for the next Phase 3 implementation design decision before
+broadening production code.
 
 ## Required stop
 
-Do not broaden beyond the currently selected all-only RAD assignment-surface behavior
-without explicit human approval. Phase 3 work must proceed one independently testable
-behavior at a time.
+Do not broaden production code into threading, pilot instrumentation, or any remaining
+Phase 3 behavior without explicit human approval. Phase 3 work must proceed one
+independently testable behavior at a time.
 
 ## Phase 0 artifacts
 
