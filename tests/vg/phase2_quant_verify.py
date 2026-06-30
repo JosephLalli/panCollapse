@@ -83,7 +83,7 @@ def decode_packed_sequence(value: int, length: int) -> str:
     return "".join(bases[(value >> shift) & 0x3] for shift in range(2 * (length - 1), -1, -2))
 
 
-def verify_rad(pc_out: Path) -> None:
+def verify_rad(pc_out: Path, expected_orientation: str) -> None:
     tx2gene = pc_out / "tx2gene.tsv"
     if tx2gene.read_text() != f"{EXPECTED_TARGET}\t{EXPECTED_GENE}\n":
         fail(f"unexpected tx2gene.tsv contents: {tx2gene.read_text()!r}")
@@ -123,15 +123,21 @@ def verify_rad(pc_out: Path) -> None:
         fail(f"unexpected RAD record counts: nrec={nrec}, naln={naln}")
     if decode_packed_sequence(bc, 16) != EXPECTED_BARCODE or decode_packed_sequence(umi, 12) != EXPECTED_UMI:
         fail("RAD barcode or UMI does not match expected raw values")
-    if (compressed_ref & RAD_FORWARD_MASK) == 0 or (compressed_ref & ~RAD_FORWARD_MASK) != 0:
+    is_forward = (compressed_ref & RAD_FORWARD_MASK) != 0
+    expected_forward = expected_orientation == "forward"
+    if is_forward != expected_forward or (compressed_ref & ~RAD_FORWARD_MASK) != 0:
         fail(f"unexpected RAD compatible target/orientation: {compressed_ref:#x}")
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        fail("usage: phase2_quant_verify.py PC_OUT AF_QUANT_ALEVIN_DIR")
+    if len(argv) not in {3, 4}:
+        fail("usage: phase2_quant_verify.py PC_OUT AF_QUANT_ALEVIN_DIR [forward|reverse]")
 
-    verify_rad(Path(argv[1]))
+    expected_orientation = argv[3] if len(argv) == 4 else "forward"
+    if expected_orientation not in {"forward", "reverse"}:
+        fail(f"unexpected orientation argument: {expected_orientation}")
+
+    verify_rad(Path(argv[1]), expected_orientation)
     alevin_dir = Path(argv[2])
     rows = read_lines(alevin_dir / "quants_mat_rows.txt")
     cols = read_lines(alevin_dir / "quants_mat_cols.txt")

@@ -25,7 +25,7 @@ V1 supports:
 - score-based eligibility with tied-best behavior by default;
 - preservation of multimapping transcript equivalence classes;
 - mapper-style, uncollated RAD output for alevin-fry;
-- selectable strand interpretation: sense, antisense, or both;
+- preservation of target-relative read orientation in RAD `dirs`;
 - selectable assignment policies: all, unique transcript, unique gene, and a mode intended
   to mirror STARsolo's default unique-gene behavior.
 
@@ -81,7 +81,8 @@ the GAMP name field and writes them to RAD:
 - alevin-fry performs permit-list construction and cell-barcode correction, followed by
   UMI deduplication/resolution during quantification.
 - missing, malformed, or unsupported raw barcode/UMI fields are reported in diagnostics;
-- strict failure behavior for malformed molecule identity remains a CLI-controlled mode.
+- `--molecule-identity-failures skip|fail` controls whether those conditions are skipped
+  and counted or treated as hard failures; the default is `skip`.
 
 ## 6. Read grouping
 
@@ -116,15 +117,14 @@ aligned sequence extends beyond its first-to-last-exon span. Dedicated fixtures 
 prevent the implementation from silently substituting either strict containment or mere
 parent-gene-locus overlap.
 
-Strand handling is controlled by the CLI and is evaluated relative to the sequenced GAMP
-query after projection to source path coordinates. V1 does not infer library chemistry;
-users choose the mode that represents their experiment:
+panCollapse does not filter transcript compatibility by library strand and does not infer
+library chemistry. For every emitted target, it preserves the read alignment orientation
+relative to that target/transcript in RAD `dirs`. Downstream alevin-fry expected-
+orientation settings handle library-orientation filtering.
 
-- `sense`: retain compatibility when query orientation matches transcript orientation;
-- `antisense`: retain the opposite orientation;
-- `both`: do not filter by transcript strand.
-
-The exact mapping from GAMP path orientation to these modes must be documented and tested.
+If one read group contributes mixed target-relative orientations for the same emitted
+target in the current implementation scope, panCollapse drops that read group and reports
+the condition instead of assigning a synthetic direction.
 
 ## 8. Path and copy collapse
 
@@ -217,8 +217,11 @@ least:
 - input records and read groups;
 - read groups skipped for missing, malformed, or unsupported raw CB/UMI values parsed
   from the GAMP name field;
+- `raw_molecule_missing_groups`, `raw_molecule_malformed_groups`,
+  `raw_molecule_unsupported_groups`, and `raw_molecule_skipped_groups`;
 - grouping violations;
 - groups with no compatible transcript;
+- groups dropped because one emitted target has mixed target-relative orientations;
 - compatible targets removed by score-window filtering (`score_removed_targets`);
 - groups removed by each uniqueness policy;
 - groups emitted and number of targets per emitted group;
@@ -245,7 +248,7 @@ The V1 product is complete only when:
 - a tiny generated RAD file is accepted by the current supported alevin-fry workflow;
 - the output gene matrix matches the exact expected result;
 - name-grouping, raw molecule-identity parsing, configured-length mismatch, collapse,
-  score, strand, and assignment-policy failures are tested;
+  score, target-relative orientation, and assignment-policy failures are tested;
 - performance is characterized on a bounded pilot;
 - deterministic-output tests prove byte-identical artifacts across supported thread
   counts;

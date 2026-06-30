@@ -579,6 +579,52 @@ the approved strand settings.
 intentionally narrower: it proves the single happy path without exposing unimplemented
 strand settings as if they were correct.
 
+### D042 — Preserve target-relative orientation instead of panCollapse strand filtering
+
+**Decision source:** User.
+
+**Decision:** panCollapse does not filter read/target compatibility by library strand and
+does not expose a `--strand sense|antisense|both` CLI. The final V1 converter writes the
+observed raw barcode and UMI to RAD, emits compatible target IDs, and preserves the real
+orientation of each read alignment relative to each emitted target/transcript in RAD
+`dirs`.
+
+**Decision:** Downstream `alevin-fry` expected-orientation handling owns library
+orientation filtering. panCollapse must not encode all retained targets as synthetic
+forward hits merely because they passed a panCollapse-side strand policy.
+
+**Decision:** If one read group contributes mixed target-relative orientations for the
+same emitted target in the current implementation scope, panCollapse drops that read
+group and reports/counts the condition rather than inventing a consensus direction.
+
+**Decision:** D042 supersedes D008, the strand-filtering portions of D027 and D034, the
+synthetic-forward retained-hit policy in D029 and D040, and the Phase 3 strand-mode
+implementation direction in D041. Older references to `sense`, `antisense`, and `both`
+as panCollapse compatibility filters are historical unless a later human-approved
+decision restores them.
+
+**Rationale:** The user clarified that RAD `dirs` should carry true target-relative
+alignment orientation. This lets alevin-fry apply its own expected-orientation behavior
+from the preserved evidence instead of relying on panCollapse to pre-filter by strand.
+
+### D043 — Raw molecule identity failure mode and counters
+
+**Decision source:** User.
+
+**Decision:** The active V1 CLI exposes `--molecule-identity-failures skip|fail` for
+raw CB/UMI parse and encoding failures from the GAMP name field. The default is `skip`.
+`fail` converts the same conditions into a hard failure with the stable counter name in
+the diagnostic message and a nonzero count.
+
+**Decision:** The stable summary counters for these conditions are
+`raw_molecule_missing_groups`, `raw_molecule_malformed_groups`,
+`raw_molecule_unsupported_groups`, and `raw_molecule_skipped_groups`.
+
+**Rationale:** The user approved a raw-name-specific surface instead of reusing the
+historical tag-failure terminology. This keeps active V1 diagnostics aligned with D038:
+panCollapse reads observed raw CB/UMI from the GAMP name field, while tag-based
+corrected/raw selection remains historical unless a later decision restores it.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

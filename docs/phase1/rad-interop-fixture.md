@@ -8,6 +8,10 @@ Supersession note: D039 narrows Phase 2 RAD interoperability to one single-threa
 1-cell x 1-gene vertical slice. Thread-count byte comparison remains a Phase 3/final V1
 requirement.
 
+Supersession note: D042 removes synthetic all-forward orientation as an active V1 policy.
+This tiny fixture may still use forward target-relative mappings, but future orientation
+fixtures must also cover reverse `dirs`.
+
 ## RAD Input Directory
 
 Directory: `rad-in/`
@@ -43,12 +47,14 @@ Classic mapper-style uncollated `RnaShort`:
 - read tags `b:U32` and `u:U32`
 - alignment tag `compressed_ori_refid:U32`
 - one chunk with `nrec=3`
-- all retained hits encoded as synthetic forward hits with `ref_id | 0x80000000`
+- all retained hits in this fixture encoded as target-relative forward hits with
+  `ref_id | 0x80000000`
 
 Conceptually, every record carries `bc`, `umi`, `refs`, and `dirs`. The `refs` values are
 zero-based IDs into the RAD header target dictionary, and `dirs` is the parallel
 orientation vector decoded from the high bit of each `compressed_ori_refid`. This fixture
-uses all-forward `dirs` under the current V1 synthetic-orientation policy.
+uses forward `dirs`; it is not a synthetic substitute for panCollapse-side strand
+filtering.
 
 | record | CB | packed CB | UMI | packed UMI | target refs | compressed refs |
 |---|---|---:|---|---:|---|---|

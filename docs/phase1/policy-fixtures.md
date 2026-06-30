@@ -6,7 +6,7 @@ scores, molecule identity, and manifest rows directly.
 
 Supersession note: tag-era diagnostic examples are historical under D038. Current V1
 implementation should express molecule-identity skips in terms of raw CB/UMI parsed from
-the GAMP name field.
+the GAMP name field and the D043 `raw_molecule_*` counters.
 
 ## Shared Canonical Map
 

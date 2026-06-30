@@ -86,7 +86,7 @@ Barcode and UMI packing:
   17..32 -> U64, and >32 unsupported in V1.
 - 16 bp cell barcodes and 10 or 12 bp UMIs fit in U32.
 - Raw CB/UMI length mismatch against the configured lengths is a molecule-identity
-  failure, skipped by default and fatal in strict mode.
+  failure, skipped by default and fatal under `--molecule-identity-failures fail`.
 
 Chunk:
 
@@ -108,19 +108,17 @@ Implement a native minimal C++ writer for this fixed `RnaShort` schema. Use
 libradicl and alevin-fry as validation oracles instead of importing a mapper or
 general writer stack into panCollapse.
 
-For V1, encode all retained transcript hits as forward and recommend:
+Under D042, V1 encodes retained transcript hits with their preserved target-relative
+orientation: forward hits set the high bit and reverse hits leave it unset. Downstream
+commands should choose the alevin-fry expected-orientation setting that matches the
+experiment. For a forward-only fixture this remains:
 
 ```bash
 alevin-fry generate-permit-list --expected-ori fw ...
 ```
 
-If original alignment orientation is preserved in a later version, use
-`--expected-ori both` or `--expected-ori either` as appropriate.
-The all-forward orientation is synthetic: it means the hit survived panCollapse's own
-strand policy, not that the original mapper orientation or an arbitrary graph-node
-orientation was forward. If a later human-approved decision preserves target-relative
-alignment orientation in `dirs`, the downstream expected-orientation mode must be
-revisited.
+Do not use synthetic all-forward orientation to indicate that a panCollapse-side strand
+policy accepted the hit; panCollapse does not apply that policy in the active V1 design.
 
 ## Primary source citations
 
@@ -162,7 +160,8 @@ revisited.
    - one or two transcripts in the header;
    - one valid 16 bp barcode and 10 or 12 bp UMI;
    - one chunk;
-   - sorted, deduplicated forward transcript hits.
+   - sorted, deduplicated transcript hits with explicit forward and reverse orientation
+     cases.
 2. Decode with `alevin-fry view` or libradicl and assert header tags, file
    values, packed barcode/UMI values, chunk counts, and target IDs.
 3. Run the installed alevin-fry v0.15.0 pipeline:

@@ -9,6 +9,14 @@ snapshot for V1 implementation. panCollapse reads observed raw CB/UMI from the G
 field; corrected/raw GAMP annotation tag selection and tag-name overrides are historical
 Phase 1 text unless a later human-approved decision restores them.
 
+Supersession note: D042 removes panCollapse-side `--strand` filtering from the active V1
+interface. panCollapse preserves target-relative orientation in RAD `dirs`; downstream
+alevin-fry expected-orientation settings handle library-orientation filtering.
+
+Supersession note: D043 replaces historical tag-failure diagnostics for active V1 raw
+molecule identity. Use `--molecule-identity-failures skip|fail` and the
+`raw_molecule_*` counters for GAMP-name CB/UMI parsing.
+
 ## Command Snapshot
 
 ```text
@@ -18,14 +26,11 @@ panCollapse convert \
   --gtf annotation.gtf \
   --collapse-manifest collapse.tsv \
   --out-dir out \
-  --strand sense|antisense|both \
   [--assignment all|unique-transcript|unique-gene|starsolo-default] \
   [--score-window N] \
   [--min-splice-jump N] \
   [--max-traversals-per-read N] \
-  [--tag-failures skip|fail] \
-  [--tag-source auto|annotation|tags] \
-  [--barcode-tag NAME --umi-tag NAME] \
+  [--molecule-identity-failures skip|fail] \
   [--threads N]
 ```
 
@@ -38,7 +43,6 @@ panCollapse convert \
 - `--collapse-manifest`: headered manifest keyed by
   `(source_path_name, source_transcript_id)`.
 - `--out-dir`: output directory for `map.rad`, `tx2gene.tsv`, and run diagnostics.
-- `--strand`: required; no default is allowed.
 
 `.gcsa`, `.gcsa.lcp`, `.dist`, `.snarls`, minimizer indexes, GBZ, and GBWT are not V1
 converter inputs after GAMP exists.
@@ -51,13 +55,11 @@ converter inputs after GAMP exists.
 | `--score-window` | `0` | integer `>= 0` |
 | `--min-splice-jump` | `20` | integer `>= 1` |
 | `--max-traversals-per-read` | `100000` | integer `>= 1` |
-| `--tag-failures` | `skip` | `skip` or `fail` |
-| `--tag-source` | `auto` | `auto`, `annotation`, or `tags` |
+| `--molecule-identity-failures` | `skip` | `skip` or `fail` |
 | `--threads` | implementation-defined default | integer `>= 1`; output must remain byte-identical across supported values |
 
-If either `--barcode-tag` or `--umi-tag` is supplied, both must be supplied. Explicit tag
-names are interpreted within the selected `--tag-source`; with `--tag-source auto`, both
-direct annotations and SAM-style `tags` are searched for those names.
+Historical Phase 1 tag-selection options are superseded by D038 and D043; they are not
+part of the active V1 CLI unless a later human-approved decision restores them.
 
 ## Score Universe
 
@@ -88,14 +90,13 @@ counters, but these names must remain unambiguous.
 | `input_records` | GAMP records read | success or failure |
 | `input_read_groups` | adjacent read-name groups started | success or failure |
 | `emitted_groups` | read groups emitted to RAD | success |
-| `tag_skipped_groups` | read groups skipped by default tag policy | success |
-| `tag_non_coherent_groups` | corrected/raw/source tag state is not coherent | success unless strict |
-| `tag_missing_groups` | no complete selected barcode/UMI pair | success unless strict |
-| `tag_malformed_groups` | selected tag value cannot be encoded or has invalid type | success unless strict |
-| `tag_mixed_length_groups` | selected CB or UMI length differs after global lengths are set | success unless strict |
-| `tag_conflict_hard_failures` | records in one read group disagree on selected CB or UMI | hard failure |
+| `raw_molecule_skipped_groups` | read groups skipped by active V1 raw-name molecule-identity policy | success |
+| `raw_molecule_missing_groups` | no complete raw CB/UMI pair can be parsed from the GAMP name | success unless strict |
+| `raw_molecule_malformed_groups` | raw CB/UMI schema or configured length check fails | success unless strict |
+| `raw_molecule_unsupported_groups` | raw CB/UMI contains an unsupported base for RAD encoding | success unless strict |
 | `grouping_recurrence_failures` | a completed read name appears again later | hard failure |
 | `no_compatible_transcript_groups` | groups with no compatible transcript after projection | success |
+| `mixed_orientation_dropped_groups` | groups dropped because an emitted target has mixed target-relative orientations | success |
 | `score_removed_targets` | compatible targets removed by score-window filtering | success |
 | `policy_removed_unique_transcript_groups` | groups removed by `unique-transcript` | success |
 | `policy_removed_unique_gene_groups` | groups removed by `unique-gene` or `starsolo-default` | success |

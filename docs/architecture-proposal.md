@@ -105,7 +105,6 @@ panCollapse convert \
   --gtf annotation.gtf \
   --collapse-manifest collapse.tsv \
   --out-dir out \
-  --strand sense|antisense|both \
   [--assignment all|unique-transcript|unique-gene|starsolo-default] \
   [--score-window N] \
   [--min-splice-jump N] \
@@ -115,8 +114,10 @@ panCollapse convert \
   [--threads N]
 ```
 
-`--strand` is required so V1 does not hide library-orientation judgment behind a default.
-Defaults: `--assignment all`, `--score-window 0`, `--min-splice-jump 20`,
+panCollapse does not expose a strand-filtering option; library-orientation filtering is
+handled downstream by alevin-fry expected-orientation settings using the RAD `dirs`
+values panCollapse preserves. Defaults: `--assignment all`, `--score-window 0`,
+`--min-splice-jump 20`,
 `--max-traversals-per-read 100000`, `--raw-cb-length 16`, `--raw-umi-length 12`, and
 deterministic single-writer output. Tag-source and tag-name overrides are not part of the
 active V1 barcode/UMI source contract.
@@ -173,8 +174,8 @@ evidence are preserved.
 The annotation model is in memory only:
 
 - `TranscriptModel`: source path name, source transcript ID, canonical transcript/gene
-  targets from the manifest, strand, merged exons, implied introns, model intervals, and
-  annotated splice junction set;
+  targets from the manifest, transcript strand, merged exons, implied introns, model
+  intervals, and annotated splice junction set;
 - `PathAnnotation`: per-source-path sorted interval structures plus a junction hash.
 
 This is not a persistent custom index. For each traversal, reference-consuming edit spans
@@ -184,20 +185,18 @@ search. Multiple path projections are preserved.
 
 Compatibility is evaluated before collapse at source transcript identity:
 
-- selected strand mode must pass;
 - at least one projected reference-consuming interval must overlap the transcript's exon
   or implied-intron model;
 - every observed splice jump must be present in that transcript's annotated junction set;
 - outside-first/last-exon overhang is allowed once the positive model anchor exists;
 - parent-gene-only overlap is never sufficient.
 
-Strand modes are relative to the sequenced GAMP query after projection to source path
-coordinates; panCollapse does not infer library chemistry. For each projected aligned
-block, query the graph with the mapping `Position.node_id` and `Position.is_reverse`. The
-block is forward on the source path when the path step orientation matches the queried
-handle orientation; otherwise it is reverse. A `+` transcript is forward on its source
-path and a `-` transcript is reverse. `sense` keeps query-forward equal to
-transcript-forward, `antisense` keeps the opposite, and `both` disables this filter.
+For each projected aligned block, panCollapse records the read alignment orientation
+relative to the source path/transcript target. It does not use that orientation to remove
+compatibility. The preserved direction becomes the RAD `dirs` value for the emitted
+target, allowing downstream alevin-fry expected-orientation filtering to make
+library-geometry decisions. If one read group supplies mixed directions for the same
+emitted target in the current implementation scope, the group is dropped and counted.
 
 Observed splice jumps are evaluated before collapse on one source transcript model.
 Adjacent projected aligned blocks on the same source path create a candidate skipped
@@ -276,21 +275,20 @@ Barcode and UMI bases are packed as A=00, C=01, G=10, T=11 with the last base in
 significant bits; `N` is encoded as A=00 for parity with alevin-fry conversion. Widths are
 selected from length 1..4 -> U8, 5..8 -> U16, 9..16 -> U32, and 17..32 -> U64. Lengths
 greater than 32 are unsupported in V1. Raw CB/UMI length mismatch against the configured
-lengths is a skippable raw-identity failure by default and fatal in strict mode. Chunks
-are emitted in deterministic order; `num_chunks` is exact and backpatched.
+lengths is a skippable raw-identity failure by default and fatal under
+`--molecule-identity-failures fail`. Chunks are emitted in deterministic order;
+`num_chunks` is exact and backpatched.
 
 For every retained target, panCollapse must emit both a `ref_id` and a direction bit.
 libradicl decodes the high bit into `dirs[i]` and the lower 31 bits into `refs[i]`;
 alevin-fry uses `dirs` for expected-orientation filtering during permit-list generation
 and collation. Do not derive `dirs` from arbitrary graph-node orientation.
 
-For V1, all retained hits are encoded with the forward orientation bit set. The downstream
-workflow should use `alevin-fry generate-permit-list --expected-ori fw` because
-panCollapse already applies strand policy. This RAD orientation is synthetic target-level
-metadata and means "retained by panCollapse's strand policy"; it is not a preservation of
-original mapper strand. If a later human-approved decision preserves target-relative
-alignment orientation in `dirs`, the downstream expected-orientation mode must be
-revisited. Target IDs are sorted and deduplicated per read before writing.
+For V1, retained hits are encoded with the true target-relative orientation: forward as
+`ref_id | 0x80000000` and reverse as `ref_id`. Downstream workflows should choose the
+appropriate alevin-fry expected-orientation setting for the experiment. Target IDs are
+sorted and deduplicated per read before writing, without losing their paired direction
+values.
 
 ## Determinism and threading
 
@@ -339,11 +337,11 @@ boundary and a build-dir-only GAMP/XG/GTF projection smoke before fixture broade
 The Phase 1 skeleton has now added those smokes. Behavioral fixtures must cover traversal
 cap overflow, exonic, intronic, exon/intron crossing, isoform exonic versus intronic,
 annotated versus absent splice junction, outside overhang with an anchor,
-parent-gene-only negative, strand modes, multiple source transcript identities collapsed
-without score inflation, missing manifest hard failure, GAMP group recurrence failure,
-raw read-name CB/UMI parsing and malformed-input handling, mixed raw CB/UMI lengths,
-and source transcript identity validation. Older tag-centric Phase 1 barcode fixtures are
-superseded by the raw read-name barcode source decision for V1.
+parent-gene-only negative, target-relative orientation cases, multiple source transcript
+identities collapsed without score inflation, missing manifest hard failure, GAMP group
+recurrence failure, raw read-name CB/UMI parsing and malformed-input handling, mixed raw
+CB/UMI lengths, and source transcript identity validation. Older tag-centric Phase 1
+barcode fixtures are superseded by the raw read-name barcode source decision for V1.
 
 RAD validation must include a tiny end-to-end `alevin-fry generate-permit-list`,
 `collate`, and `quant` run using `out/map.rad` and `out/tx2gene.tsv`, with an exact
@@ -358,7 +356,7 @@ across supported thread counts are deferred to Phase 3 and final V1 acceptance.
 - Source path names and source transcript IDs are the join keys across `.xg`, GTF, and
   manifest; fixture coverage must catch subtle naming mismatches. Availability of
   `.gcsa`/`.dist` from the upstream mapper does not help this coordinate join.
-- The all-forward RAD orientation policy is synthetic and relies on panCollapse strand
-  filtering plus the downstream `--expected-ori fw` workflow.
+- Target-relative RAD direction must be derived from path projection semantics, not from
+  arbitrary graph-node orientation or synthetic all-forward encoding.
 - Projection multiplicity may dominate runtime on dense graphs; the pilot thresholds
   above define when to reopen the no-custom-index decision.

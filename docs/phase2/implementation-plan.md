@@ -7,6 +7,12 @@ Phase 2 begins only after **Gate Behavior Specified** has passed. It implements 
 happy path, proves RAD interoperability with alevin-fry, and stops before broadening into
 the full V1 fixture matrix.
 
+Supersession note: D042 removes panCollapse-side `--strand` filtering and synthetic-
+forward RAD orientation from the active V1 design. Phase 2's historical `--strand sense`
+surface and to-be-implemented errors for `antisense`/`both` were valid for that vertical
+slice only; Phase 3 orientation work removes the CLI and preserves target-relative
+orientation in RAD `dirs`.
+
 ## Approved Decisions
 
 Each decision below is recorded with its source. Do not reinterpret these as orchestrator
@@ -23,7 +29,7 @@ choices.
 | D7 | User | USA output is not a Phase 2 feature. Phase 2 uses a two-column transcript-to-gene map and asserts a 1-cell x 1-gene matrix with `GENE_A=1`. USA output is developed only when unspliced target generation enters scope. |
 | D8 | User | Phase 2 uses `--raw-cb-length 16` and `--raw-umi-length 12`. The fixture read name is `read000_AAACCCAAGTTTGGGA_AAAAAAAAAAAA`, with raw CB `AAACCCAAGTTTGGGA` and raw UMI `AAAAAAAAAAAA`. |
 | D9 | User | Update the active product, input/output, architecture, validation, progress, decisions, and glossary docs to state raw read-name CB/UMI extraction, and mark older tag-centric Phase 1 barcode assumptions as superseded for V1. |
-| D10 | User | Phase 2 accepts only `--strand sense`. `antisense` and `both` strand modes return a to-be-implemented error and are deferred to Phase 3, where the best implementation strategy must be researched before development. |
+| D10 | User | Historical Phase 2 scope: Phase 2 accepted only `--strand sense`; `antisense` and `both` returned a to-be-implemented error. D042 supersedes this for active V1 work by removing panCollapse-side `--strand` filtering. |
 
 ## PanSC Read-Name Evidence
 
@@ -70,7 +76,8 @@ Phase 2 does not implement:
 - broad missing/malformed barcode diagnostics;
 - multithreading;
 - byte-identical multi-thread output comparison;
-- `antisense` or `both` strand modes beyond a to-be-implemented error;
+- active D042 target-relative orientation preservation; Phase 2 only had the historical
+  `--strand sense` surface described above;
 - USA output or splicing-state labels;
 - GBZ/GBWT input as a replacement for `.xg`;
 - custom annotation indexes;
@@ -101,13 +108,13 @@ Fixture files are generated under the CTest build directory.
 | raw UMI | `AAAAAAAAAAAA` |
 | raw CB length | `--raw-cb-length 16` |
 | raw UMI length | `--raw-umi-length 12` |
-| strand mode | `--strand sense` |
+| orientation policy | historical Phase 2 emitted forward for the fixture; active D042 preserves target-relative orientation |
 | aligned block | one reference-consuming block, expected source interval `[310,330)` |
 | score | `40` |
 | manifest row | `chrFixture<TAB>SRC_A<TAB>TX_A<TAB>GENE_A` |
 | `tx2gene.tsv` | `TX_A<TAB>GENE_A` |
 | RAD `refs` | one target ID, the header index for `TX_A` |
-| RAD `dirs` | one synthetic-forward orientation value corresponding to the `TX_A` target ID |
+| RAD `dirs` | historical Phase 2 used one orientation value corresponding to the `TX_A` target ID; active D042 preserves target-relative forward/reverse direction |
 | expected quant matrix | one cell by one gene, `GENE_A=1` |
 
 The GTF should contain one source transcript model sufficient for `CMP-01` exonic
@@ -174,7 +181,7 @@ Required assertions:
 - `pc_out/tx2gene.tsv` has exactly `TX_A<TAB>GENE_A`.
 - RAD `cblen=16` and `ulen=12`.
 - the single RAD record contains `bc`, `umi`, `refs=[TX_A_ID]`, and one corresponding
-  synthetic-forward `dirs` entry.
+  orientation value.
 - alevin-fry completes `generate-permit-list`, `collate`, and `quant`.
 - the quantification output has one cell row, one gene column, and value `1`.
 - no output column contains a USA suffix such as `-U`, `-S`, or `-A`.

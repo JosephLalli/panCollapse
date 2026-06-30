@@ -28,8 +28,9 @@ The path anchors graph coordinates; the transcript ID selects the GTF transcript
 that path.
 
 **Transcript compatibility** — Annotation-aware consistency of a candidate GAMP traversal
-with a transcript's exon/intron structure and strand policy. In V1 this includes intronic
-evidence.
+with a transcript's exon/intron structure and splice-junction rules. In V1 this includes
+intronic evidence and preserves target-relative orientation in RAD rather than filtering
+by panCollapse-side strand mode.
 
 **Transcript-unique** — Exactly one eligible canonical transcript remains.
 

@@ -40,5 +40,6 @@ documents needed for a bounded task.
 - VG-dependent tests must be labeled separately from pure tests.
 - Summary diagnostics use stable counter names in the fixture contracts; implementation
   may add more counters but must not make the specified counters ambiguous.
-- `--strand` is required, and `--max-traversals-per-read` defaults to `100000` with hard
+- D042 removes the active V1 `--strand` surface. panCollapse preserves RAD `dirs` from
+  target-relative orientation; `--max-traversals-per-read` defaults to `100000` with hard
   failure on overflow.

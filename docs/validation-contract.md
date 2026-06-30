@@ -29,10 +29,13 @@ Before implementation:
   `--raw-umi-length 12`.
 - panCollapse does not perform permit-list construction, cell-barcode correction, or UMI
   deduplication/resolution; alevin-fry performs those steps downstream.
-- missing CB or UMI field: skip and count by default; fail in strict mode.
-- malformed or unsupported CB/UMI value: skip and count by default; fail in strict mode.
+- `--molecule-identity-failures skip|fail` defaults to `skip`.
+- missing CB or UMI field: skip and count by default; fail under
+  `--molecule-identity-failures fail`.
+- malformed or unsupported CB/UMI value: skip and count by default; fail under
+  `--molecule-identity-failures fail`.
 - raw CB or UMI length mismatch against the configured lengths: skip and count by
-  default; fail in strict mode.
+  default; fail under `--molecule-identity-failures fail`.
 
 ## 3. Grouping cases
 
@@ -47,7 +50,8 @@ Before implementation:
 Every row in `docs/compatibility-semantics.md` is required. Include overlapping isoforms,
 annotated and unannotated splice junctions, both orientations, the explicit
 outside-first/last-exon extension case with a positive transcript-model anchor, and a
-negative case where only the parent gene locus overlaps.
+negative case where only the parent gene locus overlaps. Mixed orientations for the same
+read group and emitted target must be dropped and counted.
 
 ## 5. Score and collapse cases
 

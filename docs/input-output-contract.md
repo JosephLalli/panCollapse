@@ -80,7 +80,8 @@ or mix barcode/UMI values.
 
 Missing, malformed, or unsupported raw barcode/UMI values are skipped per read group by
 default and counted. Length mismatch against the configured raw barcode or UMI length is
-malformed. A strict CLI mode makes those conditions fatal.
+malformed. `--molecule-identity-failures skip|fail` controls this behavior; `skip` is
+the default, while `fail` makes those conditions fatal.
 
 ## Output obligations
 
@@ -97,9 +98,11 @@ malformed. A strict CLI mode makes those conditions fatal.
 
 Conceptually, each emitted read record contains `bc`, `umi`, `refs`, and `dirs`. `refs`
 is the read's target compatibility set, not genomic coordinates. `dirs` is parallel to
-`refs` and is consumed by alevin-fry's expected-orientation filtering. Current V1
-orientation policy is documented in `docs/architecture-proposal.md` and
-`docs/research/rad-format.md`.
+`refs` and is consumed by alevin-fry's expected-orientation filtering. panCollapse
+preserves the actual read alignment orientation relative to each emitted target; it does
+not synthesize all-forward directions after a panCollapse-side strand filter. A read group
+with mixed orientations for the same emitted target is dropped and counted in the current
+implementation scope.
 
 ### Companion artifacts
 
@@ -108,7 +111,8 @@ The final CLI should write or expose:
 - configured raw barcode and UMI lengths, which determine RAD `cblen` and `ulen`
   (`16` and `12` by default in Phase 2);
 - target dictionary and transcript-to-gene mapping provenance;
-- a run summary with counts from Section 12 of the product spec;
+- a run summary with counts from Section 12 of the product spec, including groups dropped
+  for mixed target-relative orientations;
 - version/build information;
 - explicit input file identities or checksums when practical;
 - warnings and rejected-read reasons suitable for tests.
@@ -127,4 +131,6 @@ Hard failure is expected for:
 
 Skippable per-read conditions are missing, malformed, or unsupported raw CB/UMI values in
 the GAMP name field. They must be counted and become fatal under strict molecule-identity
-handling.
+handling. The stable counters are `raw_molecule_missing_groups`,
+`raw_molecule_malformed_groups`, `raw_molecule_unsupported_groups`, and
+`raw_molecule_skipped_groups`.

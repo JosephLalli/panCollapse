@@ -7,6 +7,8 @@ fixtures.
 Supersession note: the barcode/UMI tag-source cases in this document are historical
 Phase 1 contract text. D038 supersedes them for V1 implementation: panCollapse reads
 observed raw CB/UMI from the GAMP name field, not corrected/raw GAMP annotation tags.
+D043 sets the active raw-name failure mode to
+`--molecule-identity-failures skip|fail` with `raw_molecule_*` counters.
 
 ## Barcode And UMI
 

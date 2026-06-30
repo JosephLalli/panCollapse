@@ -7,6 +7,10 @@ Specified.
 Supersession note: the `--tag-failures` default shown below is historical under D038.
 Current V1 molecule identity comes from raw CB/UMI parsed from the GAMP name field.
 
+Supersession note: the `--strand sense` default and strand-mode fixtures below are
+historical under D042. Active V1 behavior preserves target-relative orientation in RAD
+`dirs` and does not filter compatibility by panCollapse-side strand mode.
+
 ## Shared Synthetic Model
 
 Coordinates are 0-based half-open path coordinates on visible source path `chrFixture`
@@ -34,7 +38,6 @@ Unless specified, fixtures use:
 --score-window 0
 --tag-failures skip
 --min-splice-jump 20
---strand sense
 ```
 
 ## Fixture Matrix
@@ -51,9 +54,9 @@ Unless specified, fixtures use:
 | CMP-08 | Short deletion not splice | two same-path blocks separated by non-connection gap `[145,155)`, gap length 10 | `SRC_A` | `TX_A` | emitted; gap is below `--min-splice-jump` |
 | CMP-09 | Anchored outside overhang | one block `[90,115)` | `SRC_A` | `TX_A` | emitted because at least `[100,115)` overlaps model |
 | CMP-10 | Parent-gene-only negative | one block `[1250,1260)` in `GENE_D` locus but outside `SRC_E` model | none | none | `no_compatible_transcript_groups++` |
-| CMP-11 | Strand sense rejects opposite | block `[710,730)` on `SRC_D`, query-forward opposite transcript orientation, `--strand sense` | none | none | `no_compatible_transcript_groups++` |
-| CMP-12 | Strand antisense accepts opposite | same evidence as CMP-11, `--strand antisense` | `SRC_D` | `TX_D` | emitted |
-| CMP-13 | Strand both accepts either | same evidence as CMP-11, `--strand both` | `SRC_D` | `TX_D` | emitted |
+| CMP-11 | Forward orientation preserved | compatible block `[710,730)` with target-relative forward orientation | `SRC_D` | `TX_D` | emitted with forward `dirs` |
+| CMP-12 | Reverse orientation preserved | compatible block `[710,730)` with target-relative reverse orientation | `SRC_D` | `TX_D` | emitted with reverse `dirs` |
+| CMP-13 | Mixed orientation dropped | same read group has forward and reverse compatible evidence for `TX_D` | `SRC_D` | none | `mixed_orientation_dropped_groups++` |
 | CMP-14 | Connection score and tie | two complete GAMP traversals: one compatible with `SRC_A`, one with `SRC_B`, both total score 30 after subpath plus connection scoring | `SRC_A`, `SRC_B` | `TX_A`, `TX_B` | tied-best retained |
 | CMP-15 | Non-connection splice-length threshold | non-connection same-path gap `[150,200)`, default `--min-splice-jump 20` | `SRC_A` only if junction `[150,200)` is annotated | `TX_A` | treated as observed splice because gap length is 50 |
 | CMP-16 | Long non-connection absent splice rejected | same gap `[150,200)` evaluated against `SRC_B`, whose annotated junction is `[180,220)` | none for `SRC_B` | no `TX_B` | `SRC_B` incompatible because observed junction is absent |

@@ -24,7 +24,6 @@ V1.**
 
 A transcript is compatible with a read group only when all of these are true:
 
-- The selected strand mode passes.
 - At least one projected reference-consuming aligned interval overlaps that
   transcript's exon-or-implied-intron model.
 - Every observed splice jump is present in the transcript's annotated junction
@@ -65,11 +64,21 @@ reference-consuming edit span in a GAMP path:
    orientation.
 4. Compare projected intervals, strand, and splice jumps to `PathAnnotation`.
 
-Strand filtering is relative to the sequenced GAMP query after projection to source path
-coordinates. A projected block is forward on the source path when the path step
-orientation matches the queried mapping handle orientation. A `+` transcript is forward
-on its source path and a `-` transcript is reverse. `sense` keeps matching orientations,
-`antisense` keeps opposite orientations, and `both` disables the filter.
+`for_each_step_position_on_handle` reports `step_is_reverse` relative to the queried
+handle, while `step_position` is the source path's forward-coordinate step start. For a
+mapping with node length `N`, edit length `L`, and GAMP offset `o`, first compute the
+node-forward span start as `node_start = is_reverse ? N - o - L : o`. Coordinate
+mirroring then depends on the path step's own orientation, not on the callback boolean:
+use `[step_position + node_start, step_position + node_start + L)` when
+`get_is_reverse(get_handle_of_step(step)) == false`, and
+`[step_position + N - node_start - L, step_position + N - node_start)` when the path step
+is reverse. The read direction relative to the source path is `!step_is_reverse`.
+
+D042 supersedes panCollapse-side strand filtering. Projection still preserves the
+target-relative orientation of each compatible aligned block for RAD `dirs`, but
+orientation is not used to remove transcript compatibility. If the same read group
+produces mixed directions for one emitted target in the current implementation scope, the
+group is dropped and counted.
 
 Observed splice jumps are same-source-path gaps between adjacent projected aligned blocks
 in traversal order. A selected GAMP `connection` edge always marks the gap as an observed
@@ -109,7 +118,7 @@ proposing a persistent custom index.
 - Absent splice junction negative.
 - Outside overhang anchored by transcript-model overlap.
 - Parent-gene-only overlap negative.
-- Sense, antisense, and both strand modes.
+- Forward, reverse, and mixed target-relative orientation cases.
 - Multiple source transcript identities collapsed by manifest.
 - Missing manifest entry hard failure.
 - Source path/transcript ID mismatch hard failure.

@@ -50,6 +50,23 @@ D041 limits Phase 2 execution to `--strand sense`. `--strand antisense` and
 `--strand both` return to-be-implemented errors in Phase 2 and are deferred to Phase 3,
 where the implementation approach must be researched before coding.
 
+## Phase 3 orientation supersession
+
+D042 supersedes the earlier panCollapse strand-mode direction. panCollapse does not
+filter compatibility by `sense`, `antisense`, or `both`, and the `--strand` CLI is removed
+from the active V1 interface. For every emitted target, panCollapse writes RAD `dirs`
+from the actual read alignment orientation relative to that target/transcript. If one
+read group has mixed orientations for the same emitted target in the current
+implementation scope, the group is dropped and counted rather than assigned a synthetic
+direction. alevin-fry, not panCollapse, handles expected library orientation downstream.
+
+## Raw molecule identity failure mode
+
+D043 sets the active V1 CLI for malformed raw CB/UMI values parsed from the GAMP name
+field to `--molecule-identity-failures skip|fail`, default `skip`. The stable counters
+are `raw_molecule_missing_groups`, `raw_molecule_malformed_groups`,
+`raw_molecule_unsupported_groups`, and `raw_molecule_skipped_groups`.
+
 ## License
 
 The project is licensed under Apache License 2.0.

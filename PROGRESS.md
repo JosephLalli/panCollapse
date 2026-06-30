@@ -2,12 +2,13 @@
 
 ## Current phase
 
-**Phase 2 thin vertical implementation is complete and locally verified.**
+**Phase 3 orientation component is in progress and locally verified.**
 
-Production source now exists for the approved Phase 2 vertical slice. No public
-panCollapse headers or checked-in generated fixtures, GAMP, XG, GCSA, distance-index,
-GBZ, or RAD outputs have been created; generated graph/RAD artifacts remain confined to
-ignored build directories.
+Production source now exists for the approved Phase 2 vertical slice and the selected
+Phase 3 orientation/molecule-identity behaviors. No public panCollapse headers or
+checked-in generated fixtures, GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have
+been created; generated graph/RAD artifacts remain confined to ignored build
+directories.
 
 ## Settled product decisions
 
@@ -23,7 +24,9 @@ ignored build directories.
 - Raw CB and UMI lengths are CLI-controlled values. Phase 2 defaults are
   `--raw-cb-length 16` and `--raw-umi-length 12`.
 - Intronic and exon–intron-boundary evidence can make a transcript compatible.
-- Strand policy is selectable: sense, antisense, or both.
+- panCollapse does not filter compatibility by library strand. It preserves target-
+  relative orientation in RAD `dirs`, and downstream alevin-fry expected-orientation
+  settings handle library-orientation filtering.
 - Copy/path collapse uses an explicit deterministic manifest.
 - Phase 0 resolved the manifest source key as
   `(source_path_name, source_transcript_id)`.
@@ -37,7 +40,8 @@ ignored build directories.
 - Transcript overhang is allowed only when at least one aligned base overlaps that
   transcript's exon/intron model.
 - Missing, malformed, or unsupported raw CB/UMI values parsed from the GAMP name field
-  are skipped and counted by default, with a strict failure mode.
+  are skipped and counted by default; `--molecule-identity-failures fail` converts those
+  conditions into hard failures.
 - Collapse-manifest coverage is mandatory and explicit.
 - `starsolo-default` is an exact alias for post-collapse `unique-gene`.
 - Final V1 output must be byte-identical across supported thread counts. Phase 2 is
@@ -47,14 +51,13 @@ ignored build directories.
 
 ## Next action
 
-Begin Phase 3 planning/work only after choosing one independently testable behavior and
-loading the relevant contracts.
+Complete oracle review of the current Phase 3 orientation/molecule-identity diff, then
+commit if the review and verification remain clean.
 
 ## Required stop
 
-Do not broaden beyond the approved Phase 2 vertical slice until Gate Vertical Slice
-Proven is reviewed. Phase 3 work must proceed one independently testable behavior at a
-time.
+Do not broaden beyond the currently selected Phase 3 behaviors without explicit human
+approval. Phase 3 work must proceed one independently testable behavior at a time.
 
 ## Phase 0 artifacts
 
@@ -96,9 +99,8 @@ time.
 - `docs/phase2/implementation-plan.md` — focused vertical-slice plan using GAMP plus the
   matching `.xg`, build-dir-only fixtures, raw read-name CB/UMI extraction, single-thread
   execution, configured raw CB/UMI lengths, two-column `tx2gene.tsv`, and a 1-cell x
-  1-gene alevin-fry assertion. It also records the user-approved Phase 2 strand scope:
-  `--strand sense` is implemented, while `antisense` and `both` emit to-be-implemented
-  errors and are deferred to Phase 3 research and implementation.
+  1-gene alevin-fry assertion. Its historical Phase 2 `--strand sense` scope is now
+  superseded by D042 for active V1 work.
 - RAD docs now explicitly state that production writing is native C++, while libradicl
   and alevin-fry are validation oracles. They also document per-record `bc`, `umi`,
   `refs`, and `dirs` semantics.
@@ -108,16 +110,17 @@ time.
 - `src/main.cpp` and `src/CMakeLists.txt` — minimal VG-backed `panCollapse convert`
   executable for the approved one-read vertical slice.
 - `tests/vg/phase2_fixture_writer.cpp` — build-dir-only GFA, GTF, collapse manifest, and
-  JSON GAMP fixture generator.
+  forward/reverse/mixed-orientation JSON GAMP fixture generator.
 - `tests/vg/phase2_quant_verify.py` — strict Phase 2 verifier for `tx2gene.tsv`, RAD
-  header/file tags, packed raw CB/UMI, `refs=[TX_A_ID]`, synthetic-forward `dirs`, and
-  the final 1-cell x 1-gene alevin-fry matrix.
-- `tests/vg/phase2_expect_strand_tbi.sh` — negative check that `--strand antisense` and
-  `--strand both` fail with a Phase 3 to-be-implemented error in Phase 2.
+  header/file tags, packed raw CB/UMI, `refs=[TX_A_ID]`, configurable forward/reverse
+  `dirs`, and the final 1-cell x 1-gene alevin-fry matrix.
+- `tests/vg/phase3_mixed_orientation_verify.py` — checks that mixed target-relative
+  orientation evidence is dropped and counted, and that the resulting diagnostic fixture
+  writes a header-only RAD with no chunks.
 - `tests/vg/CMakeLists.txt` — CTest chain for fixture generation, local `vg` conversion
   to `.xg` and binary GAMP, primary and repeat single-thread `panCollapse convert` runs,
-  byte-for-byte output comparison, alevin-fry permit-list/collate/quant, and strict
-  output verification.
+  byte-for-byte output comparison, forward and reverse alevin-fry permit-list/collate/
+  quant flows, mixed-orientation drop verification, and strict output verification.
 
 ## Phase 0 verification
 
@@ -173,14 +176,39 @@ time.
 - Full local VG/alevin-fry test suite passed:
   `cmake --build build`;
   `ctest --test-dir build --output-on-failure`.
-  The full suite currently contains 18 tests, including the Phase 2 rejected-strand
-  checks, primary and repeat `panCollapse convert` runs, byte-identical comparison of
-  `map.rad`, `tx2gene.tsv`, and `summary.tsv`, and alevin-fry
-  `generate-permit-list`, `collate`, and `quant`.
+  The historical Phase 2 suite covered primary and repeat `panCollapse convert` runs,
+  byte-identical comparison of `map.rad`, `tx2gene.tsv`, and `summary.tsv`, and alevin-
+  fry `generate-permit-list`, `collate`, and `quant`.
 - Direct RAD/quant evidence is covered by `phase2_quant_verify.py`: `cblen=16`,
   `ulen=12`, raw CB `AAACCCAAGTTTGGGA`, raw UMI `AAAAAAAAAAAA`, one target `TX_A`,
   forward direction, `tx2gene.tsv` equal to `TX_A<TAB>GENE_A`, and a final
   `GENE_A=1` matrix for one cell.
+
+## Phase 3 orientation verification
+
+- VG orientation semantics were checked against the local VG/handlegraph sources by an
+  explorer agent before implementation and rechecked after oracle review. Projection
+  computes the node-forward span with `node_length - offset - from_length` for reverse
+  GAMP mappings, mirrors coordinates when the source path step itself is reverse, and
+  records target-relative RAD `dirs`.
+- Current full local VG/alevin-fry suite passed:
+  `cmake --build build`;
+  `ctest --test-dir build --output-on-failure`.
+  The suite currently contains 55 tests, including forward and reverse orientation RAD
+  verification, reverse `alevin-fry generate-permit-list -d rc`, adjacent-read grouped
+  mixed-orientation drop/count behavior, recurrent completed-name failure, two successful
+  adjacent read groups, and a two-target record with `TX_A` forward and `TX_B` reverse
+  accepted by alevin-fry with `-d either`, exact multi-target quant verification, and a
+  no-compatible-read summary/header check. It also covers source paths that traverse a
+  node in reverse orientation, original read names containing underscores,
+  `N`-containing raw CB/UMI values, default `--molecule-identity-failures skip` for
+  missing, malformed, and unsupported raw CB/UMI values, and
+  `--molecule-identity-failures fail` as a strict hard failure with `counter=1` in the
+  diagnostic for each failure class.
+- Pure build/test passed:
+  `cmake --build build-pure`;
+  `ctest --test-dir build-pure -L pure --output-on-failure`.
+- Workspace verification passed: `./scripts/verify-workspace.sh`.
 
 ## Gate checklist snapshot
 
@@ -193,11 +221,20 @@ time.
   emission, and alevin-fry quantification.
 - Phase 2 single-thread reproducibility: represented by repeat conversion and
   byte-for-byte comparison of `map.rad`, `tx2gene.tsv`, and `summary.tsv`.
-- Production source is present only for the approved vertical slice. Checked-in generated
-  graph/RAD artifacts remain absent.
-- Phase 3 strand work: `antisense` and `both` remain V1 requirements, but Phase 2 emits
-  to-be-implemented errors for them under D041. Phase 3 must research the best
-  implementation strategy before development.
+- Production source has been broadened from the Phase 2 vertical slice for the Phase 3
+  orientation component: multi-row manifests, multiple GTF transcript models, grouped
+  GAMP records, multi-target RAD records, and target-relative `dirs` are implemented.
+  Checked-in generated graph/RAD artifacts remain absent.
+- Phase 3 orientation work supersedes the old strand-mode plan under D042: remove
+  `--strand`, preserve target-relative RAD `dirs`, and drop/count mixed-orientation
+  evidence for one emitted target.
+- D043 adds the active raw molecule-identity failure policy:
+  `--molecule-identity-failures skip|fail`, default `skip`, with
+  `raw_molecule_missing_groups`, `raw_molecule_malformed_groups`,
+  `raw_molecule_unsupported_groups`, and `raw_molecule_skipped_groups`.
+- The all-dropped mixed-orientation diagnostic fixture is not an alevin-fry
+  interoperability fixture. Local alevin-fry rejects no-chunk RAD files, so nonempty
+  forward and reverse orientation fixtures carry the current alevin-fry proof.
 
 ## Session log
 
@@ -224,3 +261,10 @@ time.
   `summary.tsv`, a repeat single-thread run is byte-identical, and alevin-fry produces
   the expected 1-cell x 1-gene matrix. User approved deferring `antisense` and `both`
   strand modes to Phase 3 with to-be-implemented errors in Phase 2.
+- 2026-06-29: User superseded the panCollapse strand-mode plan with target-relative RAD
+  orientation preservation: remove `--strand`, do not filter by strand, write real
+  forward/reverse `dirs`, and drop/count mixed orientations for one emitted target.
+- 2026-06-29: User approved the raw molecule-identity failure surface
+  `--molecule-identity-failures skip|fail`, default `skip`, with stable
+  `raw_molecule_*` counters. The implementation now skips/counts missing, malformed,
+  and unsupported raw CB/UMI groups by default and fails strictly under `fail`.

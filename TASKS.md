@@ -141,13 +141,14 @@ After Gate Vertical Slice Proven, add one independently testable behavior at a t
 
 - multipath traversal and score aggregation;
 - intronic and boundary compatibility;
-- strand modes: before implementing `antisense` or `both`, research the best way to map
-  GAMP/query orientation and source-path/transcript orientation into the approved strand
-  settings, then add focused tests for each mode;
+- target-relative RAD orientation: remove the Phase 2 `--strand` surface, preserve
+  forward and reverse orientation in `dirs`, drop/count mixed-orientation evidence for
+  the same emitted target, and verify downstream alevin-fry behavior with focused tests;
 - manifest collapse;
 - all assignment policies;
 - name-grouping validation;
-- diagnostics and summary metrics;
+- diagnostics and summary metrics, including `--molecule-identity-failures skip|fail`
+  and raw molecule-identity skip counters;
 - larger pilot and performance characterization.
 
 Any proposal to add a custom lookup index is a separate decision requiring measured

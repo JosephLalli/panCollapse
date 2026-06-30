@@ -6,11 +6,15 @@ does not prescribe interval-tree types, graph algorithms, or source-file organiz
 ## Core rule
 
 A candidate GAMP traversal contributes a transcript target when its aligned evidence is
-consistent with that transcript under the selected strand mode and splice-junction rules.
+consistent with that transcript under the annotation and splice-junction rules.
 Compatibility includes annotated intronic evidence; it is not mature-transcript sequence
 matching alone. At least one aligned reference-consuming base must overlap an exon or
 implied intron of the candidate transcript. Other aligned sequence may overhang the
 transcript's first-to-last-exon span. Parent-gene overlap alone is insufficient.
+
+panCollapse does not remove compatibility by library strand. It preserves the actual
+target-relative orientation of compatible evidence in RAD `dirs` so downstream
+alevin-fry expected-orientation handling can make library-orientation decisions.
 
 ## Required cases
 
@@ -25,9 +29,9 @@ transcript's first-to-last-exon span. Parent-gene overlap alone is insufficient.
 | Read has a splice junction absent from transcript B | Incompatible with B |
 | At least one aligned base overlaps the transcript model and other sequence extends beyond first/last exon span | Compatible if all other rules pass |
 | Alignment overlaps only the parent gene locus, not the transcript's exons or implied introns | Incompatible |
-| Opposite-strand overlap in `sense` mode | Incompatible |
-| Opposite-strand overlap in `antisense` mode | Compatible if other rules pass |
-| Either orientation in `both` mode | Strand does not remove compatibility |
+| Forward target-relative orientation | Compatible if other rules pass; RAD `dirs` records forward |
+| Reverse target-relative orientation | Compatible if other rules pass; RAD `dirs` records reverse |
+| Mixed orientations for the same read group and emitted target | Dropped and counted rather than assigned a synthetic orientation |
 
 ## Multiple GAMP alternatives
 
