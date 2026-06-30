@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -50,6 +51,9 @@ struct Options {
     std::filesystem::path out_dir;
     size_t raw_cb_length = 16;
     size_t raw_umi_length = 12;
+    size_t score_window = 0;
+    size_t min_splice_jump = 20;
+    size_t max_traversals_per_read = 100000;
     MoleculeIdentityFailurePolicy molecule_identity_failures = MoleculeIdentityFailurePolicy::Skip;
 };
 
@@ -65,6 +69,7 @@ struct TranscriptModel {
     std::string source_transcript;
     std::string source_gene;
     std::vector<std::pair<size_t, size_t>> exons;
+    std::vector<std::pair<size_t, size_t>> introns;
     bool is_reverse = false;
 };
 
@@ -92,11 +97,18 @@ struct ProjectedBlock {
     size_t start = 0;
     size_t end = 0;
     bool is_forward_on_path = true;
+    bool previous_edge_is_connection = false;
+    size_t edit_index = 0;
 };
 
 struct TargetHit {
     uint32_t target_id = 0;
     bool is_forward = true;
+};
+
+struct TargetEvidence {
+    int64_t best_score = std::numeric_limits<int64_t>::min();
+    std::set<bool> orientations;
 };
 
 struct EmittedRecord {
@@ -110,14 +122,45 @@ struct ReadGroupState {
     bool skip_for_molecule_identity = false;
     MoleculeParseStatus molecule_status = MoleculeParseStatus::Ok;
     std::string molecule_message;
-    std::map<uint32_t, std::set<bool>> target_orientations;
+    std::map<uint32_t, TargetEvidence> target_evidence;
+    size_t traversal_count = 0;
+};
+
+struct Traversal {
+    std::vector<uint32_t> subpaths;
+    std::vector<bool> incoming_connection;
+    int64_t score = 0;
+};
+
+struct ProjectedTraversal {
+    std::vector<ProjectedBlock> blocks;
+    size_t reference_edit_count = 0;
 };
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(
         "usage: panCollapse convert --gamp reads.gamp --xg graph.xg --gtf annotation.gtf "
         "--collapse-manifest collapse.tsv --out-dir out [--raw-cb-length N] [--raw-umi-length N] "
+        "[--score-window N] [--min-splice-jump N] [--max-traversals-per-read N] "
         "[--molecule-identity-failures skip|fail]");
+}
+
+size_t parse_size_option(const std::string& option_name, const std::string& value) {
+    if (value.empty()) {
+        throw std::runtime_error(option_name + " must be an unsigned integer");
+    }
+    size_t parsed = 0;
+    for (const char c : value) {
+        if (c < '0' || c > '9') {
+            throw std::runtime_error(option_name + " must be an unsigned integer");
+        }
+        const size_t digit = static_cast<size_t>(c - '0');
+        if (parsed > (std::numeric_limits<size_t>::max() - digit) / 10) {
+            throw std::runtime_error(option_name + " is outside the supported integer range");
+        }
+        parsed = parsed * 10 + digit;
+    }
+    return parsed;
 }
 
 Options parse_options(int argc, char** argv) {
@@ -146,9 +189,16 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--out-dir") {
             options.out_dir = require_value("--out-dir");
         } else if (arg == "--raw-cb-length") {
-            options.raw_cb_length = std::stoul(require_value("--raw-cb-length"));
+            options.raw_cb_length = parse_size_option("--raw-cb-length", require_value("--raw-cb-length"));
         } else if (arg == "--raw-umi-length") {
-            options.raw_umi_length = std::stoul(require_value("--raw-umi-length"));
+            options.raw_umi_length = parse_size_option("--raw-umi-length", require_value("--raw-umi-length"));
+        } else if (arg == "--score-window") {
+            options.score_window = parse_size_option("--score-window", require_value("--score-window"));
+        } else if (arg == "--min-splice-jump") {
+            options.min_splice_jump = parse_size_option("--min-splice-jump", require_value("--min-splice-jump"));
+        } else if (arg == "--max-traversals-per-read") {
+            options.max_traversals_per_read =
+                parse_size_option("--max-traversals-per-read", require_value("--max-traversals-per-read"));
         } else if (arg == "--molecule-identity-failures") {
             const std::string value = require_value("--molecule-identity-failures");
             if (value == "skip") {
@@ -170,6 +220,9 @@ Options parse_options(int argc, char** argv) {
     if (options.raw_cb_length == 0 || options.raw_cb_length > 32 || options.raw_umi_length == 0 ||
         options.raw_umi_length > 32) {
         throw std::runtime_error("raw barcode and UMI lengths must be in 1..32");
+    }
+    if (options.min_splice_jump == 0 || options.max_traversals_per_read == 0) {
+        throw std::runtime_error("min splice jump and max traversals per read must be at least 1");
     }
 
     return options;
@@ -202,6 +255,34 @@ std::string gtf_attribute(const std::string& attributes, const std::string& key)
         return {};
     }
     return attributes.substr(value_start, value_end - value_start);
+}
+
+std::vector<std::pair<size_t, size_t>> merge_intervals(std::vector<std::pair<size_t, size_t>> intervals) {
+    if (intervals.empty()) {
+        return intervals;
+    }
+    std::sort(intervals.begin(), intervals.end());
+    std::vector<std::pair<size_t, size_t>> merged;
+    merged.push_back(intervals.front());
+    for (size_t i = 1; i < intervals.size(); ++i) {
+        auto& back = merged.back();
+        if (intervals[i].first <= back.second) {
+            back.second = std::max(back.second, intervals[i].second);
+        } else {
+            merged.push_back(intervals[i]);
+        }
+    }
+    return merged;
+}
+
+std::vector<std::pair<size_t, size_t>> implied_introns(const std::vector<std::pair<size_t, size_t>>& exons) {
+    std::vector<std::pair<size_t, size_t>> introns;
+    for (size_t i = 1; i < exons.size(); ++i) {
+        if (exons[i - 1].second < exons[i].first) {
+            introns.emplace_back(exons[i - 1].second, exons[i].first);
+        }
+    }
+    return introns;
 }
 
 ManifestData read_manifest(const std::filesystem::path& filename) {
@@ -291,7 +372,7 @@ std::map<SourceKey, TranscriptModel> read_transcript_models(const std::filesyste
         const SourceKey source_key{fields[0], transcript_id};
         const bool is_reverse = fields[6] == "-";
         auto [it, inserted] = models.emplace(
-            source_key, TranscriptModel{fields[0], transcript_id, gene_id, {}, is_reverse});
+            source_key, TranscriptModel{fields[0], transcript_id, gene_id, {}, {}, is_reverse});
         if (!inserted && (it->second.source_gene != gene_id || it->second.is_reverse != is_reverse)) {
             throw std::runtime_error("inconsistent GTF transcript model");
         }
@@ -302,7 +383,8 @@ std::map<SourceKey, TranscriptModel> read_transcript_models(const std::filesyste
         throw std::runtime_error("GTF contains no exon model");
     }
     for (auto& [key, model] : models) {
-        std::sort(model.exons.begin(), model.exons.end());
+        model.exons = merge_intervals(std::move(model.exons));
+        model.introns = implied_introns(model.exons);
     }
     return models;
 }
@@ -524,61 +606,268 @@ void write_rad_file(const std::filesystem::path& filename,
     }
 }
 
-std::vector<ProjectedBlock> project_alignment(const vg::MultipathAlignment& alignment, xg::XG& graph) {
-    if (alignment.subpath_size() != 1 || alignment.subpath(0).path().mapping_size() == 0) {
-        throw std::runtime_error("Phase 3 orientation slice expects one subpath with at least one mapping");
+struct TraversalEdge {
+    uint32_t next = 0;
+    bool is_connection = false;
+    int64_t score = 0;
+};
+
+void check_subpath_index(uint32_t index, int subpath_count) {
+    if (index >= static_cast<uint32_t>(subpath_count)) {
+        throw std::runtime_error("GAMP subpath edge points outside the subpath list");
+    }
+}
+
+std::vector<Traversal> enumerate_traversals(const vg::MultipathAlignment& alignment,
+                                            size_t& group_traversal_count,
+                                            size_t traversal_cap) {
+    const int subpath_count = alignment.subpath_size();
+    if (subpath_count == 0) {
+        throw std::runtime_error("GAMP record has no subpaths");
     }
 
-    handlegraph::PathPositionHandleGraph* positioned_graph = &graph;
-    std::vector<ProjectedBlock> blocks;
+    std::vector<std::vector<TraversalEdge>> outgoing(static_cast<size_t>(subpath_count));
+    std::vector<size_t> incoming(static_cast<size_t>(subpath_count), 0);
+    for (int i = 0; i < subpath_count; ++i) {
+        const vg::Subpath& subpath = alignment.subpath(i);
+        for (const uint32_t next : subpath.next()) {
+            check_subpath_index(next, subpath_count);
+            outgoing[static_cast<size_t>(i)].push_back({next, false, 0});
+            ++incoming[next];
+        }
+        for (const vg::Connection& connection : subpath.connection()) {
+            check_subpath_index(connection.next(), subpath_count);
+            outgoing[static_cast<size_t>(i)].push_back(
+                {connection.next(), true, static_cast<int64_t>(connection.score())});
+            ++incoming[connection.next()];
+        }
+    }
 
-    for (const vg::Mapping& mapping : alignment.subpath(0).path().mapping()) {
-        if (mapping.edit_size() != 1 || mapping.edit(0).from_length() <= 0) {
-            throw std::runtime_error("Phase 3 orientation slice expects one reference-consuming edit per mapping");
+    std::vector<uint32_t> starts;
+    if (alignment.start_size() > 0) {
+        for (const uint32_t start : alignment.start()) {
+            check_subpath_index(start, subpath_count);
+            starts.push_back(start);
         }
-        if (mapping.position().offset() < 0) {
-            throw std::runtime_error("GAMP mapping has negative node offset");
+    } else {
+        for (int i = 0; i < subpath_count; ++i) {
+            if (incoming[static_cast<size_t>(i)] == 0) {
+                starts.push_back(static_cast<uint32_t>(i));
+            }
         }
+    }
+    if (starts.empty()) {
+        throw std::runtime_error("GAMP traversal graph has no start subpath");
+    }
 
-        const auto& position = mapping.position();
-        const handlegraph::handle_t handle = graph.get_handle(position.node_id(), position.is_reverse());
-        const size_t node_length = graph.get_length(handle);
-        const size_t offset = static_cast<size_t>(position.offset());
-        const size_t from_length = static_cast<size_t>(mapping.edit(0).from_length());
-        if (offset > node_length || from_length > node_length || offset + from_length > node_length) {
-            throw std::runtime_error("GAMP mapping edit extends beyond node length");
-        }
-        const size_t node_start = position.is_reverse() ? node_length - offset - from_length : offset;
-        positioned_graph->for_each_step_position_on_handle(
-            handle,
-            [&](const handlegraph::step_handle_t& step, const bool& step_is_reverse, const size_t& step_position) {
-                const std::string path_name = graph.get_path_name(graph.get_path_handle_of_step(step));
-                const bool path_step_is_reverse = graph.get_is_reverse(graph.get_handle_of_step(step));
-                const size_t start = path_step_is_reverse ? step_position + node_length - node_start - from_length
-                                                          : step_position + node_start;
-                const size_t end = start + from_length;
-                // step_is_reverse is relative to the queried handle. Its negation is
-                // the read direction relative to the source path; the path-step
-                // orientation controls coordinate mirroring.
-                blocks.push_back({path_name, start, end, !step_is_reverse});
+    std::vector<Traversal> traversals;
+    std::vector<uint32_t> path;
+    std::vector<bool> incoming_connection;
+    std::vector<bool> active(static_cast<size_t>(subpath_count), false);
+
+    std::function<void(uint32_t, bool, int64_t, int64_t)> dfs =
+        [&](uint32_t subpath_index, bool edge_is_connection, int64_t edge_score, int64_t prefix_score) {
+            if (active[subpath_index]) {
+                throw std::runtime_error("GAMP traversal graph is cyclic");
+            }
+            active[subpath_index] = true;
+            path.push_back(subpath_index);
+            incoming_connection.push_back(edge_is_connection);
+            const int64_t score = prefix_score + edge_score + alignment.subpath(subpath_index).score();
+
+            const auto& edges = outgoing[subpath_index];
+            if (edges.empty()) {
+                if (group_traversal_count >= traversal_cap) {
+                    throw std::runtime_error("traversal_cap_exceeded_groups=1");
+                }
+                ++group_traversal_count;
+                traversals.push_back({path, incoming_connection, score});
+            } else {
+                for (const TraversalEdge& edge : edges) {
+                    dfs(edge.next, edge.is_connection, edge.score, score);
+                }
+            }
+
+            incoming_connection.pop_back();
+            path.pop_back();
+            active[subpath_index] = false;
+        };
+
+    for (const uint32_t start : starts) {
+        dfs(start, false, 0, 0);
+    }
+
+    return traversals;
+}
+
+bool subpath_has_reference_consuming_edit(const vg::Subpath& subpath) {
+    for (const vg::Mapping& mapping : subpath.path().mapping()) {
+        for (const vg::Edit& edit : mapping.edit()) {
+            if (edit.from_length() < 0) {
+                throw std::runtime_error("GAMP edit has negative reference length");
+            }
+            if (edit.from_length() > 0) {
                 return true;
-            });
+            }
+        }
+    }
+    return false;
+}
+
+ProjectedTraversal project_traversal(const vg::MultipathAlignment& alignment, const Traversal& traversal, xg::XG& graph) {
+    handlegraph::PathPositionHandleGraph* positioned_graph = &graph;
+    ProjectedTraversal projected;
+    bool pending_connection = false;
+
+    for (size_t traversal_i = 0; traversal_i < traversal.subpaths.size(); ++traversal_i) {
+        const vg::Subpath& subpath = alignment.subpath(traversal.subpaths[traversal_i]);
+        pending_connection = pending_connection || traversal.incoming_connection[traversal_i];
+        if (!subpath_has_reference_consuming_edit(subpath)) {
+            continue;
+        }
+        bool first_reference_edit = true;
+        for (const vg::Mapping& mapping : subpath.path().mapping()) {
+            if (mapping.position().offset() < 0) {
+                throw std::runtime_error("GAMP mapping has negative node offset");
+            }
+
+            const auto& position = mapping.position();
+            const handlegraph::handle_t handle = graph.get_handle(position.node_id(), position.is_reverse());
+            const size_t node_length = graph.get_length(handle);
+            size_t edit_offset = static_cast<size_t>(position.offset());
+            if (edit_offset > node_length) {
+                throw std::runtime_error("GAMP mapping offset extends beyond node length");
+            }
+
+            for (const vg::Edit& edit : mapping.edit()) {
+                if (edit.from_length() < 0) {
+                    throw std::runtime_error("GAMP edit has negative reference length");
+                }
+                const size_t from_length = static_cast<size_t>(edit.from_length());
+                if (from_length == 0) {
+                    continue;
+                }
+                if (from_length > node_length || edit_offset + from_length > node_length) {
+                    throw std::runtime_error("GAMP mapping edit extends beyond node length");
+                }
+                const size_t edit_index = projected.reference_edit_count++;
+                const size_t node_start =
+                    position.is_reverse() ? node_length - edit_offset - from_length : edit_offset;
+                const bool edge_into_block_is_connection = first_reference_edit && pending_connection;
+                positioned_graph->for_each_step_position_on_handle(
+                    handle,
+                    [&](const handlegraph::step_handle_t& step,
+                        const bool& step_is_reverse,
+                        const size_t& step_position) {
+                        const std::string path_name = graph.get_path_name(graph.get_path_handle_of_step(step));
+                        const bool path_step_is_reverse = graph.get_is_reverse(graph.get_handle_of_step(step));
+                        const size_t start = path_step_is_reverse
+                                                 ? step_position + node_length - node_start - from_length
+                                                 : step_position + node_start;
+                        const size_t end = start + from_length;
+                        // step_is_reverse is relative to the queried handle. Its
+                        // negation is the read direction relative to the source path;
+                        // the path-step orientation controls coordinate mirroring.
+                        projected.blocks.push_back(
+                            {path_name, start, end, !step_is_reverse, edge_into_block_is_connection, edit_index});
+                        return true;
+                    });
+                first_reference_edit = false;
+                pending_connection = false;
+                edit_offset += from_length;
+            }
+        }
     }
 
-    return blocks;
+    return projected;
 }
 
 bool overlaps(size_t a_start, size_t a_end, size_t b_start, size_t b_end) {
     return a_start < b_end && b_start < a_end;
 }
 
-bool overlaps_any_exon(const ProjectedBlock& block, const TranscriptModel& model) {
-    for (const auto& [exon_start, exon_end] : model.exons) {
-        if (overlaps(block.start, block.end, exon_start, exon_end)) {
+bool overlaps_any_interval(const ProjectedBlock& block, const std::vector<std::pair<size_t, size_t>>& intervals) {
+    for (const auto& [interval_start, interval_end] : intervals) {
+        if (overlaps(block.start, block.end, interval_start, interval_end)) {
             return true;
         }
     }
     return false;
+}
+
+bool overlaps_transcript_model(const ProjectedBlock& block, const TranscriptModel& model) {
+    return overlaps_any_interval(block, model.exons) || overlaps_any_interval(block, model.introns);
+}
+
+bool has_junction(const TranscriptModel& model, size_t start, size_t end) {
+    for (const auto& [intron_start, intron_end] : model.introns) {
+        if (intron_start == start && intron_end == end) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool compatible_with_model(const ProjectedTraversal& traversal,
+                           const TranscriptModel& model,
+                           size_t min_splice_jump,
+                           std::set<bool>& target_orientations) {
+    std::vector<const ProjectedBlock*> model_blocks;
+    std::set<size_t> projected_edit_indexes;
+    for (const ProjectedBlock& block : traversal.blocks) {
+        if (block.source_path == model.source_path) {
+            model_blocks.push_back(&block);
+            projected_edit_indexes.insert(block.edit_index);
+        }
+    }
+    if (model_blocks.empty() || projected_edit_indexes.size() != traversal.reference_edit_count) {
+        return false;
+    }
+
+    bool has_anchor = false;
+    for (const ProjectedBlock* block : model_blocks) {
+        target_orientations.insert(block->is_forward_on_path != model.is_reverse);
+        if (overlaps_transcript_model(*block, model)) {
+            has_anchor = true;
+        }
+    }
+    if (!has_anchor) {
+        return false;
+    }
+
+    for (size_t i = 1; i < model_blocks.size(); ++i) {
+        const ProjectedBlock& previous = *model_blocks[i - 1];
+        const ProjectedBlock& current = *model_blocks[i];
+
+        size_t gap_start = 0;
+        size_t gap_end = 0;
+        bool has_gap = false;
+        if (previous.end <= current.start) {
+            gap_start = previous.end;
+            gap_end = current.start;
+            has_gap = true;
+        } else if (current.end <= previous.start) {
+            gap_start = current.end;
+            gap_end = previous.start;
+            has_gap = true;
+        }
+
+        if (!has_gap) {
+            if (current.previous_edge_is_connection) {
+                return false;
+            }
+            continue;
+        }
+
+        const size_t gap_length = gap_end - gap_start;
+        if (current.previous_edge_is_connection || gap_length >= min_splice_jump) {
+            if (!has_junction(model, gap_start, gap_end)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 void write_text_file(const std::filesystem::path& filename, const std::string& contents) {
@@ -623,6 +912,7 @@ int run_convert(int argc, char** argv) {
     size_t raw_molecule_malformed_groups = 0;
     size_t raw_molecule_unsupported_groups = 0;
     size_t raw_molecule_skipped_groups = 0;
+    size_t score_removed_targets = 0;
     std::vector<EmittedRecord> emitted_records;
     std::set<std::string> completed_names;
     bool have_group = false;
@@ -675,15 +965,34 @@ int run_convert(int argc, char** argv) {
             have_group = false;
             return;
         }
-        if (current_group.target_orientations.empty()) {
+        if (current_group.target_evidence.empty()) {
             ++no_compatible_transcript_groups;
             completed_names.insert(current_group.name);
             have_group = false;
             return;
         }
+
+        int64_t best_score = std::numeric_limits<int64_t>::min();
+        for (const auto& [target_id, evidence] : current_group.target_evidence) {
+            best_score = std::max(best_score, evidence.best_score);
+        }
+
+        std::map<uint32_t, TargetEvidence> retained_targets;
+        for (const auto& [target_id, evidence] : current_group.target_evidence) {
+            const uint64_t score_delta = static_cast<uint64_t>(best_score - evidence.best_score);
+            if (score_delta <= options.score_window) {
+                retained_targets.emplace(target_id, evidence);
+            } else {
+                ++score_removed_targets;
+            }
+        }
+        if (retained_targets.empty()) {
+            throw std::runtime_error("internal score filtering removed all compatible targets");
+        }
+
         bool has_mixed_target = false;
-        for (const auto& [target_id, orientations] : current_group.target_orientations) {
-            if (orientations.size() > 1) {
+        for (const auto& [target_id, evidence] : retained_targets) {
+            if (evidence.orientations.size() > 1) {
                 has_mixed_target = true;
                 break;
             }
@@ -697,8 +1006,8 @@ int run_convert(int argc, char** argv) {
             return;
         }
         std::vector<TargetHit> hits;
-        for (const auto& [target_id, orientations] : current_group.target_orientations) {
-            hits.push_back({target_id, *orientations.begin()});
+        for (const auto& [target_id, evidence] : retained_targets) {
+            hits.push_back({target_id, *evidence.orientations.begin()});
         }
         emitted_records.push_back({current_group.molecule, hits});
         completed_names.insert(current_group.name);
@@ -706,9 +1015,12 @@ int run_convert(int argc, char** argv) {
     };
 
     auto update_group = [&](vg::MultipathAlignment& alignment) {
-        for (const ProjectedBlock& block : project_alignment(alignment, graph)) {
+        for (const Traversal& traversal :
+             enumerate_traversals(alignment, current_group.traversal_count, options.max_traversals_per_read)) {
+            const ProjectedTraversal projected_traversal = project_traversal(alignment, traversal, graph);
             for (const auto& [source_key, model] : transcript_models) {
-                if (block.source_path != model.source_path || !overlaps_any_exon(block, model)) {
+                std::set<bool> target_orientations;
+                if (!compatible_with_model(projected_traversal, model, options.min_splice_jump, target_orientations)) {
                     continue;
                 }
                 const auto manifest_row = manifest.source_rows.find(source_key);
@@ -719,7 +1031,9 @@ int run_convert(int argc, char** argv) {
                 if (target_id == manifest.target_ids.end()) {
                     throw std::runtime_error("internal target dictionary mismatch");
                 }
-                current_group.target_orientations[target_id->second].insert(block.is_forward_on_path != model.is_reverse);
+                TargetEvidence& evidence = current_group.target_evidence[target_id->second];
+                evidence.best_score = std::max(evidence.best_score, traversal.score);
+                evidence.orientations.insert(target_orientations.begin(), target_orientations.end());
             }
         }
     };
@@ -739,7 +1053,7 @@ int run_convert(int argc, char** argv) {
     flush_group();
 
     if (input_records == 0) {
-        throw std::runtime_error("Phase 3 orientation slice expects at least one GAMP record");
+        throw std::runtime_error("panCollapse convert expects at least one GAMP record");
     }
 
     std::filesystem::create_directories(options.out_dir);
@@ -762,6 +1076,8 @@ int run_convert(int argc, char** argv) {
                         "\nraw_molecule_malformed_groups\t" + std::to_string(raw_molecule_malformed_groups) +
                         "\nraw_molecule_unsupported_groups\t" + std::to_string(raw_molecule_unsupported_groups) +
                         "\nraw_molecule_skipped_groups\t" + std::to_string(raw_molecule_skipped_groups) +
+                        "\nscore_removed_targets\t" + std::to_string(score_removed_targets) +
+                        "\ntraversal_cap_exceeded_groups\t0" +
                         "\ngrouping_recurrence_failures\t" + std::to_string(grouping_recurrence_failures) + "\n");
     return 0;
 }

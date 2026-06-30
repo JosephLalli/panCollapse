@@ -2,13 +2,14 @@
 
 ## Current phase
 
-**Phase 3 orientation component is locally verified and committed.**
+**Phase 3 traversal/scoring plus intron/splice compatibility component is locally
+verified and oracle-reviewed.**
 
 Production source now exists for the approved Phase 2 vertical slice and the selected
-Phase 3 orientation/molecule-identity behaviors. No public panCollapse headers or
-checked-in generated fixtures, GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have
-been created; generated graph/RAD artifacts remain confined to ignored build
-directories.
+Phase 3 orientation, molecule-identity, traversal/scoring, and intron/splice
+compatibility behaviors. No public panCollapse headers or checked-in generated fixtures,
+GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have been created; generated
+graph/RAD artifacts remain confined to ignored build directories.
 
 ## Settled product decisions
 
@@ -52,8 +53,8 @@ directories.
 ## Next action
 
 Ask for explicit human approval of the next independently testable Phase 3 behavior
-before broadening production code beyond the committed orientation and raw
-molecule-identity slice.
+before broadening production code beyond the verified traversal/scoring and
+intron/splice compatibility slice.
 
 ## Required stop
 
@@ -110,8 +111,9 @@ approval. Phase 3 work must proceed one independently testable behavior at a tim
 
 - `src/main.cpp` and `src/CMakeLists.txt` — minimal VG-backed `panCollapse convert`
   executable for the approved one-read vertical slice.
-- `tests/vg/phase2_fixture_writer.cpp` — build-dir-only GFA, GTF, collapse manifest, and
-  forward/reverse/mixed-orientation JSON GAMP fixture generator.
+- `tests/vg/phase2_fixture_writer.cpp` — build-dir-only GFA, GTF, collapse manifest,
+  forward/reverse/mixed-orientation JSON GAMP fixture generator, plus generated-source
+  RPVG multipath, connection-score, and vg tiny splice/intron fixtures.
 - `tests/vg/phase2_quant_verify.py` — strict Phase 2 verifier for `tx2gene.tsv`, RAD
   header/file tags, packed raw CB/UMI, `refs=[TX_A_ID]`, configurable forward/reverse
   `dirs`, and the final 1-cell x 1-gene alevin-fry matrix.
@@ -213,6 +215,38 @@ approval. Phase 3 work must proceed one independently testable behavior at a tim
   `ctest --test-dir build-pure -L pure --output-on-failure`.
 - Workspace verification passed: `./scripts/verify-workspace.sh`.
 
+## Phase 3 traversal and compatibility verification
+
+- Low-cost worker agents inspected and materialized scratch conversions from
+  `jonassibbesen/rpvg/src/tests/alignment_path_finder_test.cpp` and the local VG
+  `test/tiny` fixtures. The generated `.vg`, `.xg`, and `.gamp` scratch artifacts were
+  not kept in the repo because D4/D036 require generated graph/alignment/RAD artifacts to
+  remain build-dir-only.
+- The implementation now enumerates complete `MultipathAlignment` DAG traversals through
+  both ordinary `next` edges and scored `connection` arcs, applies
+  `--max-traversals-per-read`, sums subpath plus connection scores, projects every
+  reference-consuming edit, keeps tied-best targets by default, and applies
+  `--score-window`.
+- Compatibility now includes exon and implied-intron anchors, exon/intron-boundary
+  evidence, annotated splice-junction checks for `connection` edges, and long same-path
+  gap checks controlled by `--min-splice-jump`.
+- The full local VG/alevin-fry suite passed:
+  `ctest --test-dir build --output-on-failure`.
+  The suite currently contains 95 tests. New Phase 3 coverage includes RPVG-derived
+  multipath traversal over a six-node branching graph, RPVG traversal-cap failure,
+  connection-score aggregation with score-window removal and score-window retention,
+  same-path short and long gap handling with a `--min-splice-jump` override,
+  connection-through-insertion splice preservation, anchored outside-transcript overhang,
+  parent-gene-only negative evidence, and vg tiny exon/intron/boundary/splice-junction
+  compatibility. It also covers strict numeric CLI parsing for the new traversal/scoring
+  options and the existing raw CB/UMI length options.
+- Pure build/test passed:
+  `ctest --test-dir build-pure -L pure --output-on-failure`.
+- High-cost oracle review initially found permissive numeric CLI parsing for the new
+  Phase 3 options and existing raw CB/UMI length options. The parser now rejects signed
+  values, trailing junk, empty values, and overflow; the added CLI failure tests cover the
+  reported cases. Oracle re-review passed with no blocking or non-blocking findings.
+
 ## Gate checklist snapshot
 
 - Gate Architecture Approved: passed in Phase 0.
@@ -224,9 +258,10 @@ approval. Phase 3 work must proceed one independently testable behavior at a tim
   emission, and alevin-fry quantification.
 - Phase 2 single-thread reproducibility: represented by repeat conversion and
   byte-for-byte comparison of `map.rad`, `tx2gene.tsv`, and `summary.tsv`.
-- Production source has been broadened from the Phase 2 vertical slice for the Phase 3
-  orientation component: multi-row manifests, multiple GTF transcript models, grouped
-  GAMP records, multi-target RAD records, and target-relative `dirs` are implemented.
+- Production source has been broadened from the Phase 2 vertical slice for Phase 3:
+  multi-row manifests, multiple GTF transcript models, grouped GAMP records,
+  multi-target RAD records, target-relative `dirs`, complete GAMP traversal enumeration,
+  score-window filtering, and exon/intron/splice compatibility are implemented.
   Checked-in generated graph/RAD artifacts remain absent.
 - Phase 3 orientation work supersedes the old strand-mode plan under D042: remove
   `--strand`, preserve target-relative RAD `dirs`, and drop/count mixed-orientation
@@ -273,3 +308,7 @@ approval. Phase 3 work must proceed one independently testable behavior at a tim
   and unsupported raw CB/UMI groups by default and fails strictly under `fail`.
 - 2026-06-30: Phase 3 orientation and raw molecule-identity slice was oracle-reviewed,
   verified locally, and committed as `7396cca`.
+- 2026-06-30: Phase 3 traversal/scoring plus intron/splice compatibility was implemented
+  with build-dir generated RPVG-derived and vg tiny fixtures. Full local VG/alevin-fry
+  tests passed with 95 tests after strict numeric CLI parser coverage was added, and
+  pure tests passed. High-cost oracle re-review passed.

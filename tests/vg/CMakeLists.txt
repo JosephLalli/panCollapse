@@ -191,6 +191,96 @@ set_tests_properties(phase3_n_base_gamp_builder PROPERTIES
   FIXTURES_SETUP phase2_vertical_slice_data)
 
 add_test(
+  NAME phase3_connection_score_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_connection_score.gamp.json > reads_connection_score.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_connection_score_gamp_builder PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_short_gap_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_short_gap.gamp.json > reads_short_gap.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_short_gap_gamp_builder PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_long_gap_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_long_gap.gamp.json > reads_long_gap.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_long_gap_gamp_builder PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_connection_insert_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_connection_insert.gamp.json > reads_connection_insert.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_connection_insert_gamp_builder PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_overhang_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_overhang.gamp.json > reads_overhang.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_overhang_gamp_builder PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_parent_only_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_parent_only.gamp.json > reads_parent_only.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_parent_only_gamp_builder PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_rpvg_xg_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -v rpvg_graph.json > rpvg_graph.vg && $<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> index -x rpvg_graph.xg rpvg_graph.vg"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_rpvg_xg_builder PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_rpvg_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k rpvg_read.gamp.json > rpvg_reads.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_rpvg_gamp_builder PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_tiny_xg_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> construct -m 1000 -r tiny_reference.fa > tiny_graph.vg && $<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> index -x tiny_graph.xg tiny_graph.vg"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_tiny_xg_builder PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_tiny_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k tiny_reads.gamp.json > tiny_reads.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_tiny_gamp_builder PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
   NAME phase2_panCollapse_convert
   COMMAND panCollapse convert
     --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads.gamp"
@@ -452,6 +542,366 @@ add_test(
 set_tests_properties(phase3_n_base_verify PROPERTIES
   LABELS "vg;phase3;molecule-identity"
   FIXTURES_REQUIRED phase3_n_base_rad)
+
+add_test(
+  NAME phase3_connection_score_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_connection_score.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_connection_score.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_multi.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_connection_score"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_connection_score_convert PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_connection_score_rad)
+
+add_test(
+  NAME phase3_connection_score_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    connection-score
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_connection_score")
+set_tests_properties(phase3_connection_score_verify PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase3_connection_score_rad)
+
+add_test(
+  NAME phase3_connection_score_window_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_connection_score.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_connection_score.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_multi.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_connection_score_window"
+    --raw-cb-length 16
+    --raw-umi-length 12
+    --score-window 5)
+set_tests_properties(phase3_connection_score_window_convert PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_connection_score_window_rad)
+
+add_test(
+  NAME phase3_connection_score_window_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    connection-score-window
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_connection_score_window")
+set_tests_properties(phase3_connection_score_window_verify PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase3_connection_score_window_rad)
+
+add_test(
+  NAME phase3_short_gap_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_short_gap.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_gap.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_gap.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_short_gap"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_short_gap_convert PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_short_gap_rad)
+
+add_test(
+  NAME phase3_short_gap_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    short-gap
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_short_gap")
+set_tests_properties(phase3_short_gap_verify PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase3_short_gap_rad)
+
+add_test(
+  NAME phase3_long_gap_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_long_gap.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_gap.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_gap.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_long_gap"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_long_gap_convert PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_long_gap_rad)
+
+add_test(
+  NAME phase3_long_gap_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    long-gap
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_long_gap")
+set_tests_properties(phase3_long_gap_verify PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase3_long_gap_rad)
+
+add_test(
+  NAME phase3_long_gap_min31_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_long_gap.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_gap.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_gap.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_long_gap_min31"
+    --raw-cb-length 16
+    --raw-umi-length 12
+    --min-splice-jump 31)
+set_tests_properties(phase3_long_gap_min31_convert PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_long_gap_min31_rad)
+
+add_test(
+  NAME phase3_long_gap_min31_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    long-gap-min31
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_long_gap_min31")
+set_tests_properties(phase3_long_gap_min31_verify PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase3_long_gap_min31_rad)
+
+add_test(
+  NAME phase3_connection_insert_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_connection_insert.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_connection_insert.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_gap.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_connection_insert"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_connection_insert_convert PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_connection_insert_rad)
+
+add_test(
+  NAME phase3_connection_insert_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    connection-insert
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_connection_insert")
+set_tests_properties(phase3_connection_insert_verify PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase3_connection_insert_rad)
+
+add_test(
+  NAME phase3_overhang_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_overhang.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_edge_cases.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_edge_cases.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_overhang"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_overhang_convert PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_overhang_rad)
+
+add_test(
+  NAME phase3_overhang_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    overhang
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_overhang")
+set_tests_properties(phase3_overhang_verify PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase3_overhang_rad)
+
+add_test(
+  NAME phase3_parent_only_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_parent_only.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation_edge_cases.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse_edge_cases.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_parent_only"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_parent_only_convert PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_parent_only_rad)
+
+add_test(
+  NAME phase3_parent_only_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    parent-only
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_parent_only")
+set_tests_properties(phase3_parent_only_verify PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase3_parent_only_rad)
+
+add_test(
+  NAME phase3_rpvg_convert_default
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/rpvg_reads.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/rpvg_graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/rpvg_annotation.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/rpvg_collapse.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_rpvg_default"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_rpvg_convert_default PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_rpvg_default_rad)
+
+add_test(
+  NAME phase3_rpvg_default_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    rpvg-default
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_rpvg_default")
+set_tests_properties(phase3_rpvg_default_verify PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase3_rpvg_default_rad)
+
+add_test(
+  NAME phase3_rpvg_convert_score_window
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/rpvg_reads.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/rpvg_graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/rpvg_annotation.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/rpvg_collapse.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_rpvg_window"
+    --raw-cb-length 16
+    --raw-umi-length 12
+    --score-window 2)
+set_tests_properties(phase3_rpvg_convert_score_window PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_rpvg_window_rad)
+
+add_test(
+  NAME phase3_rpvg_window_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    rpvg-window
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_rpvg_window")
+set_tests_properties(phase3_rpvg_window_verify PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase3_rpvg_window_rad)
+
+add_test(
+  NAME phase3_rpvg_traversal_cap_failure
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_traversal_cap_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_rpvg_traversal_cap_failure PROPERTIES
+  LABELS "vg;phase3;traversal"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_cli_invalid_score_window_trailing_junk
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_cli_numeric_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    --score-window
+    5junk
+    "--score-window must be an unsigned integer")
+set_tests_properties(phase3_cli_invalid_score_window_trailing_junk PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_cli_invalid_min_splice_trailing_junk
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_cli_numeric_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    --min-splice-jump
+    20x
+    "--min-splice-jump must be an unsigned integer")
+set_tests_properties(phase3_cli_invalid_min_splice_trailing_junk PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_cli_invalid_max_traversals_signed
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_cli_numeric_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    --max-traversals-per-read
+    -1
+    "--max-traversals-per-read must be an unsigned integer")
+set_tests_properties(phase3_cli_invalid_max_traversals_signed PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_cli_invalid_min_splice_zero
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_cli_numeric_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    --min-splice-jump
+    0
+    "min splice jump and max traversals per read must be at least 1")
+set_tests_properties(phase3_cli_invalid_min_splice_zero PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_cli_invalid_max_traversals_zero
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_cli_numeric_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    --max-traversals-per-read
+    0
+    "min splice jump and max traversals per read must be at least 1")
+set_tests_properties(phase3_cli_invalid_max_traversals_zero PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_cli_invalid_raw_cb_signed
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_cli_numeric_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    --raw-cb-length
+    +16
+    "--raw-cb-length must be an unsigned integer")
+set_tests_properties(phase3_cli_invalid_raw_cb_signed PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_cli_invalid_raw_umi_trailing_junk
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/phase3_expect_cli_numeric_failure.sh"
+    "$<TARGET_FILE:panCollapse>"
+    "${PANCOLLAPSE_PHASE2_DIR}"
+    --raw-umi-length
+    12x
+    "--raw-umi-length must be an unsigned integer")
+set_tests_properties(phase3_cli_invalid_raw_umi_trailing_junk PROPERTIES
+  LABELS "vg;phase3;cli"
+  FIXTURES_REQUIRED phase2_vertical_slice_data)
+
+add_test(
+  NAME phase3_tiny_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/tiny_reads.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/tiny_graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/tiny_annotation.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/tiny_collapse.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_tiny"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_tiny_convert PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_tiny_rad)
+
+add_test(
+  NAME phase3_tiny_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    tiny-splice-intron
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_tiny")
+set_tests_properties(phase3_tiny_verify PROPERTIES
+  LABELS "vg;phase3;compatibility"
+  FIXTURES_REQUIRED phase3_tiny_rad)
 
 add_test(
   NAME phase2_alevin_permit

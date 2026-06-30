@@ -291,6 +291,262 @@ def verify_n_base(pc_out: Path) -> None:
         fail(f"unexpected N-base RAD records: refs={refs!r}, records={records!r}")
 
 
+def verify_connection_score(pc_out: Path) -> None:
+    expected_summary = {
+        "input_records": "1",
+        "input_read_groups": "1",
+        "emitted_groups": "1",
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "0",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "score_removed_targets": "1",
+        "traversal_cap_exceeded_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "TX_A\tGENE_A\nTX_B\tGENE_B\n":
+        fail("unexpected connection-score tx2gene.tsv contents")
+    refs, records = read_rad_records(pc_out)
+    if refs != ["TX_A", "TX_B"] or records != [[RAD_FORWARD_MASK]]:
+        fail(f"unexpected connection-score RAD records: refs={refs!r}, records={records!r}")
+
+
+def verify_connection_score_window(pc_out: Path) -> None:
+    expected_summary = {
+        "input_records": "1",
+        "input_read_groups": "1",
+        "emitted_groups": "1",
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "0",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "score_removed_targets": "0",
+        "traversal_cap_exceeded_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "TX_A\tGENE_A\nTX_B\tGENE_B\n":
+        fail("unexpected connection-score-window tx2gene.tsv contents")
+    refs, records = read_rad_records(pc_out)
+    if refs != ["TX_A", "TX_B"] or records != [[RAD_FORWARD_MASK, RAD_FORWARD_MASK | 1]]:
+        fail(f"unexpected connection-score-window RAD records: refs={refs!r}, records={records!r}")
+
+
+def verify_gap_case(pc_out: Path, mode: str) -> None:
+    expected_summary = {
+        "input_records": "1",
+        "input_read_groups": "1",
+        "emitted_groups": "1",
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "0",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "score_removed_targets": "0",
+        "traversal_cap_exceeded_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "TX_A\tGENE_A\nTX_B\tGENE_B\n":
+        fail(f"unexpected {mode} tx2gene.tsv contents")
+    refs, records = read_rad_records(pc_out)
+    if mode in {"short-gap", "long-gap-min31"}:
+        expected_records = [[RAD_FORWARD_MASK, RAD_FORWARD_MASK | 1]]
+    else:
+        expected_records = [[RAD_FORWARD_MASK]]
+    if refs != ["TX_A", "TX_B"] or records != expected_records:
+        fail(f"unexpected {mode} RAD records: refs={refs!r}, records={records!r}")
+
+
+def verify_connection_insert(pc_out: Path) -> None:
+    expected_summary = {
+        "input_records": "1",
+        "input_read_groups": "1",
+        "emitted_groups": "1",
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "0",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "score_removed_targets": "0",
+        "traversal_cap_exceeded_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "TX_A\tGENE_A\nTX_B\tGENE_B\n":
+        fail("unexpected connection-insert tx2gene.tsv contents")
+    refs, records = read_rad_records(pc_out)
+    if refs != ["TX_A", "TX_B"] or records != [[RAD_FORWARD_MASK]]:
+        fail(f"unexpected connection-insert RAD records: refs={refs!r}, records={records!r}")
+
+
+def verify_overhang(pc_out: Path) -> None:
+    expected_summary = {
+        "input_records": "1",
+        "input_read_groups": "1",
+        "emitted_groups": "1",
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "0",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "score_removed_targets": "0",
+        "traversal_cap_exceeded_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "TX_EDGE\tGENE_EDGE\n":
+        fail("unexpected overhang tx2gene.tsv contents")
+    refs, records = read_rad_records(pc_out)
+    if refs != ["TX_EDGE"] or records != [[RAD_FORWARD_MASK]]:
+        fail(f"unexpected overhang RAD records: refs={refs!r}, records={records!r}")
+
+
+def verify_parent_only(pc_out: Path) -> None:
+    expected_summary = {
+        "input_records": "1",
+        "input_read_groups": "1",
+        "emitted_groups": "0",
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "1",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "score_removed_targets": "0",
+        "traversal_cap_exceeded_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "TX_EDGE\tGENE_EDGE\n":
+        fail("unexpected parent-only tx2gene.tsv contents")
+    reader = RadReader(pc_out / "map.rad")
+    is_paired = reader.u8()
+    refs = [reader.string() for _ in range(reader.u64())]
+    num_chunks = reader.u64()
+    reader.tag_section()
+    reader.tag_section()
+    reader.tag_section()
+    file_cblen = reader.u16()
+    file_ulen = reader.u16()
+    if is_paired != 0 or refs != ["TX_EDGE"] or num_chunks != 0:
+        fail(f"unexpected parent-only RAD header: paired={is_paired}, refs={refs!r}, chunks={num_chunks}")
+    if file_cblen != 16 or file_ulen != 12 or reader.offset != len(reader.data):
+        fail("unexpected parent-only RAD file tag values or trailing bytes")
+
+
+def verify_rpvg_default(pc_out: Path) -> None:
+    expected_summary = {
+        "input_records": "1",
+        "input_read_groups": "1",
+        "emitted_groups": "1",
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "0",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "score_removed_targets": "1",
+        "traversal_cap_exceeded_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "tx1\tgene1\ntx2\tgene2\n":
+        fail("unexpected RPVG tx2gene.tsv contents")
+    refs, records = read_rad_records(pc_out)
+    if refs != ["tx1", "tx2"] or records != [[RAD_FORWARD_MASK]]:
+        fail(f"unexpected RPVG default RAD records: refs={refs!r}, records={records!r}")
+
+
+def verify_rpvg_window(pc_out: Path) -> None:
+    expected_summary = {
+        "input_records": "1",
+        "input_read_groups": "1",
+        "emitted_groups": "1",
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "0",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "score_removed_targets": "0",
+        "traversal_cap_exceeded_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "tx1\tgene1\ntx2\tgene2\n":
+        fail("unexpected RPVG score-window tx2gene.tsv contents")
+    refs, records = read_rad_records(pc_out)
+    if refs != ["tx1", "tx2"] or records != [[RAD_FORWARD_MASK, RAD_FORWARD_MASK | 1]]:
+        fail(f"unexpected RPVG score-window RAD records: refs={refs!r}, records={records!r}")
+
+
+def verify_tiny_splice_intron(pc_out: Path) -> None:
+    expected_summary = {
+        "input_records": "6",
+        "input_read_groups": "6",
+        "emitted_groups": "6",
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "0",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "score_removed_targets": "0",
+        "traversal_cap_exceeded_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "transcript1\tgene\ntranscript2\tgene\n":
+        fail("unexpected tiny tx2gene.tsv contents")
+    refs, records = read_rad_records(pc_out)
+    expected_records = [
+        [RAD_FORWARD_MASK, RAD_FORWARD_MASK | 1],
+        [RAD_FORWARD_MASK, RAD_FORWARD_MASK | 1],
+        [RAD_FORWARD_MASK, RAD_FORWARD_MASK | 1],
+        [RAD_FORWARD_MASK, RAD_FORWARD_MASK | 1],
+        [RAD_FORWARD_MASK],
+        [RAD_FORWARD_MASK | 1],
+    ]
+    if refs != ["transcript1", "transcript2"] or records != expected_records:
+        fail(f"unexpected tiny RAD records: refs={refs!r}, records={records!r}")
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 3 or argv[1] not in {
         "two-groups",
@@ -300,10 +556,23 @@ def main(argv: list[str]) -> int:
         "bad-molecule-skip",
         "reverse-path",
         "n-base",
+        "connection-score",
+        "connection-score-window",
+        "short-gap",
+        "long-gap",
+        "long-gap-min31",
+        "connection-insert",
+        "overhang",
+        "parent-only",
+        "rpvg-default",
+        "rpvg-window",
+        "tiny-splice-intron",
     }:
         fail(
             "usage: phase3_grouping_verify.py "
-            "two-groups|multi-target|multi-target-quant|no-compatible|bad-molecule-skip|reverse-path|n-base PATH"
+            "two-groups|multi-target|multi-target-quant|no-compatible|bad-molecule-skip|reverse-path|"
+            "n-base|connection-score|connection-score-window|short-gap|long-gap|long-gap-min31|"
+            "connection-insert|overhang|parent-only|rpvg-default|rpvg-window|tiny-splice-intron PATH"
         )
     if argv[1] == "two-groups":
         verify_two_groups(Path(argv[2]))
@@ -317,8 +586,26 @@ def main(argv: list[str]) -> int:
         verify_bad_molecule_skip(Path(argv[2]))
     elif argv[1] == "reverse-path":
         verify_reverse_path(Path(argv[2]))
-    else:
+    elif argv[1] == "n-base":
         verify_n_base(Path(argv[2]))
+    elif argv[1] == "connection-score":
+        verify_connection_score(Path(argv[2]))
+    elif argv[1] == "connection-score-window":
+        verify_connection_score_window(Path(argv[2]))
+    elif argv[1] in {"short-gap", "long-gap", "long-gap-min31"}:
+        verify_gap_case(Path(argv[2]), argv[1])
+    elif argv[1] == "connection-insert":
+        verify_connection_insert(Path(argv[2]))
+    elif argv[1] == "overhang":
+        verify_overhang(Path(argv[2]))
+    elif argv[1] == "parent-only":
+        verify_parent_only(Path(argv[2]))
+    elif argv[1] == "rpvg-default":
+        verify_rpvg_default(Path(argv[2]))
+    elif argv[1] == "rpvg-window":
+        verify_rpvg_window(Path(argv[2]))
+    else:
+        verify_tiny_splice_intron(Path(argv[2]))
     return 0
 
 
