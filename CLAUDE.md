@@ -38,6 +38,7 @@ an index, not the full manual; read detailed files only when working in their ar
 | Biological semantics | `docs/compatibility-semantics.md` |
 | Decisions and open forks | `docs/decisions.md` |
 | Acceptance criteria | `docs/validation-contract.md` |
+| Medium-scale known-truth RAD fixture plan | `docs/testing_fixture_creation.md` |
 | Task plan | `TASKS.md` |
 | Current state | `PROGRESS.md` |
 | Resolved human product decisions | `.agent-workspace/USER_DECISIONS.md` |

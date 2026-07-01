@@ -192,6 +192,12 @@ The sections below preserve the original fixture-extraction brief as source inve
 future-work guidance. They are not active deliverables for the current committed slice
 unless they are explicitly listed above under "panCollapse integration status".
 
+For the medium-scale RAD-level fixture and performance/pilot work, use
+`docs/testing_fixture_creation.md`. That plan covers the curated pangenome fixture that
+generates about 50,000 BEERS2 reads with known origins, aligned GAMP, independent truth
+tables, and expected RAD records. It is the reference for the medium-scale known-truth
+dataset; this file remains the source inventory for small RPVG/vg fixture extraction.
+
 First, clone or inspect the following repositories:
 
 ```text

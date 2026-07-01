@@ -26,6 +26,7 @@ This file is intentionally short; load detailed documents only when relevant.
 | Settled decisions and open forks | `docs/decisions.md` |
 | Validation and acceptance criteria | `docs/validation-contract.md` |
 | Phase 2 vertical-slice plan | `docs/phase2/implementation-plan.md` |
+| Medium-scale known-truth RAD fixture plan | `docs/testing_fixture_creation.md` |
 | Staged implementation plan | `TASKS.md` |
 | Current state | `PROGRESS.md` |
 | Delegation policy | `.agent-workspace/ORCHESTRATION.md` |

@@ -102,6 +102,9 @@ must be independently checkable against fixtures.
 After correctness:
 
 - define a bounded real-data slice;
+- use `docs/testing_fixture_creation.md` as the medium-scale known-truth RAD fixture plan:
+  approximately 50,000 BEERS2-generated reads from a pangenome fixture, with expected RAD
+  records computed independently from fixture truth rather than from panCollapse output;
 - record throughput, peak memory, target-set size distribution, and annotation-lookup
   cost;
 - compare one versus multiple threads if threading is implemented;

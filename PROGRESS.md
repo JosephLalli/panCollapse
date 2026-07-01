@@ -82,6 +82,9 @@ independently testable behavior at a time.
   boundary, deterministic writer model, diagnostics, alternatives, and Phase 1 plan.
 - `docs/decisions.md` — proposed D023-D034 resolving Phase 0 forks and superseding broad
   VG/path-only wording.
+- `docs/testing_fixture_creation.md` — medium-scale known-truth RAD fixture plan for about
+  50,000 BEERS2-generated reads from a pangenome fixture, with independent expected RAD
+  records for panCollapse output comparison.
 
 ## Phase 1 artifacts
 
@@ -369,3 +372,6 @@ independently testable behavior at a time.
 - 2026-06-30: Added direct Phase 3 manifest/collapse validation fixtures. Local manifest
   label passed and full local VG/alevin-fry suite passed with 110 tests after addressing
   first-pass oracle findings; high-cost oracle re-review passed.
+- 2026-06-30: Added `docs/testing_fixture_creation.md` to the local documentation index as
+  the medium-scale known-truth RAD fixture plan: about 50,000 BEERS2 reads from a
+  pangenome fixture with independently computed expected RAD records.

@@ -150,7 +150,9 @@ After Gate Vertical Slice Proven, add one independently testable behavior at a t
 - name-grouping validation;
 - diagnostics and summary metrics, including `--molecule-identity-failures skip|fail`
   and raw molecule-identity skip counters;
-- larger pilot and performance characterization.
+- larger pilot and performance characterization. The medium-scale known-truth RAD fixture
+  plan is `docs/testing_fixture_creation.md`: generate about 50,000 BEERS2 reads from a
+  pangenome fixture with independently computed expected RAD records.
 
 Any proposal to add a custom lookup index is a separate decision requiring measured
 bottleneck evidence and human approval.
