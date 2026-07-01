@@ -21,6 +21,7 @@ add_executable(phase2_fixture_writer phase2_fixture_writer.cpp)
 
 set(PANCOLLAPSE_PROJECTION_SMOKE_DIR "${CMAKE_CURRENT_BINARY_DIR}/projection_smoke_work")
 set(PANCOLLAPSE_PHASE2_DIR "${CMAKE_CURRENT_BINARY_DIR}/phase2_vertical_slice_work")
+set(PANCOLLAPSE_MEDIUM_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/phase3_medium_fixture_work")
 
 add_test(
   NAME gamp_projection_fixture_writer
@@ -1185,3 +1186,53 @@ add_test(
 set_tests_properties(phase3_multi_target_quant_verify PROPERTIES
   LABELS "vg;phase3;orientation;alevin-fry"
   FIXTURES_REQUIRED phase3_multi_target_quant)
+
+add_test(
+  NAME phase3_medium_fixture_generate
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_medium_fixture_generate.py"
+    "${PANCOLLAPSE_MEDIUM_FIXTURE_DIR}")
+set_tests_properties(phase3_medium_fixture_generate PROPERTIES
+  LABELS "vg;phase3;medium-fixture"
+  FIXTURES_SETUP phase3_medium_fixture_sources)
+
+add_test(
+  NAME phase3_medium_xg_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> convert -g graph.gfa -x > graph.xg"
+  WORKING_DIRECTORY "${PANCOLLAPSE_MEDIUM_FIXTURE_DIR}")
+set_tests_properties(phase3_medium_xg_builder PROPERTIES
+  LABELS "vg;phase3;medium-fixture"
+  FIXTURES_REQUIRED phase3_medium_fixture_sources
+  FIXTURES_SETUP phase3_medium_fixture_graph)
+
+add_test(
+  NAME phase3_medium_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k reads.gamp.json > reads.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_MEDIUM_FIXTURE_DIR}")
+set_tests_properties(phase3_medium_gamp_builder PROPERTIES
+  LABELS "vg;phase3;medium-fixture"
+  FIXTURES_REQUIRED phase3_medium_fixture_sources
+  FIXTURES_SETUP phase3_medium_fixture_gamp)
+
+add_test(
+  NAME phase3_medium_panCollapse_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_MEDIUM_FIXTURE_DIR}/reads.gamp"
+    --xg "${PANCOLLAPSE_MEDIUM_FIXTURE_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_MEDIUM_FIXTURE_DIR}/annotation.gtf"
+    --collapse-manifest "${PANCOLLAPSE_MEDIUM_FIXTURE_DIR}/collapse.tsv"
+    --out-dir "${PANCOLLAPSE_MEDIUM_FIXTURE_DIR}/pc_medium"
+    --raw-cb-length 16
+    --raw-umi-length 12
+    --score-window 3)
+set_tests_properties(phase3_medium_panCollapse_convert PROPERTIES
+  LABELS "vg;phase3;medium-fixture"
+  FIXTURES_REQUIRED "phase3_medium_fixture_graph;phase3_medium_fixture_gamp"
+  FIXTURES_SETUP phase3_medium_fixture_rad)
+
+add_test(
+  NAME phase3_medium_rad_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_medium_fixture_verify.py"
+    "${PANCOLLAPSE_MEDIUM_FIXTURE_DIR}")
+set_tests_properties(phase3_medium_rad_verify PROPERTIES
+  LABELS "vg;phase3;medium-fixture"
+  FIXTURES_REQUIRED phase3_medium_fixture_rad)

@@ -40,6 +40,14 @@ Validation stops at the RAD file. Do not run or validate:
 The expected output is calculated before panCollapse is run. The expected RAD records
 must not be derived from panCollapse output.
 
+Current implementation note: the repository has a medium artificial-GAMP regression under
+`tests/vg/phase3_medium_fixture_generate.py` and
+`tests/vg/phase3_medium_fixture_verify.py`. It creates 50,000 read groups, FASTQ,
+GFA/XG, GTF, collapse manifest, JSON GAMP converted to binary GAMP with `vg view`,
+panCollapse RAD output, and an independent semantic RAD comparison. This is a fallback
+RAD-level regression because BEERS2 is not installed in the current workspace; it does not
+replace the preferred BEERS2 plus `vg mpmap` path above.
+
 ## 2. Scope
 
 This document defines instructions for a project-wide agent to create a RAD-level test
@@ -1203,6 +1211,12 @@ pinned reference inputs
 ```
 
 This phase proves interfaces before scaling to the 50,000-read fixture.
+
+The current checked-in medium regression exercises the downstream half of this interface
+with artificial GAMP rather than `vg mpmap`: reviewed GAMP JSON is converted to binary
+GAMP, then panCollapse output is compared against an independently generated semantic RAD
+truth table. It is useful for RAD semantics and scale, but it does not prove mapper
+stability from FASTQ through `vg mpmap`.
 
 ### Phase 3: Required curated cases and 50,000-read fixture
 

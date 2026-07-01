@@ -12,6 +12,7 @@ coverage/
 *.profdata
 *.gcda
 *.gcno
+__pycache__/
 
 # Generated data and local indexes
 /work/

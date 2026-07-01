@@ -2,8 +2,8 @@
 
 ## Current phase
 
-**Phase 3 manifest/collapse validation evidence is locally verified, oracle-reviewed,
-and committed.**
+**Phase 3 medium artificial-GAMP RAD semantic fixture is locally implemented and
+verified.**
 
 Production source now exists for the approved Phase 2 vertical slice and the selected
 Phase 3 orientation, molecule-identity, traversal/scoring, and intron/splice
@@ -14,6 +14,9 @@ max-score source collapse, no score summing across collapsed sources, missing ma
 rows, contradictory rows, and canonical-gene conflicts. No public panCollapse headers or
 checked-in generated fixtures, GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have
 been created; generated graph/RAD artifacts remain confined to ignored build directories.
+The medium fixture currently uses artificial GAMP generated from reviewed JSON because
+BEERS2 is not installed locally; it is a 50,000-read-group RAD semantic regression, not
+the final BEERS2 plus `vg mpmap` primary fixture.
 
 ## Settled product decisions
 
@@ -60,9 +63,9 @@ been created; generated graph/RAD artifacts remain confined to ignored build dir
 
 ## Next action
 
-Proceed with approved single-thread Phase 3 work: medium-scale known-truth RAD fixture
-planning/implementation, streaming RAD-to-disk writing, and stdin GAMP streaming research
-before any production threading surface.
+Proceed with explicit human review of the RAD chunk-count policy discovered during medium
+fixture implementation, then continue toward the preferred BEERS2 plus `vg mpmap`
+medium-fixture path when BEERS2 is pinned/installed.
 
 ## Required stop
 
@@ -323,6 +326,12 @@ independently testable behavior at a time.
 - Phase 3 orientation work supersedes the old strand-mode plan under D042: remove
   `--strand`, preserve target-relative RAD `dirs`, and drop/count mixed-orientation
   evidence for one emitted target.
+- Medium artificial-GAMP RAD semantic coverage now generates 50,000 read groups, FASTQ,
+  GFA/XG, GTF, collapse manifest, JSON GAMP converted to binary GAMP, expected semantic
+  RAD rows, expected non-emitted rows, and panCollapse RAD. It verifies exact target sets,
+  top-score retention, score-window retention of a lower-scoring target, target-relative
+  forward/reverse `dirs`, mixed-orientation drops, no-compatible drops, summary counters,
+  `tx2gene.tsv`, and RAD record semantics.
 - D043 adds the active raw molecule-identity failure policy:
   `--molecule-identity-failures skip|fail`, default `skip`, with
   `raw_molecule_missing_groups`, `raw_molecule_malformed_groups`,
@@ -330,6 +339,11 @@ independently testable behavior at a time.
 - The all-dropped mixed-orientation diagnostic fixture is not an alevin-fry
   interoperability fixture. Local alevin-fry rejects no-chunk RAD files, so nonempty
   forward and reverse orientation fixtures carry the current alevin-fry proof.
+- A local implementation experiment confirmed the same conflict for populated RAD:
+  libradicl can represent unknown chunk count as `num_chunks = 0`, but local alevin-fry
+  v0.15.0 `generate-permit-list` rejects populated `num_chunks = 0` input as no chunks.
+  The current production writer remains exact-count/backpatched-style until the user
+  approves how to reconcile D045 with the supported alevin-fry path.
 
 ## Session log
 
@@ -383,3 +397,9 @@ independently testable behavior at a time.
   stdin GAMP streaming from `vg mpmap` into panCollapse as a future interface direction to
   research. User also approved streaming RAD-to-disk output with `num_chunks = 0` and
   complete chunks emitted incrementally.
+- 2026-07-01: Added the medium artificial-GAMP RAD semantic fixture. The local full suite
+  passed with `ctest --test-dir build --output-on-failure -j 8` at 115/115 tests.
+  `git diff --check` and `./scripts/verify-workspace.sh` also passed before commit.
+  High-cost oracle review returned PASS WITH RISKS: no blocking findings, with the
+  remaining BEERS2 plus `vg mpmap` path and RAD chunk-count policy conflict called out
+  for human review.

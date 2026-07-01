@@ -157,6 +157,10 @@ After Gate Vertical Slice Proven, add one independently testable behavior at a t
 - larger pilot and performance characterization. The medium-scale known-truth RAD fixture
   plan is `docs/testing_fixture_creation.md`: generate about 50,000 BEERS2 reads from a
   pangenome fixture with independently computed expected RAD records.
+  Current local coverage includes a 50,000-read-group artificial-GAMP medium regression
+  that generates FASTQ, XG, GTF, collapse manifest, binary GAMP, panCollapse RAD, and an
+  independent semantic RAD comparison. It does not replace the preferred BEERS2 plus
+  `vg mpmap` path.
 
 PanCollapse-side multithreading is deferred for now by D045. Do not add `--threads` or
 worker-thread execution unless a later human-approved decision restores it.
