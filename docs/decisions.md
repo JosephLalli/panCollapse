@@ -710,6 +710,39 @@ hides mapper-side placement failure; splitting it out preserves the signal while
 the aggregate contract intact. Product-spec Section 12 lists the required counters as "at
 least," so an additive counter is contract-compatible and needs no spec change.
 
+### D047 — GAMP-to-RAD bridge scope and human-pangenome GAMP-driven fixture
+
+**Decision source:** User.
+
+**Decision:** panCollapse is scoped as a bridge from GAMP files to linear-genome RNA
+count tools, with alevin-fry as the proof-of-concept downstream consumer. The
+FASTQ -> `vg mpmap` alignment step is out of scope: panCollapse does not own it and the
+fixtures do not test it. Read simulation and `vg mpmap` matter only as one way to obtain a
+realistic GAMP input; a sufficient GAMP simulation is equally acceptable for fixtures.
+
+**Decision:** The production-applicability validation fixture must be generated from the
+human pangenome (the pinned MHC `sampleA` spliced bundle in
+`docs/testing_fixture_creation.md`), not only toy graphs, so coverage reflects production
+RNA-seq graphs.
+
+**Decision:** The RAD oracle is GAMP-driven. Given a GAMP file plus the `.xg`, GTF, and
+collapse manifest, the expected RAD is computed independently of panCollapse by applying
+the documented projection, compatibility, collapse, scoring, and orientation rules
+directly to the GAMP records. Expected RAD is not derived from upstream read origins and
+never from panCollapse output.
+
+**Decision:** D047 supersedes the BEERS2-plus-`vg mpmap` "primary path" framing and the
+"artificial GAMP must never be the primary fixture" rule previously in
+`docs/testing_fixture_creation.md`. BEERS2 and `vg mpmap` remain optional realistic
+read/GAMP generators, not required interfaces, and the former mapping-stability rule is
+retired because the GAMP is now the tested input with no upstream origin to reconcile.
+
+**Rationale:** The user clarified that panCollapse's contract is GAMP -> RAD for downstream
+linear-genome RNA counting. What must be proven is that a realistic human-pangenome GAMP
+is converted to exactly the correct RAD. Whether the GAMP came from real `vg mpmap` or a
+sufficient simulation does not change that contract, so the fixture oracle is anchored on
+the GAMP itself.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

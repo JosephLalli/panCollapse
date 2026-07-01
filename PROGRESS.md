@@ -14,9 +14,12 @@ max-score source collapse, no score summing across collapsed sources, missing ma
 rows, contradictory rows, and canonical-gene conflicts. No public panCollapse headers or
 checked-in generated fixtures, GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have
 been created; generated graph/RAD artifacts remain confined to ignored build directories.
-The medium fixture currently uses artificial GAMP generated from reviewed JSON because
-BEERS2 is not installed locally; it is a 50,000-read-group RAD semantic regression, not
-the final BEERS2 plus `vg mpmap` primary fixture.
+The existing medium fixture uses artificial GAMP generated from reviewed JSON; it is a
+50,000-read-group toy-graph RAD semantic regression that remains valid. Per D047 the
+production-applicability fixture is now the human-pangenome GAMP-to-RAD plan in
+`docs/testing_fixture_creation.md` (pinned MHC `sampleA` spliced bundle, GAMP-driven
+independent oracle), which supersedes the earlier BEERS2-plus-`vg mpmap` "primary path"
+framing.
 
 ## Settled product decisions
 
@@ -63,9 +66,12 @@ the final BEERS2 plus `vg mpmap` primary fixture.
 
 ## Next action
 
-Proceed with explicit human review of the RAD chunk-count policy discovered during medium
-fixture implementation, then continue toward the preferred BEERS2 plus `vg mpmap`
-medium-fixture path when BEERS2 is pinned/installed.
+Two independent threads are open. (1) Human review of the RAD chunk-count policy conflict
+(D045 streaming `num_chunks = 0` versus local alevin-fry v0.15.0 rejecting populated
+`num_chunks = 0`); the writer stays exact-count until reconciled. (2) Under D047, build the
+human-pangenome GAMP-to-RAD fixture in `docs/testing_fixture_creation.md`, starting with
+the smoke slice (a handful of MHC read groups through GAMP -> independent oracle ->
+panCollapse -> exact comparison) before scaling.
 
 ## Required stop
 
@@ -432,3 +438,11 @@ independently testable behavior at a time.
   not prove the FASTQ -> `vg mpmap` -> GAMP mapper interface, which still needs a real-
   mpmap fixture (direct template slicing recommended over full BEERS2 for the strict
   oracle).
+- 2026-07-01: User rescoped panCollapse as a GAMP -> RAD bridge (D047): FASTQ -> `vg mpmap`
+  is out of scope, the production-applicability fixture must come from the human pangenome
+  (pinned MHC `sampleA` spliced bundle), and the RAD oracle is GAMP-driven and independent
+  of panCollapse output. Rewrote `docs/testing_fixture_creation.md` from the ~1500-line
+  BEERS2-plus-`vg mpmap` plan to a 208-line human-pangenome GAMP-to-RAD plan, retiring the
+  "artificial GAMP must never be primary" and mapping-stability rules. Verified all eight
+  pinned MHC source files exist with sizes matching the recorded `size_bytes`. Docs-only
+  change; no production code touched. Not yet committed.
