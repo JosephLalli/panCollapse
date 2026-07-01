@@ -326,12 +326,20 @@ independently testable behavior at a time.
 - Phase 3 orientation work supersedes the old strand-mode plan under D042: remove
   `--strand`, preserve target-relative RAD `dirs`, and drop/count mixed-orientation
   evidence for one emitted target.
-- Medium artificial-GAMP RAD semantic coverage now generates 50,000 read groups, FASTQ,
-  GFA/XG, GTF, collapse manifest, JSON GAMP converted to binary GAMP, expected semantic
-  RAD rows, expected non-emitted rows, and panCollapse RAD. It verifies exact target sets,
-  top-score retention, score-window retention of a lower-scoring target, target-relative
-  forward/reverse `dirs`, mixed-orientation drops, no-compatible drops, summary counters,
-  `tx2gene.tsv`, and RAD record semantics.
+- Medium artificial-GAMP RAD semantic coverage now generates 50,000 read groups (77,500
+  input records) across a four-node/four-path graph, FASTQ, GFA/XG, GTF, collapse
+  manifest, JSON GAMP converted to binary GAMP, expected semantic RAD rows, expected
+  non-emitted rows, and panCollapse RAD. Its scaled case mix now exercises multi-gene and
+  multi-isoform overlap, unique single-target emission, two source paths collapsing to one
+  canonical target `TX_H` with an equal-score companion `TX_B` that proves no score
+  summing, collapse to a single canonical target, top-score retention with score-window
+  removal, target-relative forward/reverse `dirs`, mixed-orientation drops, no-compatible
+  drops, unaligned read groups, and a malformed raw molecule-identity skip. It verifies
+  exact target sets and per-target orientation, the alphabetical RAD target dictionary,
+  every Section 12 counter, `tx2gene.tsv`, and RAD record semantics, and a coarse
+  `TIMEOUT` guards the convert against catastrophic throughput regressions. It remains an
+  artificial-GAMP regression and does not exercise the FASTQ -> `vg mpmap` -> GAMP mapper
+  path.
 - D043 adds the active raw molecule-identity failure policy:
   `--molecule-identity-failures skip|fail`, default `skip`, with
   `raw_molecule_missing_groups`, `raw_molecule_malformed_groups`,
@@ -412,3 +420,15 @@ independently testable behavior at a time.
   `no_compatible_transcript_groups`. Added a name-only GAMP fixture, the
   `phase3_unaligned_*` builder/convert/verify CTest chain, and the `verify_unaligned`
   check. The local full suite passed at 118/118 tests and the pure suite passed.
+- 2026-07-01: Reviewed the artificial-GAMP medium fixture for throughput, multimapping,
+  and required-representation coverage, then extended it (no aligner) per user direction.
+  The scaled mix now adds many-source->one-canonical collapse with a no-score-summing
+  companion, collapse-to-single-target, unique single-target emission, unaligned groups,
+  and a malformed molecule-identity skip, growing the graph to four nodes/paths and
+  77,500 input records. A first oracle version mispredicted the malformed case as
+  unsupported (`N` is a supported molecule base, `main.cpp:410`); corrected to a
+  wrong-length UMI. Added a coarse `TIMEOUT` throughput guard on the convert. Full local
+  suite passed at 118/118 and pure passed. The fixture remains artificial GAMP and does
+  not prove the FASTQ -> `vg mpmap` -> GAMP mapper interface, which still needs a real-
+  mpmap fixture (direct template slicing recommended over full BEERS2 for the strict
+  oracle).

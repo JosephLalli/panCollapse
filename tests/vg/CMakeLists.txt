@@ -1260,7 +1260,8 @@ add_test(
 set_tests_properties(phase3_medium_panCollapse_convert PROPERTIES
   LABELS "vg;phase3;medium-fixture"
   FIXTURES_REQUIRED "phase3_medium_fixture_graph;phase3_medium_fixture_gamp"
-  FIXTURES_SETUP phase3_medium_fixture_rad)
+  FIXTURES_SETUP phase3_medium_fixture_rad
+  TIMEOUT 60)
 
 add_test(
   NAME phase3_medium_rad_verify

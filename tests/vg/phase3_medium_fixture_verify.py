@@ -124,7 +124,7 @@ def read_rad_records(path: Path) -> tuple[list[str], Counter[tuple[str, str, tup
 
     if is_paired != 0:
         fail("medium fixture expects single-end RAD")
-    if refs != ["TX_A", "TX_A_ALT", "TX_B"]:
+    if refs != ["TX_A", "TX_A_ALT", "TX_B", "TX_H"]:
         fail(f"unexpected RAD target dictionary: {refs!r}")
     if file_values != {"cblen": 16, "ulen": 12}:
         fail(f"unexpected RAD file tag values: {file_values!r}")
@@ -192,7 +192,7 @@ def main(argv: list[str]) -> int:
             fail(f"summary {key} expected {expected!r}, saw {actual!r}")
 
     tx2gene = (pc_out / "tx2gene.tsv").read_text()
-    if tx2gene != "TX_A\tGENE_A\nTX_A_ALT\tGENE_A_ALT\nTX_B\tGENE_B\n":
+    if tx2gene != "TX_A\tGENE_A\nTX_A_ALT\tGENE_A_ALT\nTX_B\tGENE_B\nTX_H\tGENE_H\n":
         fail(f"unexpected tx2gene.tsv contents: {tx2gene!r}")
 
     _refs, observed = read_rad_records(pc_out / "map.rad")
@@ -206,8 +206,8 @@ def main(argv: list[str]) -> int:
         )
 
     expected_non_emitted_lines = (work_dir / "expected_non_emitted.tsv").read_text().splitlines()
-    if len(expected_non_emitted_lines) != 5_001:
-        fail(f"expected 5,000 non-emitted read groups, saw {len(expected_non_emitted_lines) - 1}")
+    if len(expected_non_emitted_lines) != 15_001:
+        fail(f"expected 15,000 non-emitted read groups, saw {len(expected_non_emitted_lines) - 1}")
     names_from_truth = expected_read_names(work_dir / "expected_rad_records.tsv", work_dir / "expected_non_emitted.tsv")
     names_from_fastq = fastq_read_names(work_dir / "reads.fastq")
     if names_from_truth != names_from_fastq or len(names_from_fastq) != 50_000:
