@@ -170,6 +170,7 @@ def main(argv: list[str]) -> int:
                 f"emitted_groups\t{emitted_groups}",
                 f"mixed_orientation_dropped_groups\t{mixed_orientation_dropped_groups}",
                 f"no_compatible_transcript_groups\t{no_compatible_transcript_groups}",
+                "unaligned_reads\t0",
                 "raw_molecule_missing_groups\t0",
                 "raw_molecule_malformed_groups\t0",
                 "raw_molecule_unsupported_groups\t0",

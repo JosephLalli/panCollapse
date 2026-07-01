@@ -99,6 +99,8 @@ the default, while `fail` makes those conditions fatal.
   deferred.
 - streaming RAD-to-disk writing: `num_chunks = 0`, file-tag values, and complete chunks
   emitted incrementally to `map.rad` without retaining the whole RAD file in memory.
+- GAMP read groups with only empty-subpath records are treated as unaligned input: they
+  emit no RAD record and increment `unaligned_reads`.
 
 Conceptually, each emitted read record contains `bc`, `umi`, `refs`, and `dirs`. `refs`
 is the read's target compatibility set, not genomic coordinates. `dirs` is parallel to
@@ -120,7 +122,7 @@ The final CLI should write or expose:
   (`16` and `12` by default in Phase 2);
 - target dictionary and transcript-to-gene mapping provenance;
 - a run summary with counts from Section 12 of the product spec, including groups dropped
-  for mixed target-relative orientations;
+  for mixed target-relative orientations and read groups skipped as unaligned;
 - version/build information;
 - explicit input file identities or checksums when practical;
 - warnings and rejected-read reasons suitable for tests.
@@ -147,3 +149,7 @@ the GAMP name field. They must be counted and become fatal under strict molecule
 handling. The stable counters are `raw_molecule_missing_groups`,
 `raw_molecule_malformed_groups`, `raw_molecule_unsupported_groups`, and
 `raw_molecule_skipped_groups`.
+
+Unaligned GAMP read groups are not molecule-identity failures. If every record in the
+group has zero subpaths, panCollapse emits no RAD record, counts the group under both
+`no_compatible_transcript_groups` and `unaligned_reads`, and continues.

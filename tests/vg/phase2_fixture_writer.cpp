@@ -287,6 +287,9 @@ int main(int argc, char** argv) {
                         "{\"node_id\":1,\"offset\":10,\"is_reverse\":false},\"edit\":"
                         "[{\"from_length\":20,\"to_length\":20}],\"rank\":1}]},\"score\":40}]}\n");
 
+        write_text_file(work_dir / "read_unaligned.gamp.json",
+                        "{\"name\":\"read024_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\"}\n");
+
         write_text_file(work_dir / "read_revpath.gamp.json",
                         "{\"name\":\"read012_AAACCCAAGTTTGGGA_AAAAAAAAAAAA\",\"start\":[0],"
                         "\"subpath\":[{\"path\":{\"mapping\":[{\"position\":"

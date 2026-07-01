@@ -687,6 +687,29 @@ boundary is settled. The local libradicl v0.13.0 reader confirms that header
 panCollapse does not need to build the whole RAD file in memory or backpatch the final
 chunk count for the active disk-output path.
 
+### D046 — Unaligned read-group diagnostic counter
+
+**Decision source:** User (approved landing an interrupted in-flight increment).
+
+**Decision:** A GAMP read group whose records all carry zero subpaths is treated as
+unaligned input. panCollapse emits no RAD record for it, counts it under both
+`no_compatible_transcript_groups` and the stable counter `unaligned_reads`, and continues.
+
+**Decision:** `unaligned_reads` is an additive subset of `no_compatible_transcript_groups`,
+not a replacement. The aggregate no-compatible-transcript count from product-spec Section 12
+still includes unaligned groups, so existing summaries and fixtures remain valid.
+
+**Decision:** Unaligned groups are not raw molecule-identity failures. The
+`raw_molecule_*` counters and the `--molecule-identity-failures skip|fail` policy from D043
+are unaffected, because the group is dropped for lack of any alignment, not for a CB/UMI
+parse or encoding problem.
+
+**Rationale:** `vg mpmap` emits a `MultipathAlignment` with an empty `subpath` list for a
+read it cannot place. Folding that case into the general no-compatible-transcript bucket
+hides mapper-side placement failure; splitting it out preserves the signal while keeping
+the aggregate contract intact. Product-spec Section 12 lists the required counters as "at
+least," so an additive counter is contract-compatible and needs no spec change.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

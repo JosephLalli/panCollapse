@@ -336,6 +336,9 @@ independently testable behavior at a time.
   `--molecule-identity-failures skip|fail`, default `skip`, with
   `raw_molecule_missing_groups`, `raw_molecule_malformed_groups`,
   `raw_molecule_unsupported_groups`, and `raw_molecule_skipped_groups`.
+- D046 adds the `unaligned_reads` counter: read groups whose GAMP records all have zero
+  subpaths emit no RAD record and increment `unaligned_reads` additively alongside
+  `no_compatible_transcript_groups`, without being treated as molecule-identity failures.
 - The all-dropped mixed-orientation diagnostic fixture is not an alevin-fry
   interoperability fixture. Local alevin-fry rejects no-chunk RAD files, so nonempty
   forward and reverse orientation fixtures carry the current alevin-fry proof.
@@ -403,3 +406,9 @@ independently testable behavior at a time.
   High-cost oracle review returned PASS WITH RISKS: no blocking findings, with the
   remaining BEERS2 plus `vg mpmap` path and RAD chunk-count policy conflict called out
   for human review.
+- 2026-07-01: Landed the unaligned read-group diagnostic (D046) that a prior interrupted
+  session left uncommitted. A GAMP read group whose records all have zero subpaths emits
+  no RAD record and increments the additive `unaligned_reads` counter alongside
+  `no_compatible_transcript_groups`. Added a name-only GAMP fixture, the
+  `phase3_unaligned_*` builder/convert/verify CTest chain, and the `verify_unaligned`
+  check. The local full suite passed at 118/118 tests and the pure suite passed.

@@ -124,6 +124,8 @@ struct ReadGroupState {
     std::string molecule_message;
     std::map<uint32_t, TargetEvidence> target_evidence;
     size_t traversal_count = 0;
+    bool saw_unaligned_record = false;
+    bool saw_subpath_record = false;
 };
 
 struct Traversal {
@@ -918,6 +920,7 @@ int run_convert(int argc, char** argv) {
     size_t mixed_orientation_dropped_groups = 0;
     size_t grouping_recurrence_failures = 0;
     size_t no_compatible_transcript_groups = 0;
+    size_t unaligned_reads = 0;
     size_t raw_molecule_missing_groups = 0;
     size_t raw_molecule_malformed_groups = 0;
     size_t raw_molecule_unsupported_groups = 0;
@@ -977,6 +980,9 @@ int run_convert(int argc, char** argv) {
         }
         if (current_group.target_evidence.empty()) {
             ++no_compatible_transcript_groups;
+            if (current_group.saw_unaligned_record && !current_group.saw_subpath_record) {
+                ++unaligned_reads;
+            }
             completed_names.insert(current_group.name);
             have_group = false;
             return;
@@ -1025,6 +1031,11 @@ int run_convert(int argc, char** argv) {
     };
 
     auto update_group = [&](vg::MultipathAlignment& alignment) {
+        if (alignment.subpath_size() == 0) {
+            current_group.saw_unaligned_record = true;
+            return;
+        }
+        current_group.saw_subpath_record = true;
         for (const Traversal& traversal :
              enumerate_traversals(alignment, current_group.traversal_count, options.max_traversals_per_read)) {
             const ProjectedTraversal projected_traversal = project_traversal(alignment, traversal, graph);
@@ -1082,6 +1093,7 @@ int run_convert(int argc, char** argv) {
                         std::to_string(input_read_groups) + "\nemitted_groups\t" + std::to_string(emitted_records.size()) +
                         "\nmixed_orientation_dropped_groups\t" + std::to_string(mixed_orientation_dropped_groups) +
                         "\nno_compatible_transcript_groups\t" + std::to_string(no_compatible_transcript_groups) +
+                        "\nunaligned_reads\t" + std::to_string(unaligned_reads) +
                         "\nraw_molecule_missing_groups\t" + std::to_string(raw_molecule_missing_groups) +
                         "\nraw_molecule_malformed_groups\t" + std::to_string(raw_molecule_malformed_groups) +
                         "\nraw_molecule_unsupported_groups\t" + std::to_string(raw_molecule_unsupported_groups) +

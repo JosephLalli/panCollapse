@@ -102,6 +102,7 @@ counters, but these names must remain unambiguous.
 | `raw_molecule_unsupported_groups` | raw CB/UMI contains an unsupported base for RAD encoding | success unless strict |
 | `grouping_recurrence_failures` | a completed read name appears again later | hard failure |
 | `no_compatible_transcript_groups` | groups with no compatible transcript after projection | success |
+| `unaligned_reads` | read groups whose GAMP records contain no subpaths and therefore emit no RAD record | success |
 | `mixed_orientation_dropped_groups` | groups dropped because an emitted target has mixed target-relative orientations | success |
 | `score_removed_targets` | compatible targets removed by score-window filtering | success |
 | `manifest_missing_source_identities` | compatible source identities missing manifest rows | hard failure |

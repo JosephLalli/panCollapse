@@ -156,6 +156,15 @@ set_tests_properties(phase3_no_compatible_gamp_builder PROPERTIES
   FIXTURES_SETUP phase2_vertical_slice_data)
 
 add_test(
+  NAME phase3_unaligned_gamp_builder
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_unaligned.gamp.json > reads_unaligned.gamp"
+  WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
+set_tests_properties(phase3_unaligned_gamp_builder PROPERTIES
+  LABELS "vg;phase3;orientation"
+  FIXTURES_REQUIRED phase2_vertical_slice_sources
+  FIXTURES_SETUP phase2_vertical_slice_data)
+
+add_test(
   NAME phase3_bad_molecule_gamp_builder
   COMMAND /bin/sh -c "$<SHELL_PATH:${PANCOLLAPSE_VG_ROOT}/bin/vg> view -J -K -k read_bad_molecule.gamp.json > reads_bad_molecule.gamp"
   WORKING_DIRECTORY "${PANCOLLAPSE_PHASE2_DIR}")
@@ -568,6 +577,30 @@ add_test(
 set_tests_properties(phase3_no_compatible_verify PROPERTIES
   LABELS "vg;phase3;orientation"
   FIXTURES_REQUIRED phase3_no_compatible_rad)
+
+add_test(
+  NAME phase3_unaligned_convert
+  COMMAND panCollapse convert
+    --gamp "${PANCOLLAPSE_PHASE2_DIR}/reads_unaligned.gamp"
+    --xg "${PANCOLLAPSE_PHASE2_DIR}/graph.xg"
+    --gtf "${PANCOLLAPSE_PHASE2_DIR}/annotation.gtf"
+    --collapse-manifest "${PANCOLLAPSE_PHASE2_DIR}/collapse.tsv"
+    --out-dir "${PANCOLLAPSE_PHASE2_DIR}/pc_unaligned"
+    --raw-cb-length 16
+    --raw-umi-length 12)
+set_tests_properties(phase3_unaligned_convert PROPERTIES
+  LABELS "vg;phase3;orientation"
+  FIXTURES_REQUIRED phase2_vertical_slice_data
+  FIXTURES_SETUP phase3_unaligned_rad)
+
+add_test(
+  NAME phase3_unaligned_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/phase3_grouping_verify.py"
+    unaligned
+    "${PANCOLLAPSE_PHASE2_DIR}/pc_unaligned")
+set_tests_properties(phase3_unaligned_verify PROPERTIES
+  LABELS "vg;phase3;orientation"
+  FIXTURES_REQUIRED phase3_unaligned_rad)
 
 add_test(
   NAME phase3_bad_molecule_skip_convert

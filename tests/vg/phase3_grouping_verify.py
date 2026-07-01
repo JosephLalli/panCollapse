@@ -212,6 +212,7 @@ def verify_no_compatible(pc_out: Path) -> None:
         "emitted_groups": "0",
         "mixed_orientation_dropped_groups": "0",
         "no_compatible_transcript_groups": "1",
+        "unaligned_reads": "0",
         "raw_molecule_missing_groups": "0",
         "raw_molecule_malformed_groups": "0",
         "raw_molecule_unsupported_groups": "0",
@@ -237,6 +238,41 @@ def verify_no_compatible(pc_out: Path) -> None:
         fail(f"unexpected no-compatible RAD header: paired={is_paired}, refs={refs!r}, chunks={num_chunks}")
     if file_cblen != 16 or file_ulen != 12 or reader.offset != len(reader.data):
         fail("unexpected no-compatible RAD file tag values or trailing bytes")
+
+
+def verify_unaligned(pc_out: Path) -> None:
+    expected_summary = {
+        "input_records": "1",
+        "input_read_groups": "1",
+        "emitted_groups": "0",
+        "mixed_orientation_dropped_groups": "0",
+        "no_compatible_transcript_groups": "1",
+        "unaligned_reads": "1",
+        "raw_molecule_missing_groups": "0",
+        "raw_molecule_malformed_groups": "0",
+        "raw_molecule_unsupported_groups": "0",
+        "raw_molecule_skipped_groups": "0",
+        "grouping_recurrence_failures": "0",
+    }
+    summary = read_summary(pc_out / "summary.tsv")
+    for key, expected in expected_summary.items():
+        if summary.get(key) != expected:
+            fail(f"summary {key} expected {expected!r}, saw {summary.get(key)!r}")
+    if (pc_out / "tx2gene.tsv").read_text() != "TX_A\tGENE_A\n":
+        fail("unexpected tx2gene.tsv contents")
+    reader = RadReader(pc_out / "map.rad")
+    is_paired = reader.u8()
+    refs = [reader.string() for _ in range(reader.u64())]
+    num_chunks = reader.u64()
+    reader.tag_section()
+    reader.tag_section()
+    reader.tag_section()
+    file_cblen = reader.u16()
+    file_ulen = reader.u16()
+    if is_paired != 0 or refs != ["TX_A"] or num_chunks != 0:
+        fail(f"unexpected unaligned RAD header: paired={is_paired}, refs={refs!r}, chunks={num_chunks}")
+    if file_cblen != 16 or file_ulen != 12 or reader.offset != len(reader.data):
+        fail("unexpected unaligned RAD file tag values or trailing bytes")
 
 
 def verify_bad_molecule_skip(pc_out: Path) -> None:
@@ -585,6 +621,7 @@ def main(argv: list[str]) -> int:
         "collapse-shared-no-sum",
         "multi-target-quant",
         "no-compatible",
+        "unaligned",
         "bad-molecule-skip",
         "reverse-path",
         "n-base",
@@ -603,7 +640,7 @@ def main(argv: list[str]) -> int:
         fail(
             "usage: phase3_grouping_verify.py "
             "two-groups|multi-target|collapse-shared-max|collapse-shared-no-sum|multi-target-quant|"
-            "no-compatible|bad-molecule-skip|reverse-path|n-base|connection-score|connection-score-window|"
+            "no-compatible|unaligned|bad-molecule-skip|reverse-path|n-base|connection-score|connection-score-window|"
             "short-gap|long-gap|long-gap-min31|connection-insert|overhang|parent-only|rpvg-default|"
             "rpvg-window|tiny-splice-intron PATH"
         )
@@ -619,6 +656,8 @@ def main(argv: list[str]) -> int:
         verify_multi_target_quant(Path(argv[2]))
     elif argv[1] == "no-compatible":
         verify_no_compatible(Path(argv[2]))
+    elif argv[1] == "unaligned":
+        verify_unaligned(Path(argv[2]))
     elif argv[1] == "bad-molecule-skip":
         verify_bad_molecule_skip(Path(argv[2]))
     elif argv[1] == "reverse-path":
