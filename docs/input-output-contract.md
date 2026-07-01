@@ -94,7 +94,11 @@ the default, while `fail` makes those conditions fatal.
   zero-based target IDs into the RAD header;
 - one orientation value for every emitted target ID;
 - no transcript likelihood weights and no splicing-state target labels in V1;
-- byte-identical output for identical inputs/configuration across supported thread counts.
+- byte-identical output for identical inputs/configuration across supported execution
+  modes. The active converter is single-threaded under D045; multithreaded execution is
+  deferred.
+- streaming RAD-to-disk writing: `num_chunks = 0`, file-tag values, and complete chunks
+  emitted incrementally to `map.rad` without retaining the whole RAD file in memory.
 
 Conceptually, each emitted read record contains `bc`, `umi`, `refs`, and `dirs`. `refs`
 is the read's target compatibility set, not genomic coordinates. `dirs` is parallel to
@@ -132,6 +136,11 @@ Hard failure is expected for:
 - annotation/index identity mismatches that invalidate assignments;
 - inability to encode standards-conformant RAD;
 - traversal cap overflow.
+
+Future stdin support, if approved, must accept the same binary GAMP stream semantics as
+file input and preserve the same grouping and recurrence validation. A future stdout RAD
+mode is not part of the active CLI; if approved later, stdout must contain only binary RAD
+data and logs/progress must go to stderr.
 
 Skippable per-read conditions are missing, malformed, or unsupported raw CB/UMI values in
 the GAMP name field. They must be counted and become fatal under strict molecule-identity

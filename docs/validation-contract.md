@@ -89,8 +89,10 @@ A tiny fixture must prove:
 5. RAD `cblen` and `ulen` match the configured raw CB and UMI lengths; Phase 2 asserts
    `cblen=16` and `ulen=12`.
 6. no USA/splicing-state rows are emitted in V1.
-7. Phase 2 uses one thread; repeated runs across supported thread counts are a Phase 3
-   and final V1 acceptance requirement.
+7. Phase 2 uses one thread. D045 defers multithreaded execution; future supported
+   execution modes must still prove deterministic byte-identical output.
+8. RAD output uses streaming-to-disk framing with header `num_chunks = 0`, then decodes
+   successfully through the supported libradicl/alevin-fry path.
 
 ## 8. Failure and diagnostics
 
@@ -107,6 +109,8 @@ After correctness:
   records computed independently from fixture truth rather than from panCollapse output;
 - record throughput, peak memory, target-set size distribution, and annotation-lookup
   cost;
-- compare one versus multiple threads if threading is implemented;
+- compare one versus multiple threads only if threading is later restored;
+- evaluate direct `vg mpmap` to panCollapse stdin streaming while keeping RAD output on
+  the approved streaming-to-disk path;
 - do not add a custom index unless the measured lookup cost is material and a human
   approves the design change.

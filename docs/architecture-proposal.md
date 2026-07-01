@@ -110,8 +110,7 @@ panCollapse convert \
   [--min-splice-jump N] \
   [--max-traversals-per-read N] \
   [--raw-cb-length N] \
-  [--raw-umi-length N] \
-  [--threads N]
+  [--raw-umi-length N]
 ```
 
 panCollapse does not expose a strand-filtering option; library-orientation filtering is
@@ -120,7 +119,8 @@ values panCollapse preserves. Defaults: `--assignment all`, `--score-window 0`,
 `--min-splice-jump 20`,
 `--max-traversals-per-read 100000`, `--raw-cb-length 16`, `--raw-umi-length 12`, and
 deterministic single-writer output. Tag-source and tag-name overrides are not part of the
-active V1 barcode/UMI source contract.
+active V1 barcode/UMI source contract. D045 defers a `--threads` production surface for
+now.
 
 ## Data flow
 
@@ -245,8 +245,8 @@ The RAD schema is fixed:
 
 - no magic/version prefix;
 - header: `is_paired` u8 set to 0, `ref_count` u64 little-endian, each reference name as
-  u16 little-endian length plus bytes, and `num_chunks` u64 little-endian placeholder
-  backpatched on close;
+  u16 little-endian length plus bytes, and `num_chunks` u64 little-endian set to `0`
+  for unknown chunk count;
 - three tag sections immediately after the header, in order: file, read, alignment;
 - each tag section is `u16 num_tags`, then for each tag `u16 tag_name_len`, tag bytes,
   and `u8 type_id`; array type ID 7 additionally writes one length type ID byte and one
@@ -276,8 +276,8 @@ significant bits; `N` is encoded as A=00 for parity with alevin-fry conversion. 
 selected from length 1..4 -> U8, 5..8 -> U16, 9..16 -> U32, and 17..32 -> U64. Lengths
 greater than 32 are unsupported in V1. Raw CB/UMI length mismatch against the configured
 lengths is a skippable raw-identity failure by default and fatal under
-`--molecule-identity-failures fail`. Chunks are emitted in deterministic order;
-`num_chunks` is exact and backpatched.
+`--molecule-identity-failures fail`. Chunks are emitted in deterministic order to
+`out/map.rad`; only the current chunk needs buffering before it is written.
 
 For every retained target, panCollapse must emit both a `ref_id` and a direction bit.
 libradicl decodes the high bit into `dirs[i]` and the lower 31 bits into `refs[i]`;
@@ -293,9 +293,17 @@ values.
 ## Determinism and threading
 
 The target dictionary is sorted by canonical transcript ID. Read-group order follows the
-input GAMP group stream. Parallel workers may compute groups, but the RAD writer commits
-results strictly by group sequence. Chunks are assembled in that sequence with no
-concurrent appends. Logs and summary stats must be stable across supported thread counts.
+input GAMP group stream. Current active work remains single-threaded under D045. If a
+future decision restores worker-thread execution, parallel workers must compute complete
+read groups and a single RAD writer must commit results strictly by group sequence.
+Chunks must be assembled in that sequence with no concurrent appends, and logs/summary
+stats must remain stable across supported execution modes.
+
+D045 also opens a future interface question: panCollapse may be used as a stdin consumer
+for `vg mpmap` GAMP output. RAD output itself should use the streaming-to-disk approach:
+write `num_chunks = 0`, file-tag values, and complete chunks incrementally. Do not add a
+stdout RAD-output CLI unless a later decision approves it; any such mode must keep binary
+RAD on stdout and logs/progress on stderr.
 
 ## Diagnostics and failures
 
@@ -345,8 +353,9 @@ barcode fixtures are superseded by the raw read-name barcode source decision for
 
 RAD validation must include a tiny end-to-end `alevin-fry generate-permit-list`,
 `collate`, and `quant` run using `out/map.rad` and `out/tx2gene.tsv`, with an exact
-expected gene matrix. Phase 2 performs this proof with one thread; byte-identical outputs
-across supported thread counts are deferred to Phase 3 and final V1 acceptance.
+expected gene matrix. Phase 2 performs this proof with one thread. D045 defers
+panCollapse-side multithreading; any future supported execution modes must satisfy
+byte-identical output acceptance criteria before implementation.
 
 ## Risks for gate review
 
@@ -359,4 +368,5 @@ across supported thread counts are deferred to Phase 3 and final V1 acceptance.
 - Target-relative RAD direction must be derived from path projection semantics, not from
   arbitrary graph-node orientation or synthetic all-forward encoding.
 - Projection multiplicity may dominate runtime on dense graphs; the pilot thresholds
-  above define when to reopen the no-custom-index decision.
+  above define when to reopen the no-custom-index decision. D045 defers panCollapse-side
+  multithreading while stdin GAMP streaming is researched.

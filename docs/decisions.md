@@ -295,14 +295,20 @@ three tag sections. Records are `u32 naln`, encoded CB, encoded UMI, then `naln`
 forward and `ref_id` for reverse. Bases pack as A=00, C=01, G=10, T=11, with N treated
 as A, and the last base in least significant bits. Widths are length 1..4 -> U8, 5..8 ->
 U16, 9..16 -> U32, 17..32 -> U64, and >32 unsupported in V1. Chunk `nbytes` includes the
-8-byte chunk header, `nrec`, and records; `num_chunks` is exact/backpatched.
+8-byte chunk header, `nrec`, and records. Active `num_chunks` handling is defined by
+D045.
+
+Supersession note: D045 sets active panCollapse output to write `num_chunks = 0` and emit
+chunks incrementally; seek-and-backpatch remains a valid external RAD writer strategy but
+is not the active panCollapse disk-output path.
 
 **Decision:** V1 writes `output_dir/map.rad` and `output_dir/tx2gene.tsv`, sorts and
-deduplicates target IDs per read, encodes all retained hits as forward, and recommends
-downstream `alevin-fry generate-permit-list --expected-ori fw`. This orientation is
-synthetic and means the hit survived panCollapse's strand policy, not that original
-mapper orientation was forward. If original orientation is preserved later, downstream
-orientation mode must be revisited.
+deduplicates target IDs per read. Active orientation policy is defined by D042:
+panCollapse does not filter by library strand and writes actual target-relative
+orientation into RAD `dirs`.
+
+Supersession note: D042 replaces the earlier synthetic-forward orientation policy that
+was originally paired with D029.
 
 **Rationale:** The fixed schema is small enough to own directly, while external tools
 remain the interoperability checks that matter.
@@ -554,10 +560,8 @@ ID.
 
 **Decision:** Every emitted target ID must have a corresponding orientation value.
 Direction must be target-level RAD metadata and must not be derived from arbitrary graph
-node orientation. The current D029 V1 policy still encodes all retained targets as
-synthetic forward after panCollapse strand filtering; changing to preserved
-target-relative orientation requires a later human-approved decision because it affects
-the downstream `--expected-ori` workflow.
+node orientation. Supersession note: D042 replaces D040's earlier synthetic-forward
+policy; active panCollapse preserves actual target-relative orientation in RAD `dirs`.
 
 **Rationale:** alevin-fry uses `dirs` during expected-orientation filtering in
 permit-list generation and collation, while `refs` drives target-to-gene evidence through
@@ -645,6 +649,43 @@ uniqueness-policy removal counters.
 
 **Rationale:** RAD output should carry compatibility evidence for downstream tools rather
 than prefiltering to transcript- or gene-unique evidence inside panCollapse.
+
+### D045 — Defer panCollapse multithreading and use streaming RAD-to-disk
+
+**Decision source:** User.
+
+**Decision:** For now, defer panCollapse-side multithreading. The active converter remains
+single-threaded and should not add or implement a `--threads` production surface without a
+later explicit approval.
+
+**Decision:** Treat direct GAMP streaming from `vg mpmap` to panCollapse stdin as a future
+interface direction to investigate. The possible shape is that `vg mpmap` streams binary
+GAMP to panCollapse, panCollapse consumes and groups the stream, and panCollapse writes
+RAD output incrementally.
+
+**Decision:** Write `map.rad` to disk using a streaming RAD writer. The writer emits the
+prelude/header with `num_chunks = 0`, which libradicl treats as an unknown chunk count,
+then emits file-tag values and one complete chunk at a time. Only the current chunk needs
+buffering so its byte count and record count can be written in the chunk header.
+
+**Decision:** Do not add a stdout RAD-output production CLI in this change. If a later
+human-approved decision adds `--output -`, stdout must carry only binary RAD data and all
+logs/progress must go to stderr. Direct live piping into current alevin-fry commands is
+not assumed.
+
+**Decision:** D045 narrows the current Phase 3 implementation path relative to D021 and
+D039. D021's byte-identical threaded-output requirement remains historical/future V1
+context, but current active work should prioritize the single-threaded converter,
+medium-scale known-truth RAD fixture, and stdin-streaming design research rather than
+adding worker threads.
+
+**Rationale:** The user identified that panCollapse may be more useful as a streaming
+consumer of `vg mpmap` alignments than as a multithreaded postprocessor. Deferring
+threads avoids committing to a concurrency architecture before the preferred process
+boundary is settled. The local libradicl v0.13.0 reader confirms that header
+`num_chunks = 0` means the chunk count is unknown and chunks are read until EOF, so
+panCollapse does not need to build the whole RAD file in memory or backpatch the final
+chunk count for the active disk-output path.
 
 ## Architecture questions and Phase 0 resolution map
 

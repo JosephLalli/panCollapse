@@ -150,9 +150,16 @@ After Gate Vertical Slice Proven, add one independently testable behavior at a t
 - name-grouping validation;
 - diagnostics and summary metrics, including `--molecule-identity-failures skip|fail`
   and raw molecule-identity skip counters;
+- stdin GAMP streaming research: assess direct `vg mpmap | panCollapse` operation and
+  preserve the same grouping and recurrence checks as file input;
+- streaming RAD-to-disk writer: write `num_chunks = 0`, file-tag values, and complete
+  chunks incrementally without retaining the whole RAD file in memory;
 - larger pilot and performance characterization. The medium-scale known-truth RAD fixture
   plan is `docs/testing_fixture_creation.md`: generate about 50,000 BEERS2 reads from a
   pangenome fixture with independently computed expected RAD records.
+
+PanCollapse-side multithreading is deferred for now by D045. Do not add `--threads` or
+worker-thread execution unless a later human-approved decision restores it.
 
 Any proposal to add a custom lookup index is a separate decision requiring measured
 bottleneck evidence and human approval.

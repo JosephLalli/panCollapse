@@ -200,9 +200,11 @@ dictionary, not genomic coordinates. Orientation values are target-level RAD met
 consumed by alevin-fry's expected-orientation filtering.
 
 The exact RAD header, record fields, orientation encoding, chunking, and metadata are
-external contracts to verify from current primary sources during Phase 0. For identical
-inputs and configuration, RAD and companion artifacts must be byte-identical regardless
-of thread count.
+defined by the supported alevin-fry/libradicl baseline. Current active V1 execution is
+single-threaded under D045, and `map.rad` should be written to disk incrementally with
+`num_chunks = 0` and complete chunks. If future supported execution modes include
+multiple worker threads or direct `vg mpmap` stdin streaming, RAD and companion artifacts
+must remain byte-identical for identical inputs and configuration.
 
 ## 12. Diagnostics
 
@@ -245,6 +247,6 @@ The V1 product is complete only when:
   score, target-relative orientation, all-mode RAD assignment, and deferred assignment
   option failures are tested;
 - performance is characterized on a bounded pilot;
-- deterministic-output tests prove byte-identical artifacts across supported thread
-  counts;
+- deterministic-output tests prove byte-identical artifacts across supported execution
+  modes;
 - no custom index or deferred splicing-state behavior has entered the implementation.

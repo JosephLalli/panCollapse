@@ -51,6 +51,12 @@ byte-identical regardless of thread count.
 D039 defers multithreading and thread-count byte comparison out of Phase 2 and into
 Phase 3.
 
+D045 further defers panCollapse-side multithreading for now. The current active converter
+remains single-threaded; direct stdin streaming from `vg mpmap` to panCollapse is a future
+interface direction to research before adding worker-thread execution. RAD output should
+be written to disk with a streaming writer using `num_chunks = 0` and complete chunks
+emitted incrementally.
+
 ## Phase 2 strand scope
 
 D041 limits Phase 2 execution to `--strand sense`. `--strand antisense` and

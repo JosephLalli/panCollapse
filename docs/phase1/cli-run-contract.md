@@ -35,9 +35,11 @@ panCollapse convert \
   [--score-window N] \
   [--min-splice-jump N] \
   [--max-traversals-per-read N] \
-  [--molecule-identity-failures skip|fail] \
-  [--threads N]
+  [--molecule-identity-failures skip|fail]
 ```
+
+D045 defers panCollapse-side multithreading; `--threads` is not an active production CLI
+surface unless a later human-approved decision restores it.
 
 ## Required Inputs
 
@@ -61,7 +63,6 @@ converter inputs after GAMP exists.
 | `--min-splice-jump` | `20` | integer `>= 1` |
 | `--max-traversals-per-read` | `100000` | integer `>= 1` |
 | `--molecule-identity-failures` | `skip` | `skip` or `fail` |
-| `--threads` | implementation-defined default | integer `>= 1`; output must remain byte-identical across supported values |
 
 Historical Phase 1 tag-selection options are superseded by D038 and D043; they are not
 part of the active V1 CLI unless a later human-approved decision restores them.

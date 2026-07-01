@@ -45,8 +45,9 @@ Pass only when:
 - the supported alevin-fry version consumes the output;
 - the exact expected gene matrix is produced;
 - build and tests are reproducible;
-- Phase 2 single-threaded output is reproducible; multithreaded byte comparison is a
-  Phase 3 gate item;
+- Phase 2 single-threaded output is reproducible; D045 defers panCollapse-side
+  multithreading, and any future supported execution modes must get byte-comparison
+  acceptance criteria before implementation;
 - implementation review finds no hidden scope expansion.
 
 ## Later increments

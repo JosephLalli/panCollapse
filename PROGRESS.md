@@ -51,20 +51,24 @@ been created; generated graph/RAD artifacts remain confined to ignored build dir
 - GAMP-to-RAD output uses all-compatible-target assignment. `all` is the default and only
   active RAD assignment behavior; `unique-transcript`, `unique-gene`, and
   `starsolo-default` are deferred to-be-implemented modes outside active RAD conversion.
-- Final V1 output must be byte-identical across supported thread counts. Phase 2 is
-  single-threaded; multithreading and thread-count byte comparison are deferred to
-  Phase 3.
+- The active converter remains single-threaded for now. D045 defers panCollapse-side
+  multithreading and redirects future interface research toward streaming GAMP from
+  `vg mpmap` into panCollapse over stdin.
+- RAD output should be written to disk with a streaming writer: `num_chunks = 0`, file
+  tag values, then complete chunks emitted incrementally.
 - License: Apache-2.0.
 
 ## Next action
 
-Obtain explicit human approval for the next Phase 3 implementation design decision before
-broadening production code.
+Proceed with approved single-thread Phase 3 work: medium-scale known-truth RAD fixture
+planning/implementation, streaming RAD-to-disk writing, and stdin GAMP streaming research
+before any production threading surface.
 
 ## Required stop
 
-Do not broaden production code into threading, pilot instrumentation, or any remaining
-Phase 3 behavior without explicit human approval. Phase 3 work must proceed one
+Do not broaden production code into multithreading without a later explicit approval.
+Treat stdin GAMP streaming as research/design work until its input interface is verified.
+Do not add stdout RAD output unless separately approved. Phase 3 work must proceed one
 independently testable behavior at a time.
 
 ## Phase 0 artifacts
@@ -375,3 +379,7 @@ independently testable behavior at a time.
 - 2026-06-30: Added `docs/testing_fixture_creation.md` to the local documentation index as
   the medium-scale known-truth RAD fixture plan: about 50,000 BEERS2 reads from a
   pangenome fixture with independently computed expected RAD records.
+- 2026-07-01: User deferred panCollapse-side multithreading for now and identified direct
+  stdin GAMP streaming from `vg mpmap` into panCollapse as a future interface direction to
+  research. User also approved streaming RAD-to-disk output with `num_chunks = 0` and
+  complete chunks emitted incrementally.

@@ -27,7 +27,9 @@ Wire order:
 - `is_paired`: `u8`.
 - `ref_count`: `u64`.
 - For each target: `u16 name_len` followed by name bytes.
-- `num_chunks`: `u64`, exact and backpatched after writing chunks.
+- `num_chunks`: `u64`; active panCollapse writing sets this to `0`, which libradicl
+  treats as unknown and reads until EOF. A seekable writer may instead backpatch the exact
+  final count, but that is not required for the active streaming-to-disk path.
 - Three tag sections in order: file, read, alignment.
 - File tag values immediately after the three tag sections.
 - Chunks.
@@ -93,7 +95,8 @@ Chunk:
 - `u32 nbytes`, including the 8-byte chunk header.
 - `u32 nrec`.
 - Then record bytes.
-- Header `num_chunks` must exactly match the number of written chunks.
+- Header `num_chunks = 0` is valid for unknown chunk count; libradicl reads chunks until
+  EOF. If a writer uses a nonzero value, that value is the known chunk count.
 
 ## Target dictionary and equivalence classes
 
@@ -107,6 +110,13 @@ Chunk:
 Implement a native minimal C++ writer for this fixed `RnaShort` schema. Use
 libradicl and alevin-fry as validation oracles instead of importing a mapper or
 general writer stack into panCollapse.
+
+The active writer should stream `map.rad` to disk: write the prelude/header with
+`num_chunks = 0`, write the three tag sections and file-tag values, then write complete
+chunks incrementally. Only the current chunk needs buffering so its `nbytes` and `nrec`
+can be emitted in the chunk header. The existing libradicl writer also supports the
+conventional seek-and-backpatch path for seekable outputs, but panCollapse does not need
+that path for active V1 disk output.
 
 Under D042, V1 encodes retained transcript hits with their preserved target-relative
 orientation: forward hits set the high bit and reverse hits leave it unset. Downstream
@@ -149,6 +159,12 @@ policy accepted the hit; panCollapse does not apply that policy in the active V1
 - Chunk framing:
   `/mnt/ssd/lalli/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libradicl-0.13.0/src/chunk.rs:145-157`,
   `:169-224`.
+- Unknown chunk-count handling:
+  `/mnt/ssd/lalli/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libradicl-0.13.0/src/header.rs:68-72`,
+  `/mnt/ssd/lalli/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libradicl-0.13.0/src/readers.rs:742-762`,
+  `:791-812`.
+- Seekable writer backpatching:
+  `/mnt/ssd/lalli/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libradicl-0.13.0/src/writers.rs:135-155`.
 - `--expected-ori` CLI mapping:
   `/mnt/ssd/lalli/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/alevin-fry-0.15.0/src/main.rs:93-104`,
   `:288-315`;
@@ -163,7 +179,8 @@ policy accepted the hit; panCollapse does not apply that policy in the active V1
    - sorted, deduplicated transcript hits with explicit forward and reverse orientation
      cases.
 2. Decode with `alevin-fry view` or libradicl and assert header tags, file
-   values, packed barcode/UMI values, chunk counts, and target IDs.
+   values, packed barcode/UMI values, `num_chunks = 0` unknown-count handling, and target
+   IDs.
 3. Run the installed alevin-fry v0.15.0 pipeline:
 
 ```bash

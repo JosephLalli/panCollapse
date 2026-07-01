@@ -25,7 +25,7 @@ choices.
 | D3 | User | panCollapse extracts the uncorrected raw cell barcode and raw UMI from the GAMP name field and writes those observed/raw values to RAD. panCollapse does not correct cell barcodes or UMIs. alevin-fry performs permit-list construction/cell-barcode correction and UMI deduplication/resolution during quantification. |
 | D4 | User | Phase 2 fixtures are generated under the build directory only. Synthetic GFA, GTF, manifest, and JSON GAMP inputs are converted with local `vg` tools as needed; generated XG/GAMP/RAD files are not checked in. |
 | D5 | User | Phase 2 is single-threaded. Multithreading is deferred to Phase 3. |
-| D6 | User | Byte-identical output comparison across thread counts is deferred to Phase 3. |
+| D6 | User | Byte-identical output comparison across thread counts is deferred out of Phase 2; D045 further defers panCollapse-side multithreading until later approval. |
 | D7 | User | USA output is not a Phase 2 feature. Phase 2 uses a two-column transcript-to-gene map and asserts a 1-cell x 1-gene matrix with `GENE_A=1`. USA output is developed only when unspliced target generation enters scope. |
 | D8 | User | Phase 2 uses `--raw-cb-length 16` and `--raw-umi-length 12`. The fixture read name is `read000_AAACCCAAGTTTGGGA_AAAAAAAAAAAA`, with raw CB `AAACCCAAGTTTGGGA` and raw UMI `AAAAAAAAAAAA`. |
 | D9 | User | Update the active product, input/output, architecture, validation, progress, decisions, and glossary docs to state raw read-name CB/UMI extraction, and mark older tag-centric Phase 1 barcode assumptions as superseded for V1. |

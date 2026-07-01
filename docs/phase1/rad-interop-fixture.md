@@ -5,8 +5,9 @@ It is a contract for the future writer and fixture generator; no binary RAD fixt
 checked in during Phase 1.
 
 Supersession note: D039 narrows Phase 2 RAD interoperability to one single-threaded
-1-cell x 1-gene vertical slice. Thread-count byte comparison remains a Phase 3/final V1
-requirement.
+1-cell x 1-gene vertical slice. D045 further defers panCollapse-side multithreading; any
+future supported execution modes, including stdin GAMP streaming if approved, must get
+byte-comparison acceptance criteria before implementation.
 
 Supersession note: D042 removes synthetic all-forward orientation as an active V1 policy.
 This tiny fixture may still use forward target-relative mappings, but future orientation
@@ -44,6 +45,7 @@ Classic mapper-style uncollated `RnaShort`:
 - `is_paired=0`
 - `cblen=16`
 - `ulen=10`
+- header `num_chunks=0` to exercise streaming unknown-count RAD output
 - read tags `b:U32` and `u:U32`
 - alignment tag `compressed_ori_refid:U32`
 - one chunk with `nrec=3`
@@ -105,5 +107,6 @@ Column names must not contain `-U`, `-S`, or `-A` state suffixes.
 - `generate-permit-list`, `collate`, and `quant` all complete successfully.
 - `tx2gene.tsv` covers every transcript in the RAD header.
 - Quantification emits gene-level rows only, with no splicing-state labels.
-- Repeated panCollapse runs with supported thread counts must produce byte-identical RAD
-  and companion artifacts before V1 can pass final acceptance.
+- Repeated panCollapse runs in the active single-threaded mode must produce
+  byte-identical RAD and companion artifacts. Any future supported execution modes must
+  satisfy the same byte-identical output requirement before implementation.
