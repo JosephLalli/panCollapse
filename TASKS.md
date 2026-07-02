@@ -135,35 +135,25 @@ an implementation review against the contract.
 
 ---
 
-## Phase 3 — Complete V1 behavior
+## Phase 3 — Complete V1 behavior (D048 algorithm)
 
-After Gate Vertical Slice Proven, add one independently testable behavior at a time:
+The GAMP-to-RAD core is specified in `docs/conversion-algorithm.md` and governed by D048.
+Build one independently testable increment at a time:
 
-- multipath traversal and score aggregation;
-- intronic and boundary compatibility;
-- target-relative RAD orientation: remove the Phase 2 `--strand` surface, preserve
-  forward and reverse orientation in `dirs`, drop/count mixed-orientation evidence for
-  the same emitted target, and verify downstream alevin-fry behavior with focused tests;
-- manifest collapse;
-- all-compatible-target RAD assignment surface, with deferred uniqueness modes returning
-  to-be-implemented errors;
-- name-grouping validation;
-- diagnostics and summary metrics, including `--molecule-identity-failures skip|fail`
-  and raw molecule-identity skip counters;
-- stdin GAMP streaming research: assess direct `vg mpmap | panCollapse` operation and
-  preserve the same grouping and recurrence checks as file input;
-- streaming RAD-to-disk writer: write `num_chunks = 0`, file-tag values, and complete
-  chunks incrementally without retaining the whole RAD file in memory;
-- larger pilot and performance characterization. The medium-scale known-truth RAD fixture
-  plan is `docs/testing_fixture_creation.md`: generate about 50,000 BEERS2 reads from a
-  pangenome fixture with independently computed expected RAD records.
-  Current local coverage includes a 50,000-read-group artificial-GAMP medium regression
-  that generates FASTQ, XG, GTF, collapse manifest, binary GAMP, panCollapse RAD, and an
-  independent semantic RAD comparison. It does not replace the preferred BEERS2 plus
-  `vg mpmap` path.
+1. Reproduce vg's per-node alignment score from the `Mapping` edits; accept when per-node
+   sums equal `Subpath.score` on real GAMP subpaths.
+2. Attribute each node's score to the HST paths crossing it; collapse HST names to unique
+   transcript IDs.
+3. Select winners: the single top HST score across all of a read's alignments, plus ties.
+4. Record per-transcript orientation from the read's direction along the HST path, using the
+   majority of aligned bases on disagreement, into RAD `dirs`.
+5. Emit `map.rad` (streaming writer) and `tx2gene.tsv` from the t2g; verify alevin-fry
+   consumption.
+6. Human-pangenome MHC fixture (`docs/testing_fixture_creation.md`): slice HPRC v1.1 GRCh38,
+   build the spliced/HST graph with `vg rna`, simulate reads, map to GAMP, and compare RAD
+   against the independent GAMP-driven oracle.
 
-PanCollapse-side multithreading is deferred for now by D045. Do not add `--threads` or
-worker-thread execution unless a later human-approved decision restores it.
-
-Any proposal to add a custom lookup index is a separate decision requiring measured
-bottleneck evidence and human approval.
+The converter stays single-threaded (D045). Do not reintroduce traversal enumeration, a
+runtime GTF projection, or a custom index without a new human-approved decision. Direct
+`vg mpmap | panCollapse` stdin streaming and the streaming RAD-to-disk writer remain on the
+roadmap.

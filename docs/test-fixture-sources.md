@@ -1,3 +1,11 @@
+> **Fixture semantics superseded by D048.** The implemented fixture families listed under
+> "panCollapse integration status" (exon/intron/junction compatibility, connection-arc splice
+> checks, `--min-splice-jump`, `--score-window`, collapse manifest) were built for the
+> pre-D048 GTF-projection algorithm. The active GAMP-to-RAD algorithm is
+> `docs/conversion-algorithm.md`: compatibility is HST-path node membership scored under
+> vg's own per-node scheme. New fixtures must target that model. This file is preserved as
+> fixture inventory and extraction guidance.
+
 # Fixture Source Inventory and Integration Status
 
 ## Original objective

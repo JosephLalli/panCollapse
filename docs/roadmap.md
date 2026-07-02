@@ -37,6 +37,6 @@ Transcriptome BAM and BUS are separate backends, not interchangeable representat
 
 ## Deferred optimization idea
 
-If V1 profiling shows repeated GTF/graph lookup is a dominant cost, design a reusable
-panCollapse-specific compatibility index. This remains an idea until evidence and a
-human-approved ADR justify it.
+If V1 profiling shows per-node scoring and HST path attribution (the `for_each_step_on_handle`
+loop) are a dominant cost, investigate a reusable panCollapse-specific path-attribution
+structure. This remains an idea until evidence and a human-approved ADR justify it.

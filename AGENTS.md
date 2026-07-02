@@ -21,6 +21,7 @@ This file is intentionally short; load detailed documents only when relevant.
 | Need | File |
 |---|---|
 | Product contract | `docs/product-spec.md` |
+| Conversion algorithm (D048) | `docs/conversion-algorithm.md` |
 | Input/output contract | `docs/input-output-contract.md` |
 | Transcript compatibility semantics | `docs/compatibility-semantics.md` |
 | Settled decisions and open forks | `docs/decisions.md` |

@@ -4,6 +4,12 @@ Phase 1 defines the executable behavioral contract required for **Gate Behavior
 Specified**. It does not implement panCollapse behavior. Use this index to load only the
 documents needed for a bounded task.
 
+> **Superseded by D048.** These Phase 1 documents describe the earlier
+> traversal-enumeration and GTF-projection behavior matrix. The active GAMP-to-RAD algorithm
+> and its acceptance cases are `docs/conversion-algorithm.md` and
+> `docs/validation-contract.md`. Read the Phase 1 fixtures below as historical context, not
+> current behavior.
+
 ## Always load
 
 - `AGENTS.md`

@@ -19,7 +19,11 @@ Pass only when:
 
 ## Gate Behavior Specified
 
-Human judgment required.
+Human judgment required. **This gate passed in Phase 1 under the pre-D048 algorithm.**
+The criteria below were written for the GTF-projection design; "outside-first/last-exon
+rule," "positive transcript-model anchor," and "complete manifest coverage" are pre-D048
+concepts superseded by D048 HST-path membership. The active behavior specification is
+`docs/conversion-algorithm.md` and `docs/validation-contract.md`.
 
 Pass only when:
 

@@ -1,5 +1,15 @@
 # Annotation Lookup and Performance Research Brief
 
+> **Algorithm superseded by D048.** This Phase 0 research brief documents the
+> GTF-projection-based compatibility design: source-coordinate projection through
+> `PathPositionHandleGraph`, exon/intron/junction compatibility, `--min-splice-jump`,
+> explicit collapse manifest, and the `TranscriptModel`/`PathAnnotation` in-memory
+> structures. The active GAMP-to-RAD algorithm is `docs/conversion-algorithm.md`:
+> compatibility is HST-path node membership with no GTF projection at runtime, and
+> collapse is implicit in HST naming. The no-custom-index principle and the
+> `for_each_step_on_handle` API evidence remain current; the complexity thresholds and
+> per-node scoring design apply to the D048 node-attribution loop.
+
 **Status: Phase 0 researched. Constraint: no persistent custom lookup index in
 V1.**
 

@@ -1,3 +1,12 @@
+> **Superseded by D048.** The active GAMP-to-RAD algorithm is `docs/conversion-algorithm.md`.
+> D048 removes the collapse manifest from runtime inputs; the manifest validation fixtures
+> (`MAN-01` through `MAN-08`), the `manifest_*` counters, and
+> `annotation_index_consistency_failures` and `annotation_manifest_mismatches` are from the
+> pre-D048 design and are not current acceptance criteria. Raw CB/UMI grouping, molecule-
+> identity failure modes (`GRP-*`, `TAG-*` as historical; D038/D043/D046 govern active V1),
+> and recurrence validation remain directionally relevant. These Phase 1 fixtures are
+> preserved as historical context.
+
 # Phase 1 Input And Diagnostic Fixtures
 
 These fixtures cover tag selection, grouping validation, manifest validation, and failure

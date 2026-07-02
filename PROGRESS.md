@@ -2,26 +2,28 @@
 
 ## Current phase
 
-**Phase 3 medium artificial-GAMP RAD semantic fixture is locally implemented and
-verified.**
+**Phase 3, redesigned around D048 (graph-native transcript feature counting).**
 
-Production source now exists for the approved Phase 2 vertical slice and the selected
-Phase 3 orientation, molecule-identity, traversal/scoring, and intron/splice
-compatibility behaviors. The user-approved all-compatible-target RAD assignment surface
-is implemented locally: `all` is accepted/default, and deferred uniqueness modes fail as
-to-be-implemented. The manifest/collapse validation slice now has local test coverage for
-max-score source collapse, no score summing across collapsed sources, missing manifest
-rows, contradictory rows, and canonical-gene conflicts. No public panCollapse headers or
-checked-in generated fixtures, GAMP, XG, GCSA, distance-index, GBZ, or RAD outputs have
-been created; generated graph/RAD artifacts remain confined to ignored build directories.
-The existing medium fixture uses artificial GAMP generated from reviewed JSON; it is a
-50,000-read-group toy-graph RAD semantic regression that remains valid. Per D047 the
-production-applicability fixture is now the human-pangenome GAMP-to-RAD plan in
-`docs/testing_fixture_creation.md` (pinned MHC `sampleA` spliced bundle, GAMP-driven
-independent oracle), which supersedes the earlier BEERS2-plus-`vg mpmap` "primary path"
-framing.
+The GAMP-to-RAD core is now specified in `docs/conversion-algorithm.md`: score each aligned
+node under vg's own scoring scheme, add each node's score to every HST path crossing it, take
+the top HST score across all of a read's alignments plus ties, collapse to unique transcript
+IDs for RAD `refs`, and record orientation from the read's direction along the HST path
+(majority of aligned bases on disagreement). Runtime inputs are the name-grouped GAMP, the
+graph with `vg rna` HST paths, and a transcript-to-gene map; the GTF and `vg rna` are
+reference/fixture-creation only.
+
+The prior traversal-enumeration and GTF-projection implementation in `src/main.cpp`
+(D026/D027) is superseded by D048 and is being replaced increment by increment; it removes
+the complete-traversal enumeration whose cap hard-failed on real MHC GAMP. RAD wire format,
+streaming writer, raw CB/UMI sourcing, name-grouping, unaligned counting, and the
+human-pangenome fixture plan (D047) are unchanged. Generated graph/RAD artifacts remain
+confined to ignored build directories.
 
 ## Settled product decisions
+
+D048 supersedes the assignment-surface, collapse-manifest, traversal-cap, and GTF-projection
+items below for active GAMP-to-RAD conversion; see `docs/conversion-algorithm.md`. The
+bullets are retained as cumulative history.
 
 - Project name: `panCollapse`.
 - C++20, GCC 15 environment, CMake + Ninja.
@@ -66,19 +68,23 @@ framing.
 
 ## Next action
 
-Two independent threads are open. (1) Human review of the RAD chunk-count policy conflict
-(D045 streaming `num_chunks = 0` versus local alevin-fry v0.15.0 rejecting populated
-`num_chunks = 0`); the writer stays exact-count until reconciled. (2) Under D047, build the
-human-pangenome GAMP-to-RAD fixture in `docs/testing_fixture_creation.md`, starting with
-the smoke slice (a handful of MHC read groups through GAMP -> independent oracle ->
-panCollapse -> exact comparison) before scaling.
+Implement `docs/conversion-algorithm.md` one increment at a time, starting with per-node
+reproduction of vg's alignment score validated against `Subpath.score` on real GAMP subpaths
+(increment 1). D048 dissolves the earlier reference-path-vs-HST fork: compatibility now reads
+off the HST paths directly, so no GTF projection or manifest is needed at runtime. The
+human-pangenome MHC fixture (D047, `docs/testing_fixture_creation.md`) remains the
+production-applicability target. The RAD chunk-count policy conflict (D045 streaming
+`num_chunks = 0` versus local alevin-fry v0.15.0) is still open for human review; the writer
+stays exact-count until reconciled.
 
 ## Required stop
 
 Do not broaden production code into multithreading without a later explicit approval.
 Treat stdin GAMP streaming as research/design work until its input interface is verified.
 Do not add stdout RAD output unless separately approved. Phase 3 work must proceed one
-independently testable behavior at a time.
+independently testable behavior at a time, following D048 and
+`docs/conversion-algorithm.md`. Do not reintroduce traversal enumeration, runtime GTF
+projection, or a custom index.
 
 ## Phase 0 artifacts
 
@@ -445,4 +451,51 @@ independently testable behavior at a time.
   BEERS2-plus-`vg mpmap` plan to a 208-line human-pangenome GAMP-to-RAD plan, retiring the
   "artificial GAMP must never be primary" and mapping-stability rules. Verified all eight
   pinned MHC source files exist with sizes matching the recorded `size_bytes`. Docs-only
-  change; no production code touched. Not yet committed.
+  change; no production code touched. Committed as `281aae1`.
+- 2026-07-01: Session-start verification for the D047 human-pangenome smoke slice.
+  Re-verified all eight pinned MHC source files by sha256 (all `OK`) and confirmed the local
+  `vg` is the pinned `v1.75.0-68-ge82694b69 "Spike"`. Characterized the bundle from primary
+  sources: `sampleA.spliced.xg` has 353,766 nodes (id range 1:353766), 488,650 edges, and
+  27,013 paths, of which 27,011 are HST transcript-haplotype paths (`<transcript>_H<n>` /
+  `_R<n>`) and 2 are genomic backbones (`GRCh38#0#chr6[28510118]`, `CHM13#0#chr6[28381547]`).
+  `mhc.refpath.gtf` annotates a single seqname `GRCh38#0#chr6[28510118]` (1,022 transcripts,
+  11,033 exons) that exactly matches a visible `.xg` path, satisfying the D023 seqname/path
+  match on the reference path. Surfaced the smoke-slice source-path/collapse-model fork now
+  recorded under Next action. No production code, fixtures, or generated artifacts created.
+- 2026-07-01: Ran scoped read-only research (librarian + vg-integration-researcher +
+  Explore) on building a production-representative human-pangenome GAMP-to-RAD fixture from
+  the full HPRC pangenome, and verified the load-bearing claims locally. Findings: (a) the
+  full HPRC v1.1 MC GRCh38 pangenome is already on disk at
+  `/mnt/ssd/lalli/nf_stage/genome_refs/pangenome/GRCh38/` (`hprc-v1.1-mc-grch38.d9.gbz`
+  4.4G, `.full.gbz` 7.1G, `.xg`, `.dist`), HPRC S3 provenance recorded in `to_download.txt`;
+  no download needed. (b) The pinned `vg` provides the whole recipe (confirmed flags): `vg
+  chunk` (`-p`/`--gbz`/`--contig`/`-c`/`-T`/`-G`), `vg rna` (`-z`/`-l`/`-e`/`-r`/`-a`/`-i`),
+  `vg autoindex --workflow mpmap`, `vg sim` (`-P`/`-a`/`--multi-position`, truth in GAM
+  refpos not read name), `vg mpmap -F GAMP` (default), and `vg gampcompare`. (c) The
+  existing MHC bundle was NOT sliced from HPRC; its source is a toy 466-haplotype
+  `1kg_hg38-MHC.gbz` (panresolve example, unrecorded upstream URL) built with native vg
+  1.51.0, so a fresh HPRC-derived pinned-vg build is a provenance and version upgrade. (d)
+  Prior scratch in `build/real_mhc_scratch/` (today) already tagged real 10x reads
+  (`SRR10587809` subsample), produced a 228 MB real `mhcA.gamp` against the toy bundle,
+  built a reference-path collapse manifest (`mhc_identity_collapse.tsv`, exact D033 format,
+  `source_path_name=GRCh38#0#chr6[28510118]`, source==canonical, 1022 transcripts), and ran
+  panCollapse -> HARD FAIL `traversal_cap_exceeded_groups=1`: real MHC GAMP exceeds the
+  default `--max-traversals-per-read 100000` on at least one read group. Two build-blocking
+  points recorded: a `vg chunk -p` region slice of a GBZ drops the GBWT haplotypes `vg rna`
+  needs (use `-T`/embedded paths or `--gbz --contig`), and the D037 traversal-cap hard-fail
+  policy needs a production-graph decision. Research only; no production code, fixtures, or
+  committed artifacts created.
+- 2026-07-01: Adopted D048 and rewrote the planning docs around it. The GAMP-to-RAD core is
+  now graph-native transcript feature counting: score aligned nodes under vg's own scheme,
+  attribute to the HST paths crossing each node, take the top HST score across all of a
+  read's alignments plus ties, collapse HST copies to unique transcript IDs, and record
+  orientation by majority of aligned bases. This removes complete-traversal enumeration (and
+  the cap that hard-failed on real MHC GAMP), runtime GTF projection and exon/intron/junction
+  compatibility, and the explicit collapse manifest, and it dissolves the earlier
+  reference-path-vs-HST fork. Confirmed from vg source that per-node scoring reproduces
+  `Subpath.score` (`alignment_scorer.cpp`) and that HST paths are stored transcript 5'->3'
+  (`transcriptome.cpp`). Wrote `docs/conversion-algorithm.md`, added D048, rewrote
+  `docs/compatibility-semantics.md`, and updated `docs/product-spec.md`, `TASKS.md`,
+  `PROGRESS.md`, and the `CLAUDE.md` index and principles. Remaining doc-ecosystem updates
+  (input/output contract, validation contract, fixture oracle, glossary, historical
+  pointers) in progress. No production code changed yet.

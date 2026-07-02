@@ -1,5 +1,15 @@
 # VG Integration Research Brief
 
+> **Runtime input set superseded by D048.** This Phase 0 research brief was written for the
+> GTF-projection design and lists GTF and a collapse manifest as runtime inputs (see
+> "Minimal converter inputs" and "Recommended boundary" below). Under D048, the active
+> runtime inputs are: name-grouped GAMP, the `.xg` graph carrying `vg rna` HST paths, and a
+> transcript-to-gene map. GTF and collapse manifest are reference/fixture-creation tools
+> only. The VG-linkage boundary, GAMP streaming API (`vg::io::for_each`), per-node scoring
+> evidence (`alignment_scorer.cpp`), and XG `for_each_step_on_handle` path attribution
+> sections remain current. Annotation-tag evidence (D038 raw CB/UMI comes from the GAMP
+> name field, not `mpmap -C` annotation tags) was superseded by D038.
+
 **Status: Phase 0 researched. Scope: local VG v1.75.0-68-ge82694b69
 "Spike".**
 

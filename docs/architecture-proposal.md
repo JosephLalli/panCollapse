@@ -6,6 +6,11 @@ production source, build files, fixtures, or generated outputs were included.
 Phase 1 has since added the focused behavior contracts and CMake/CTest smoke skeleton
 listed in `PROGRESS.md` and `docs/phase1/`.
 
+> **Algorithm superseded by D048.** The active GAMP-to-RAD algorithm is
+> `docs/conversion-algorithm.md`. The data-flow and compatibility sections below describe the
+> earlier traversal-enumeration/GTF-projection design and are Phase 0 history; the
+> dependency-boundary and VG-linkage material remains current.
+
 ## Scope and dependency boundary
 
 V1 is a standalone C++20 converter over existing mapper outputs. It does not build VG,

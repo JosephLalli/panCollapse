@@ -6,6 +6,11 @@ are binding V1 behavior unless superseded by a later entry in `docs/decisions.md
 D038 supersedes the barcode/UMI tag-source portions below: V1 reads observed raw CB/UMI
 from the GAMP name field, not corrected/raw GAMP annotation tags.
 
+D048 supersedes the "Outside-span compatibility anchor" and "Collapse-manifest coverage"
+sections below: V1 compatibility is now HST-path node membership (no GTF projection,
+no exon/intron/junction test at runtime), and transcript-copy collapse is implicit in HST
+naming (no explicit manifest). See `docs/conversion-algorithm.md`.
+
 ## Outside-span compatibility anchor
 
 At least one aligned reference-consuming base must overlap an exon or implied intron of

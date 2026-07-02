@@ -1,118 +1,89 @@
 # Validation Contract
 
-Validation is organized around observable behavior rather than implementation internals.
-Exact fixture encodings are designed after Gate Architecture Approved, but the required cases are
-settled now.
-
-Phase 1 fixture expectations are specified in focused documents under `docs/phase1/`.
-Use `docs/phase1/README.md` to choose the minimum document bundle for each implementation
-or review task.
+Validation is organized around observable behavior. The GAMP-to-RAD algorithm is defined by
+D048 and `docs/conversion-algorithm.md`.
 
 ## 1. Workspace and planning gates
 
-Before implementation:
-
 - external API claims have primary-source evidence;
-- all Phase 0 research briefs are complete;
-- architecture proposal identifies exact required inputs and dependencies;
-- no production code exists before passing Gate Architecture Approved;
+- Phase 0 research briefs are complete;
 - fixture expectations exist before broad implementation.
 
 ## 2. Barcode and UMI cases
 
-- RNA GAMP name field follows `<original_read_name>_<raw_CB>_<raw_UMI>`.
-- parsing uses the rightmost two underscore-delimited fields for raw CB and raw UMI, so
-  the original read name may contain underscores.
-- extracted values are the observed raw values and are written to RAD without correction.
-- raw CB and UMI lengths are explicit CLI-controlled values; parsed values must match
-  those configured lengths. Phase 2 defaults are `--raw-cb-length 16` and
-  `--raw-umi-length 12`.
-- panCollapse does not perform permit-list construction, cell-barcode correction, or UMI
-  deduplication/resolution; alevin-fry performs those steps downstream.
-- `--molecule-identity-failures skip|fail` defaults to `skip`.
-- missing CB or UMI field: skip and count by default; fail under
-  `--molecule-identity-failures fail`.
-- malformed or unsupported CB/UMI value: skip and count by default; fail under
-  `--molecule-identity-failures fail`.
-- raw CB or UMI length mismatch against the configured lengths: skip and count by
-  default; fail under `--molecule-identity-failures fail`.
+- RNA GAMP name follows `<original_read_name>_<raw_CB>_<raw_UMI>`, parsed from the rightmost
+  two underscore-delimited fields (the original name may contain underscores);
+- extracted values are written to RAD without correction;
+- parsed values must match the configured `--raw-cb-length` / `--raw-umi-length` (Phase 2
+  defaults 16 and 12);
+- panCollapse does not permit-list, correct, or deduplicate; alevin-fry does that;
+- `--molecule-identity-failures skip|fail` defaults to `skip`; missing, malformed,
+  unsupported, or length-mismatched values are skipped and counted by default and fatal
+  under `fail`.
 
 ## 3. Grouping cases
 
-- one record for one read;
-- several adjacent records with same read name;
-- next read begins normally;
-- completed read name recurs later: hard failure;
+- one record for one read; several adjacent records with the same name; next read begins
+  normally;
+- a completed read name recurs later: hard failure;
 - empty input and truncated/corrupt stream: defined behavior.
 
-## 4. Compatibility cases
+## 4. Scoring cases
 
-Every row in `docs/compatibility-semantics.md` is required. Include overlapping isoforms,
-annotated and unannotated splice junctions, both orientations, the explicit
-outside-first/last-exon extension case with a positive transcript-model anchor, and a
-negative case where only the parent gene locus overlaps. Mixed orientations for the same
-read group and emitted target must be dropped and counted.
+- per-node scores reproduce vg's scheme: on real GAMP subpaths, the sum of a subpath's
+  per-node scores equals `Subpath.score`;
+- a match/mismatch/gap mix on one node scores as vg does (match +1/base, mismatch -4/base,
+  affine gaps open 6 / extend 1, read-end bonus +5);
+- an affine gap spanning a node boundary is charged gap-open once;
+- base-quality-adjusted input is detectable when the flat per-node sum does not equal
+  `Subpath.score`.
 
-## 5. Score and collapse cases
+## 5. Compatibility and collapse cases
 
-- one compatible target;
-- two tied canonical targets;
-- lower-scoring target removed by default;
-- lower-scoring target retained by configured score window;
-- two source transcript identities collapse to one canonical transcript and use max score;
-- graph-path multiplicity does not inflate target score;
-- score filtering removes lower targets but cannot by itself create an empty group;
-- traversal cap within-limit and overflow cases;
-- missing source transcript identity in manifest is a hard failure with no identity
-  fallback;
-- contradictory manifest rows fail.
-- one canonical transcript mapped to multiple genes fails.
+- a read whose aligned nodes lie on one HST path is compatible with that transcript;
+- a read whose aligned nodes lie on no HST path emits no target and is counted;
+- a node shared by two isoforms' HST paths makes the read compatible with both;
+- several HST paths of one transcript (haplotype copies) collapse to one transcript ID and
+  do not inflate the transcript's score;
+- the winners are the HSTs tied at the single top score pooled across all of the read's
+  alignments; lower-scoring HSTs are not emitted;
+- a read with a supplementary alignment contributes its winning HSTs to the same pooled
+  top-score selection.
 
-## 6. Assignment-surface cases
+## 6. Orientation cases
 
-- default assignment behavior retains the complete eligible transcript target set,
-  including targets from multiple genes;
-- explicit `--assignment all` is accepted and produces the same RAD output as the
-  default;
-- `unique-transcript`, `unique-gene`, and `starsolo-default` fail clearly as
-  to-be-implemented for the active GAMP-to-RAD converter;
-- no RAD fixture should prefilter compatible targets by transcript or gene uniqueness.
+- read running along an HST path: RAD `dirs` records forward;
+- read running opposite: RAD `dirs` records reverse;
+- a transcript whose winning HSTs disagree: the majority of aligned bases decides, with a
+  deterministic forward fallback for an exact tie.
 
 ## 7. RAD interoperability
 
 A tiny fixture must prove:
 
-1. panCollapse output is accepted by the supported alevin-fry version.
-2. permit-list generation and collation complete.
-3. quantification with a two-column transcript-to-gene map completes.
-4. the final exact cell-by-gene matrix matches the expected UMI counts.
-5. RAD `cblen` and `ulen` match the configured raw CB and UMI lengths; Phase 2 asserts
-   `cblen=16` and `ulen=12`.
-6. no USA/splicing-state rows are emitted in V1.
-7. Phase 2 uses one thread. D045 defers multithreaded execution; future supported
-   execution modes must still prove deterministic byte-identical output.
-8. RAD output uses streaming-to-disk framing with header `num_chunks = 0`, then decodes
-   successfully through the supported libradicl/alevin-fry path.
+1. panCollapse output is accepted by the supported alevin-fry version;
+2. permit-list generation and collation complete;
+3. quantification with the two-column t2g completes;
+4. the final cell-by-gene matrix matches expected UMI counts;
+5. RAD `cblen`/`ulen` match the configured lengths (Phase 2: 16, 12);
+6. no USA/splicing-state rows;
+7. Phase 2 uses one thread; D045 defers multithreading; any future mode must still prove
+   byte-identical output;
+8. streaming-to-disk framing with header `num_chunks = 0` decodes through the supported
+   libradicl/alevin-fry path.
 
 ## 8. Failure and diagnostics
 
 Each hard failure has a stable nonzero exit status and actionable message. Summary counts
-must be independently checkable against fixtures.
+are independently checkable against fixtures.
 
-## 9. Performance pilot
+## 9. Production-applicability fixture
 
-After correctness:
-
-- define a bounded real-data slice;
-- use `docs/testing_fixture_creation.md` as the medium-scale known-truth RAD fixture plan:
-  approximately 50,000 BEERS2-generated reads from a pangenome fixture, with expected RAD
-  records computed independently from fixture truth rather than from panCollapse output;
-- maintain the current medium artificial-GAMP regression as a build-dir-only RAD semantic
-  scale test until the BEERS2 plus `vg mpmap` path is available;
-- record throughput, peak memory, target-set size distribution, and annotation-lookup
-  cost;
-- compare one versus multiple threads only if threading is later restored;
-- evaluate direct `vg mpmap` to panCollapse stdin streaming while keeping RAD output on
-  the approved streaming-to-disk path;
-- do not add a custom index unless the measured lookup cost is material and a human
-  approves the design change.
+- `docs/testing_fixture_creation.md` is the human-pangenome GAMP-to-RAD fixture plan (D047):
+  slice the HPRC v1.1 GRCh38 graph over the MHC region, build the spliced/HST graph with
+  `vg rna`, simulate reads, map to GAMP, and compare panCollapse RAD against an independent
+  GAMP-driven oracle that re-implements the D048 algorithm;
+- record throughput, peak memory, and target-set size distribution;
+- evaluate direct `vg mpmap` to panCollapse stdin streaming while keeping RAD output on the
+  streaming-to-disk path;
+- do not add a custom index unless the measured lookup cost is material and a human approves.

@@ -6,14 +6,14 @@ Prove that, given a realistic GAMP produced from the **human pangenome**, panCol
 emits exactly the correct RAD.
 
 ```text
-Given this human-pangenome GAMP and this .xg / GTF / collapse manifest, does panCollapse
+Given this human-pangenome GAMP and this .xg (with HST paths) and t2g, does panCollapse
 emit exactly the RAD records an independent oracle derives from the same GAMP?
 ```
 
 The contract under test is:
 
 ```text
-GAMP (+ .xg + GTF + collapse manifest) -> panCollapse -> RAD
+GAMP (+ .xg with HST paths + t2g) -> panCollapse -> RAD
 ```
 
 alevin-fry is the downstream proof-of-concept consumer of that RAD, but this fixture stops
@@ -69,7 +69,7 @@ mhc_t2g	t2g	local_path	/mnt/ssd/lalli/panSC/tests/fixtures/mhc/sampleA.t2g.tsv	f
 
 The `.gcsa`, `.gcsa.lcp`, and `.dist` files are only needed if a realistic GAMP is
 generated with `vg mpmap` (Section 5, option A). panCollapse itself consumes only the
-`.xg`, the GTF, the collapse manifest, and the GAMP.
+`.xg` (with HST paths), the t2g, and the GAMP.
 
 Why this stack: it is a real human MHC pangenome, medium-sized rather than toy, already has
 a spliced index bundle and a graph-keyed GTF, and contains unique, haplotype-shared,
@@ -107,20 +107,20 @@ Requirements for either route:
 The oracle is the core deliverable. It computes expected RAD **from the GAMP**, using an
 implementation independent of the C++ production code. For each name-grouped read:
 
-1. Decode the GAMP records (e.g. `vg view -j` to JSON, or a reader) into subpaths,
-   `next` edges, `connection` arcs, scores, edits, positions, and orientations.
-2. Enumerate complete `MultipathAlignment` traversals through `next` and `connection`
-   arcs, applying the same traversal cap panCollapse uses.
-3. Project every reference-consuming edit to source-path coordinates via the `.xg`,
-   mirroring reverse mappings and reverse source-path steps.
-4. Test compatibility against the GTF exon/intron models, including exon anchors, implied
-   introns, exon/intron boundaries, and annotated splice junctions for `connection` arcs.
-5. Map each compatible source identity `(source_path_name, source_transcript_id)` to its
-   canonical target via the collapse manifest.
-6. Take `best_score = max` per canonical target (never a sum across collapsed sources),
-   retain targets within the score window, drop the group if any retained target has mixed
-   target-relative orientation, and sort targets by the RAD dictionary rule (alphabetical
-   canonical transcript id).
+1. Decode the GAMP records (e.g. `vg view -j` to JSON, or a reader) into per-alignment
+   nodes, edits, positions, orientations, and subpath scores.
+2. Score each aligned node under vg's scheme, reproduced from the `Mapping` edits; validate
+   by checking that the per-node scores of a subpath sum to its `Subpath.score`.
+3. For each scored node, find the HST paths that cross it via the `.xg`
+   (`for_each_step_on_handle`), and add the node's score to each such HST.
+4. Pool the per-HST scores across all of the read's alignments (primary and
+   supplementary/secondary); the winners are the HSTs tied at the single top score.
+5. Collapse the winning HSTs to their unique transcript IDs (drop the `_H<n>` / `_R<n>`
+   suffix); the t2g gives each transcript's gene.
+6. Record orientation per transcript from the read's direction along the HST path; if a
+   transcript's winning HSTs disagree, take the orientation of the majority of aligned
+   bases (deterministic forward fallback for an exact tie). Sort targets by the RAD
+   dictionary rule (alphabetical transcript id).
 7. Emit the predicted RAD record (`bc`, `umi`, `refs`, `dirs`) or the expected non-emitted
    reason plus the summary counter it increments.
 
@@ -192,7 +192,7 @@ Do not scale before the smoke slice passes.
 
 ## 11. Artifact policy
 
-Small reviewed truth tables, the collapse manifest, and the oracle/comparator code may be
+Small reviewed truth tables, the t2g, and the oracle/comparator code may be
 checked in. Large generated artifacts must stay in a build or external work directory and
 must not be committed: extracted FASTA/VCF, graph indexes, FASTQ, GAMP, and binary RAD.
 

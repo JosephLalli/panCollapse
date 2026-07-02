@@ -1,3 +1,11 @@
+> **Superseded by D048.** The active GAMP-to-RAD algorithm and its acceptance cases are
+> `docs/conversion-algorithm.md` and `docs/validation-contract.md`. D048 replaces
+> GTF-projection compatibility (exon/intron/junction tests, `--min-splice-jump`, traversal
+> enumeration, `--max-traversals-per-read`) with HST-path node membership scored under
+> vg's own per-node scheme. The shared synthetic model below uses source-coordinate
+> identifiers that belong to the pre-D048 collapse-manifest design. These Phase 1 fixtures
+> are preserved as historical context; do not use them as current acceptance criteria.
+
 # Phase 1 Compatibility Fixtures
 
 These fixtures specify VG-dependent projection and transcript-compatibility behavior.

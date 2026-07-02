@@ -1,3 +1,9 @@
+> **Algorithm superseded by D048.** The build structure and CMake/Ninja/CTest conventions
+> documented here remain current. The GTF projection smoke (`gamp_xg_gtf_projection_smoke.cpp`,
+> `gamp_projection_fixture_writer.cpp`) was created for the pre-D048 GTF-coordinate-projection
+> algorithm and will be replaced as Phase 3 D048 increments land. The active GAMP-to-RAD
+> algorithm is `docs/conversion-algorithm.md`.
+
 # Phase 1 Build And Test Skeleton
 
 Phase 1 creates the build/test skeleton required by **Gate Behavior Specified**. The

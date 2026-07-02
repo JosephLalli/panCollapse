@@ -1,3 +1,14 @@
+> **Superseded by D048.** The active GAMP-to-RAD algorithm and CLI are specified in
+> `docs/conversion-algorithm.md` and `docs/input-output-contract.md`. D048 removes the GTF
+> and collapse manifest as runtime inputs, removes the traversal cap, and removes
+> `--gtf`, `--collapse-manifest`, `--assignment`, `--score-window`, `--min-splice-jump`,
+> and `--max-traversals-per-read` from the active interface. Compatibility is now HST-path
+> node membership, not GTF-projection; collapse is implicit in HST naming, not an explicit
+> manifest. The diagnostic counters for manifest validation and traversal cap
+> (`manifest_*`, `annotation_index_consistency_failures`, `traversal_cap_exceeded_groups`,
+> `score_removed_targets`) are also removed. This Phase 1 CLI snapshot is preserved as
+> historical context for the pre-D048 design; do not follow it for implementation.
+
 # Phase 1 CLI And Run Contract
 
 This document is the Phase 1 CLI snapshot required for **Gate Behavior Specified**. It

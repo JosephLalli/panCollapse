@@ -743,6 +743,45 @@ is converted to exactly the correct RAD. Whether the GAMP came from real `vg mpm
 sufficient simulation does not change that contract, so the fixture oracle is anchored on
 the GAMP itself.
 
+### D048 — Graph-native transcript-compatibility scoring replaces traversal enumeration and GTF projection
+
+**Decision source:** User.
+
+**Decision:** The GAMP-to-RAD core is a graph-native transcript feature count, specified in
+`docs/conversion-algorithm.md`. For each read, across all of its GAMP alignments (primary and
+every supplementary/secondary record): score each aligned node under vg's own scoring scheme
+(reproduced per node from the `Mapping` edits and validated against `Subpath.score`); add
+each node's score to every HST path that traverses it; take the single highest HST score
+across all the read's alignments plus every HST tied with it; collapse those winners to
+unique transcript IDs to form RAD `refs`; and record per-transcript orientation from the
+read's direction along the HST path, resolving disagreement by the majority of aligned bases.
+
+**Decision:** Runtime inputs are the name-grouped GAMP, the graph with `vg rna` HST paths,
+and a transcript-to-gene map. The GTF and `vg rna` are reference/fixture-creation tools only,
+not runtime inputs. Transcript-copy collapse is implicit in HST path naming, not an explicit
+manifest. Compatibility is HST-path node membership: no exon/intron/junction projection, no
+complete-traversal enumeration, and therefore no traversal cap.
+
+**Supersedes:** D048 replaces the traversal-enumeration and GTF-projection algorithm for
+active GAMP-to-RAD conversion — D026 (complete-traversal enumeration and per-traversal
+scoring), D027 and D034 (GTF-coordinate projection, exon/intron/junction compatibility,
+`--min-splice-jump`), D033 and D010/D019 (explicit collapse manifest), D037's
+`--max-traversals-per-read` and `traversal_cap_exceeded_groups` (no enumeration means no
+cap), and the exon/intron compatibility framing of D004/D006/D007/D016. Orientation follows
+D042 except that a mixed-orientation transcript now takes the majority-of-bases orientation
+instead of being dropped. RAD wire format (D029/D040), streaming writer (D045), raw CB/UMI
+sourcing (D038), name-grouping (D005/D025), unaligned counting (D046), and the
+human-pangenome fixture (D047) are unchanged.
+
+**Rationale:** The multipath format is a compact DAG that exists to avoid enumerating linear
+paths; enumerating complete traversals reintroduced that exponential cost and hard-failed the
+traversal cap on real MHC GAMP. Scoring nodes and reading transcript membership off the
+embedded HST paths is linear, needs no annotation projection at runtime, and answers the
+actual question — which transcripts a read is compatible with — directly from the graph the
+mapper produced. vg source confirms per-node scoring reproduces `Subpath.score` exactly
+(`alignment_scorer.cpp`) and that HST paths are stored transcript 5'->3' (`transcriptome.cpp`
+`reorder_exons`), so orientation reads directly off the path.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

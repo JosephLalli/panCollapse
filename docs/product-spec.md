@@ -4,6 +4,9 @@ This document is the canonical product contract. Implementation choices may evol
 changes to the behavior defined here require an explicit decision-log entry and human
 approval.
 
+The GAMP-to-RAD algorithm is defined by decision D048 and `docs/conversion-algorithm.md`.
+Where mechanism text below predates D048, the algorithm doc governs.
+
 ## 1. Purpose
 
 `panCollapse` converts VG multipath alignments from 10x 3′ single-cell or single-nucleus
@@ -20,14 +23,16 @@ V1 supports:
 
 - 10x 3′ v2/v3-style experiments where the cDNA read is represented in GAMP;
 - raw cell barcode and UMI retrieval from the GAMP name field;
-- transcript compatibility inferred from both annotated exons and annotated introns;
-- an explicit transcript/path-copy collapse manifest;
-- score-based eligibility with tied-best behavior by default;
+- transcript compatibility from HST-path membership: a read is compatible with a transcript
+  whose `vg rna` HST path crosses the read's aligned nodes;
+- per-node scoring under vg's own alignment scheme, with the top HST score across all of a
+  read's alignments plus ties selecting the winners;
+- transcript-copy collapse implicit in HST path naming (haplotype copies collapse to one
+  transcript ID);
 - preservation of multimapping transcript equivalence classes;
 - mapper-style, uncollated RAD output for alevin-fry;
 - preservation of target-relative read orientation in RAD `dirs`;
-- full compatible transcript target sets in RAD output; `all` is the only active
-  assignment behavior for GAMP-to-RAD conversion.
+- the full compatible transcript target set per read.
 
 ## 3. Explicit non-goals
 
@@ -51,21 +56,19 @@ acceptance criteria.
 The final V1 CLI must accept:
 
 1. **Name-grouped GAMP** containing one or more multipath alignments per cDNA read.
-2. **GTF annotation** defining genes, transcripts, exons, and implied introns.
-3. **Existing `.xg` coordinate graph/index file** for the same graph used to create the
-   GAMP, sufficient to interpret GAMP graph walks and relate them to the source coordinate
-   paths needed for annotation lookup.
-4. **Collapse manifest** mapping graph-/haplotype-/copy-specific source transcript
-   identities to canonical transcript IDs and genes. Phase 0 resolves the source
-   identity as a source coordinate path plus source transcript ID.
-5. **Output destination** for mapper-style uncollated RAD and associated metadata/logs.
-6. **Raw molecule-identity lengths** for the cell barcode and UMI. The CLI provides
-   `--raw-cb-length` and `--raw-umi-length`; Phase 2 defaults are 16 and 12.
+2. **Existing `.xg` graph** for the same graph/node-id space that produced the GAMP,
+   exposing the `vg rna` HST paths used to read transcript compatibility.
+3. **Transcript-to-gene map (t2g)** projecting transcript targets to genes and driving
+   `tx2gene.tsv`.
+4. **Output destination** for mapper-style uncollated RAD and associated metadata/logs.
+5. **Raw molecule-identity lengths** for the cell barcode and UMI (`--raw-cb-length`,
+   `--raw-umi-length`; Phase 2 defaults 16 and 12).
 
-GCSA/LCP and distance indexes may be required upstream to produce the GAMP with
-`vg mpmap`, commonly alongside the same `.xg` used by panCollapse. Once GAMP exists,
-they are not V1 panCollapse inputs. The implementation must not require GFF3, GBZ as a
-substitute for `.xg`, or a newly generated custom lookup index in V1.
+A GTF and `vg rna` build the annotated graph during reference/fixture creation only; they
+are not runtime inputs, and there is no separate collapse manifest. GCSA/LCP and distance
+indexes may be needed upstream to produce the GAMP with `vg mpmap`; once GAMP exists they are
+not panCollapse inputs. The implementation must not require GFF3, GBZ as a substitute for
+`.xg`, or a custom lookup index in V1.
 
 ## 5. Barcode and UMI source
 
@@ -96,89 +99,35 @@ included in the converter's scope.
 
 ## 7. Transcript compatibility
 
-Compatibility is an annotation-aware property of a candidate GAMP traversal and a
-transcript. It is not limited to sequence compatibility with a mature spliced transcript
-path.
+Compatibility is HST-path membership: a read is compatible with a transcript when one of
+that transcript's `vg rna` HST paths crosses a node the read aligns to. The HST path encodes
+the transcript's spliced structure, so there is no runtime exon/intron or splice-junction
+test.
 
-A transcript may be compatible when the read evidence is:
-
-- entirely exonic for that transcript;
-- entirely within an annotated intron of that transcript;
-- unspliced across an exon–intron or intron–exon boundary;
-- exonic for one isoform and intronic for another, in which case both may be compatible.
-
-If the GAMP traversal contains an observed splice junction, that junction must be present
-in the candidate transcript's annotated exon structure for the transcript to remain
-compatible.
-
-A transcript requires at least one aligned reference-consuming base overlapping one of
-its annotated exons or implied introns. Do not reject that transcript solely because other
-aligned sequence extends beyond its first-to-last-exon span. Dedicated fixtures must
-prevent the implementation from silently substituting either strict containment or mere
-parent-gene-locus overlap.
-
-panCollapse does not filter transcript compatibility by library strand and does not infer
-library chemistry. For every emitted target, it preserves the read alignment orientation
-relative to that target/transcript in RAD `dirs`. Downstream alevin-fry expected-
-orientation settings handle library-orientation filtering.
-
-If one read group contributes mixed target-relative orientations for the same emitted
-target in the current implementation scope, panCollapse drops that read group and reports
-the condition instead of assigning a synthetic direction.
+panCollapse does not filter compatibility by library strand. It preserves the read alignment
+orientation relative to each emitted target in RAD `dirs` (forward if the read runs along the
+HST path, reverse if opposite), and alevin-fry applies expected-orientation filtering. If a
+transcript's winning HSTs disagree on orientation, the majority of aligned bases decides.
 
 ## 8. Path and copy collapse
 
-V1 uses an explicit deterministic manifest. At minimum it must establish:
-
-- source graph/haplotype/copy coordinate path identity;
-- source transcript identity on that path;
-- canonical transcript target identity;
-- canonical gene identity.
-
-Identity mappings are valid when explicitly listed. Multiple source transcript identities
-may collapse to one canonical transcript. The best score for a collapsed target is the
-maximum score observed among its compatible source members; scores are not summed across
-copies or haplotypes.
-
-Every compatible source identity must have an explicit manifest row. Missing coverage is
-a hard error; there is no implicit identity fallback. The manifest is applied before
-RAD target emission.
-
-For V1 compatibility evaluation, the source path is a visible source-coordinate path used
-by the GTF, not a mature spliced transcript path by itself. The transcript model is
-selected by the source transcript identity on that path.
+Transcript-copy collapse is implicit in HST naming: a read's winning HST haplotype copies of
+one transcript collapse to one transcript ID. A transcript's score is the score of its best
+HST and is never inflated by summing across copies. There is no runtime collapse manifest.
 
 ## 9. Alignment eligibility and scoring
 
-For each read group, the implementation must derive a best score for each canonical
-transcript target from complete compatible candidate traversals.
+Each aligned node is scored under vg's own alignment scheme, reproduced per node from the
+`Mapping` edits (see `docs/conversion-algorithm.md`). A transcript's evidence is the score of
+its best HST. The read's targets are the HSTs tied at the single top score pooled across all
+of the read's alignments; lower-scoring HSTs are not emitted. RAD output is an unweighted
+target set with no probabilistic weighting.
 
-Default eligibility is tied-best:
+## 10. Emitted target set
 
-```text
-retain target when read_best_score - target_best_score == 0
-```
-
-An advanced nonnegative score-window option must allow:
-
-```text
-retain target when read_best_score - target_best_score <= N
-```
-
-Phase 0 defines complete GAMP traversal scores as the sum of selected subpath scores plus
-selected connection scores, with ordinary `next` edges adding no transition score. No
-probabilistic weighting is required in V1, and RAD output is an unweighted target set.
-
-## 10. Assignment policies
-
-Active GAMP-to-RAD output uses only the `all` assignment behavior. After compatibility,
-source-to-canonical collapse, and score filtering, panCollapse emits every eligible
-canonical transcript target that remains.
-
-`unique-transcript`, `unique-gene`, and `starsolo-default` are to-be-implemented future
-options outside the active GAMP-to-RAD behavior. They may become relevant if panCollapse
-later expands to non-RAD output formats, but they must not prefilter RAD compatibility
-records in V1.
+panCollapse emits the full compatible transcript set per read — the winning HSTs collapsed to
+unique transcript IDs. It does not prefilter to transcript- or gene-unique subsets, and the
+active converter has no assignment-mode CLI.
 
 ## 11. Output
 
@@ -190,7 +139,7 @@ alevin-fry collate
 alevin-fry quant
 ```
 
-Target IDs in RAD are canonical transcript IDs from the collapse manifest. A standard
+Target IDs in RAD are the transcript IDs a read's winning HSTs collapse to. A standard
 two-column transcript-to-gene map allows alevin-fry to produce the final cell-by-gene
 matrix. V1 does not attach splicing-state labels.
 

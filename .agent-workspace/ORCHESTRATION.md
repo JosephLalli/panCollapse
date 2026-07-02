@@ -21,14 +21,15 @@ reports into the canonical research briefs and architecture proposal.
 
 Any change to these shared contracts must be routed through the decision log:
 
-- required inputs;
-- collapse-manifest schema;
+- required inputs (GAMP, `.xg` with HST paths, t2g);
 - barcode/UMI source policy;
-- compatibility semantics;
-- score eligibility;
-- assignment policies;
+- compatibility semantics (HST-path node membership);
+- node scoring and HST attribution;
 - RAD output contract;
 - V1 scope.
+
+Note: the collapse-manifest schema and assignment-policy items that appeared here before
+D048 are removed; those surfaces no longer exist in the active design.
 
 ## Context budget
 

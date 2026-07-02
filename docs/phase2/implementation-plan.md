@@ -1,3 +1,11 @@
+> **Superseded by D048 for compatibility and collapse semantics.** The active GAMP-to-RAD
+> algorithm is `docs/conversion-algorithm.md`. D048 removes GTF, collapse manifest, and
+> traversal-based compatibility from the active design. The Phase 2 scope below (steps 3–5:
+> "Project one aligned block through the matching .xg source path. Match one GTF transcript
+> model. Resolve one collapse manifest row") describes the pre-D048 vertical slice, which is
+> now historical. Raw CB/UMI extraction from the GAMP name field (D038), single-threaded
+> execution (D045), streaming RAD writing, and alevin-fry consumption remain active.
+
 # Phase 2 Implementation Plan
 
 Status: approved and implemented. This document records the approved Phase 2 direction

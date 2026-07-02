@@ -1,3 +1,11 @@
+> **Superseded by D048.** The active GAMP-to-RAD algorithm is `docs/conversion-algorithm.md`.
+> D048 removes `--score-window`, `--assignment`, and the explicit collapse manifest from the
+> active design. Winner selection is the single top HST score across all of a read's
+> alignments plus ties; collapse is implicit in HST naming. Score-window filtering
+> (`SC-02`–`SC-04`, `score_removed_targets`) and manifest-driven collapse (`COL-01`,
+> `COL-02`) are pre-D048 concepts. These Phase 1 policy fixtures are preserved as
+> historical context; do not use them as current acceptance criteria.
+
 # Phase 1 Policy Fixtures
 
 These fixtures are pure policy contracts. They should be testable without VG headers,

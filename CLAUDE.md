@@ -7,10 +7,12 @@ an index, not the full manual; read detailed files only when working in their ar
 
 - Verify external APIs and formats before designing against them.
 - Do not write production code until Gate Architecture Approved has passed.
-- Preserve multimapping evidence. Active GAMP-to-RAD output emits all compatible retained
-  RAD targets after compatibility, collapse, and score filtering; transcript- and
-  gene-uniqueness modes are deferred/to-be-implemented.
-- Use existing VG/index and GTF inputs in V1; do not introduce a custom lookup index
+- Preserve multimapping evidence. Per D048, GAMP-to-RAD emits the read's compatible
+  transcript set: score aligned nodes under vg's scheme, attribute to the HST paths crossing
+  them, take the top HST score across all of a read's alignments plus ties, and collapse to
+  unique transcript IDs. See `docs/conversion-algorithm.md`.
+- Runtime inputs are the GAMP, the graph with `vg rna` HST paths, and a transcript-to-gene
+  map; the GTF and `vg rna` are fixture-creation only. Do not introduce a custom lookup index
   without measured evidence and human approval.
 - Update `PROGRESS.md` and `docs/decisions.md` before ending a substantive session.
 
@@ -34,6 +36,7 @@ an index, not the full manual; read detailed files only when working in their ar
 | Need | File |
 |---|---|
 | Product contract | `docs/product-spec.md` |
+| Conversion algorithm (D048) | `docs/conversion-algorithm.md` |
 | Inputs and outputs | `docs/input-output-contract.md` |
 | Biological semantics | `docs/compatibility-semantics.md` |
 | Decisions and open forks | `docs/decisions.md` |
