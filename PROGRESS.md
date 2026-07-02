@@ -531,3 +531,9 @@ projection, or a custom index.
   the real-data score and oracle checks (they depend on build-dir scratch), and the
   per-node-lookup performance work. New code (`src/pathtally*.hpp`, rewritten `src/main.cpp`,
   `tests/vg/pathtally_*`) is uncommitted.
+- 2026-07-02: Verified PathTally on a deterministic `vg sim` fixture. `vg sim -x spliced.xg
+  -P <four HST paths> -n 400 -l 90 -s 1 -q` -> `tests/vg/fixture_tag_reads.py` (synthetic
+  CB/UMI) -> `vg mpmap -n rna -F GAMP` -> panCollapse emitted RAD for all 400 read groups,
+  byte-identical on re-run, with the four source transcripts in the dictionary; the
+  independent oracle matched all 400 records exactly. Committed the PathTally implementation
+  as `07000a0`.

@@ -67,3 +67,8 @@ winning tallies collapse to transcripts. One test group per implementation incre
   (target sets, orientation, packed CB/UMI). The oracle/comparator is committable; the
   GAMP/graph inputs are build-dir scratch, so a self-contained CTest still needs a committed
   tiny fixture.
+- Status: PASS on deterministic `vg sim` reads too. `vg sim -x spliced.xg -P <HST...> -n 400
+  -l 90 -s 1 -q` produces spliced reads from four chosen HST paths; `tests/vg/fixture_tag_reads.py`
+  appends synthetic CB/UMI; `vg mpmap -F GAMP` maps them; panCollapse emits RAD for all 400
+  (byte-identical on re-run), the four source transcripts appear in the dictionary, and the
+  independent oracle matches all 400 records exactly.
