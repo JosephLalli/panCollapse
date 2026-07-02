@@ -1,60 +1,101 @@
 # panCollapse
 
-`panCollapse` is a planned C++ tool for converting name-grouped VG multipath alignments
-(GAMP) into mapper-style, uncollated RAD records suitable for the standard alevin-fry
-single-cell quantification workflow.
+`panCollapse` converts pangenome single-cell RNA-seq alignments from `vg mpmap` (GAMP,
+multipath format) into mapper-style, uncollated RAD records that
+[alevin-fry](https://github.com/COMBINE-lab/alevin-fry) quantifies into a cell-by-gene matrix.
 
-The repository contains the product specification, behavioral contracts, decision log,
-research briefs, the staged implementation plan, and a CMake/CTest skeleton. An earlier
-traversal-based converter exists in `src/`, superseded by decision D048; the D048 algorithm
-(`docs/conversion-algorithm.md`) is the current direction and its implementation has not yet
-begun.
+It bridges a pangenome aligner and the standard single-cell counting workflow: for each read
+it reports the set of transcripts the read is compatible with (with orientation), reading
+compatibility directly off the haplotype-specific transcript (HST) paths that `vg rna`
+embedded in the graph — no GTF or annotation projection at run time.
 
-## Product intent
+## Requirements
 
-The V1 product will:
+- A VG installation/checkout to build and link against (the tool consumes `vg mpmap` GAMP and
+  a matching `.xg`). Build it, or point at an existing checkout.
+- C++20 (GCC 15), CMake, and Ninja.
+- [alevin-fry](https://github.com/COMBINE-lab/alevin-fry) for downstream quantification.
+- Python 3 to run the test suite.
 
-- consume GAMP records from 10x 3′ single-cell or single-nucleus experiments;
-- extract observed raw cell barcodes and UMIs from the GAMP name field;
-- determine transcript compatibility via HST-path membership: a read is compatible with a
-  transcript when one of that transcript's haplotype-specific transcript (HST) paths
-  (`<transcript_id>_H<n>` / `_R<n>`, embedded by `vg rna`) traverses a node the read
-  aligns to;
-- score each aligned node under vg's own alignment scheme and select the winning transcript
-  set as the top HST score across all of the read's alignments plus ties;
-- collapse winning HST paths to unique transcript IDs implicitly through the HST naming
-  convention, with no separate runtime collapse manifest;
-- preserve multimapping equivalence classes by default;
-- emit uncollated RAD for `alevin-fry generate-permit-list`, `collate`, and `quant`;
-- use only the name-grouped GAMP, the matching `.xg` graph carrying HST paths, and a
-  transcript-to-gene map at runtime, without a GTF, a collapse manifest, or a custom
-  lookup index.
+## Build
 
-The implementation language is C++20. The intended compiler environment is GCC 15, and
-the build system is CMake with Ninja. The current VG linkage boundary is documented in
-`docs/architecture-proposal.md` and smoke-tested in the Phase 1 CTest skeleton. The
-project is licensed under Apache License 2.0.
+```sh
+VG=/path/to/vg                      # a vg checkout/install with lib/pkgconfig
+PKG_CONFIG_PATH="$VG/lib/pkgconfig" cmake -S . -B build -G Ninja \
+  -DPANCOLLAPSE_VG_ROOT="$VG" \
+  -DCMAKE_PREFIX_PATH="$VG" \
+  -DCMAKE_BUILD_RPATH="$VG/lib"
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
 
-## Project documents
+The converter is `build/src/panCollapse`.
 
-1. [`docs/product-spec.md`](docs/product-spec.md) — canonical V1 contract.
-2. [`docs/conversion-algorithm.md`](docs/conversion-algorithm.md) — canonical GAMP-to-RAD
-   algorithm (D048).
-3. [`docs/compatibility-semantics.md`](docs/compatibility-semantics.md) — transcript
-   assignment semantics.
-4. [`docs/input-output-contract.md`](docs/input-output-contract.md) — external interface
-   obligations.
-5. [`docs/decisions.md`](docs/decisions.md) — settled decisions and open forks.
-6. [`docs/validation-contract.md`](docs/validation-contract.md) — acceptance criteria.
-7. [`docs/phase1/README.md`](docs/phase1/README.md) — Phase 1 focused contract routing
-   (historical; see D048 banner).
-8. [`docs/phase2/implementation-plan.md`](docs/phase2/implementation-plan.md) — Phase 2
-   vertical-slice plan (historical; see D048 banner).
-9. [`docs/roadmap.md`](docs/roadmap.md) — explicitly deferred versions and optimizations.
+## Usage
 
-## Current status
+```
+panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir out
+                    [--raw-cb-length 16] [--raw-umi-length 12]
+                    [--score flat|qualadj] [--molecule-identity-failures skip|fail]
+```
 
-The GAMP-to-RAD algorithm was redirected by decision D048 to graph-native transcript feature
-counting (`docs/conversion-algorithm.md`). The earlier traversal-enumeration and
-GTF-projection converter in `src/` is superseded and will be replaced increment by increment.
-`PROGRESS.md` is the authoritative state tracker.
+### Inputs
+
+- `--gamp` — name-grouped `vg mpmap -F GAMP` multipath alignments. All records for one read
+  must be contiguous. Read names must carry the raw 10x barcode and UMI as
+  `<original_name>_<raw_CB>_<raw_UMI>` (place them there during FASTQ preparation, before
+  mapping). Pass `-` to read the GAMP stream from stdin.
+- `--xg` — the `.xg` for the same graph that produced the GAMP, carrying the `vg rna` HST paths
+  (`<transcript_id>_H<n>` / `_R<n>`).
+- `--t2g` — a two-column `HST_name<TAB>gene` map (as produced alongside `vg rna`). panCollapse
+  collapses HST haplotype copies to their transcript id.
+
+### Options
+
+- `--raw-cb-length` / `--raw-umi-length` — lengths of the raw barcode and UMI parsed from the
+  read name (defaults 16 and 12).
+- `--score flat|qualadj` — per-node scoring. `flat` (default) reproduces vg's alignment scheme;
+  `qualadj` reproduces vg's base-quality-adjusted scoring for exact fidelity to
+  quality-adjusted mapping.
+- `--molecule-identity-failures skip|fail` — how to treat reads whose name has a missing,
+  malformed, or wrong-length CB/UMI (default `skip`, counted in the summary).
+
+### Outputs (in `--out-dir`)
+
+- `map.rad` — mapper-style uncollated RAD (raw CB/UMI, compatible transcript targets, and
+  per-target orientation), written with a streaming seek-and-backpatch writer.
+- `tx2gene.tsv` — transcript-to-gene map for `alevin-fry quant`.
+- `summary.tsv` — per-run counters (records, emitted groups, no-compatible / unaligned reads,
+  molecule-identity skips).
+
+## Example
+
+```sh
+# reads.fastq read names already end in _<CB>_<UMI>
+vg mpmap -n rna -x graph.spliced.xg -g graph.spliced.gcsa -d graph.spliced.dist \
+         -F GAMP -f reads.fastq \
+  | panCollapse convert --gamp - --xg graph.spliced.xg --t2g t2g.tsv --out-dir out
+
+alevin-fry generate-permit-list -i out -d fw -o pl --unfiltered-pl 3M-february-2018.txt
+alevin-fry collate -i pl -r out
+alevin-fry quant -i pl -m out/tx2gene.tsv -o quant -r cr-like --use-mtx
+```
+
+## How it works
+
+For each read, across all of its GAMP alignments, panCollapse scores every aligned node under
+vg's own scoring scheme, adds each node's score to the HST paths crossing it, keeps the HSTs
+tied at the top score, collapses them to unique transcript ids (RAD `refs`), and records each
+transcript's orientation from the read's direction along the HST path. The full algorithm is
+in [`docs/conversion-algorithm.md`](docs/conversion-algorithm.md).
+
+## Documentation
+
+- [`docs/conversion-algorithm.md`](docs/conversion-algorithm.md) — the conversion algorithm.
+- [`docs/input-output-contract.md`](docs/input-output-contract.md) — inputs, outputs, exits.
+- [`docs/product-spec.md`](docs/product-spec.md) — the product contract.
+- [`docs/decisions.md`](docs/decisions.md) — design decisions and rationale.
+
+## License
+
+Apache License 2.0.
