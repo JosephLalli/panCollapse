@@ -68,20 +68,21 @@ bullets are retained as cumulative history.
 
 ## Next action
 
-Implement `docs/conversion-algorithm.md` one increment at a time. Increment 1 (per-node vg
-score) is done and verified; next is increment 2 (node-to-HST attribution and transcript-ID
-collapse). D048 dissolves the earlier reference-path-vs-HST fork: compatibility now reads
-off the HST paths directly, so no GTF projection or manifest is needed at runtime. The
-human-pangenome MHC fixture (D047, `docs/testing_fixture_creation.md`) remains the
-production-applicability target. The RAD chunk-count policy conflict (D045 streaming
-`num_chunks = 0` versus local alevin-fry v0.15.0) is still open for human review; the writer
-stays exact-count until reconciled.
+All six PathTally increments (`docs/conversion-algorithm.md`) plus D049 streaming (stdin
+input via `--gamp -` and a seek-and-backpatch RAD writer) are implemented and verified; the
+RAD chunk-count conflict is resolved by D049 with exact backpatched counts that alevin-fry
+accepts. Remaining work is hygiene, not algorithm: retire the old traversal-era CTest fixtures
+(`phase2_*`/`phase3_*`/projection, which invoke the removed CLI), add self-contained CTests
+for the real-data score and oracle checks (they depend on build-dir scratch, so they need a
+committed tiny fixture), and optimize the per-node `for_each_step_on_handle` lookup (the
+1M-read run took ~6 min).
 
 ## Required stop
 
 Do not broaden production code into multithreading without a later explicit approval.
-Treat stdin GAMP streaming as research/design work until its input interface is verified.
-Do not add stdout RAD output unless separately approved. Phase 3 work must proceed one
+Stdin GAMP streaming is implemented (D049, `--gamp -`). Do not add stdout RAD output unless
+separately approved (the seek-and-backpatch writer needs a seekable file). Phase 3 work must
+proceed one
 independently testable behavior at a time, following D048 and
 `docs/conversion-algorithm.md`. Do not reintroduce traversal enumeration, runtime GTF
 projection, or a custom index.
@@ -536,4 +537,12 @@ projection, or a custom index.
   CB/UMI) -> `vg mpmap -n rna -F GAMP` -> panCollapse emitted RAD for all 400 read groups,
   byte-identical on re-run, with the four source transcripts in the dictionary; the
   independent oracle matched all 400 records exactly. Committed the PathTally implementation
-  as `07000a0`.
+  as `07000a0` and the vg sim fixture verification as `6bc16eb`.
+- 2026-07-02: Implemented streaming GAMP input and a seek-and-backpatch streaming RAD writer
+  (D049). `--gamp -` reads GAMP from stdin (`vg mpmap ... | panCollapse convert --gamp -`); the
+  writer emits the header, target dictionary, and tags with a placeholder `num_chunks`, streams
+  each record as its group flushes, and seeks back at finalize to patch the exact chunk
+  byte/record counts and `num_chunks`. Verified byte-identical to the buffered writer on the
+  sim fixture, byte-identical between file and stdin input, the oracle still exact, and a
+  no-emit run leaves a header-only `num_chunks = 0` file. This supersedes D045's
+  `num_chunks = 0` output and resolves the chunk-count-versus-alevin-fry conflict.

@@ -782,6 +782,27 @@ mapper produced. vg source confirms per-node scoring reproduces `Subpath.score` 
 (`alignment_scorer.cpp`) and that HST paths are stored transcript 5'->3' (`transcriptome.cpp`
 `reorder_exons`), so orientation reads directly off the path.
 
+### D049 — Streaming GAMP input and seek-and-backpatch RAD output
+
+**Decision source:** User.
+
+**Decision:** panCollapse reads GAMP as a stream, including from stdin via `--gamp -`, so it can
+run as `vg mpmap ... | panCollapse convert --gamp - ...`. It writes `map.rad` to disk with a
+streaming seek-and-backpatch writer: the header, target dictionary (from the t2g), and tag
+sections are written up front with a placeholder `num_chunks`; each read record is written as
+its group is flushed; and at finalize the writer seeks back to patch the chunk byte/record
+counts and set `num_chunks` to the exact value. Only the current record is buffered, and the
+chunk header is written lazily on the first record, so a run with no emitted record leaves a
+header-only file with `num_chunks = 0` and no chunk.
+
+**Decision:** D049 supersedes D045's `num_chunks = 0` unknown-count disk output. Seek-and-
+backpatch produces exact `num_chunks` and chunk counts that the supported alevin-fry v0.15.0
+accepts, resolving the D045-versus-alevin-fry chunk-count conflict. The seek requires a
+regular output file, which is why RAD goes to disk rather than stdout.
+
+**Rationale:** The user chose the go-back-and-patch method so output stays exact-count and
+alevin-fry-compatible while still streaming to disk without buffering all emitted records.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

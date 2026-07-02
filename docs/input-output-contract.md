@@ -61,8 +61,10 @@ them fatal.
   reverse if opposite; on disagreement among a transcript's winning HSTs, the majority of
   aligned bases decides (deterministic forward fallback for an exact tie).
 - No transcript likelihood weights and no splicing-state labels.
-- Streaming RAD-to-disk writing: `num_chunks = 0`, file-tag values, then complete chunks
-  emitted incrementally to `map.rad`.
+- Streaming RAD-to-disk writing (D049): the header, target dictionary, and tags are written
+  up front with a placeholder `num_chunks`; records stream to `map.rad` as groups flush; and
+  the writer seeks back at finalize to patch the exact chunk byte/record counts and
+  `num_chunks`. A run with no emitted record leaves a header-only file (`num_chunks = 0`).
 - Byte-identical output for identical inputs/configuration. The converter is single-threaded
   under D045.
 - GAMP read groups whose records all have empty subpaths are unaligned: no RAD record, and
@@ -96,5 +98,7 @@ are counted (`raw_molecule_missing_groups`, `raw_molecule_malformed_groups`,
 molecule-identity failures: no record, counted under `no_compatible_transcript_groups` and
 `unaligned_reads`.
 
-Future `vg mpmap | panCollapse` stdin support must accept the same binary GAMP semantics and
-preserve grouping/recurrence validation. A stdout RAD mode is not in the active CLI.
+GAMP input streams from a file or from stdin via `--gamp -` (D049), so `vg mpmap ... |
+panCollapse convert --gamp - ...` works with the same grouping/recurrence validation. A
+stdout RAD mode is not in the active CLI, because the seek-and-backpatch writer needs a
+seekable output file.

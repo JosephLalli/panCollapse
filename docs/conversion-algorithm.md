@@ -75,8 +75,10 @@ fidelity to vg's quality-adjusted scores is wanted.
 
 ## Output and determinism
 
-- `map.rad` via the streaming writer, `tx2gene.tsv` from the t2g, and a run summary with
-  stable counters.
+- `map.rad` via a streaming seek-and-backpatch writer (D049: header + target dictionary and
+  tags up front with a placeholder `num_chunks`, records streamed as groups flush, chunk and
+  `num_chunks` counts patched at finalize), `tx2gene.tsv` from the t2g, and a run summary with
+  stable counters. GAMP input streams from a file or stdin (`--gamp -`).
 - Single-threaded; the RAD target dictionary is lexicographically ordered; output is
   byte-reproducible across runs.
 - alevin-fry consumes `map.rad` downstream (permit-list, collate, quant).

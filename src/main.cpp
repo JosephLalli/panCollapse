@@ -83,7 +83,7 @@ struct T2gData {
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(
-        "usage: panCollapse convert --gamp reads.gamp --xg graph.xg --t2g t2g.tsv "
+        "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv "
         "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
         "[--score flat|qualadj] [--molecule-identity-failures skip|fail]");
 }
@@ -363,70 +363,109 @@ void write_packed_value(std::ostream& out, uint8_t type_id, uint64_t value) {
     }
 }
 
-void write_rad_file(const std::filesystem::path& filename,
-                    const std::vector<std::string>& target_names,
-                    const std::vector<EmittedRecord>& records,
-                    size_t cb_length,
-                    size_t umi_length) {
-    std::ofstream out(filename, std::ios::binary);
-    if (!out) {
-        throw std::runtime_error("cannot write RAD output");
+size_t rad_int_width(uint8_t type_id) {
+    switch (type_id) {
+    case kRadU8:
+        return 1;
+    case kRadU16:
+        return 2;
+    case kRadU32:
+        return 4;
+    case kRadU64:
+        return 8;
+    default:
+        throw std::runtime_error("unsupported RAD integer type");
+    }
+}
+
+// Streams RAD to disk: writes the header and tag sections up front (the target
+// dictionary comes from the t2g, known before any record), then each read record
+// as it is produced, and seeks back at finalize() to patch the chunk byte/record
+// counts and the file-level num_chunks. Only the current record is ever held.
+class RadStreamWriter {
+public:
+    RadStreamWriter(const std::filesystem::path& filename, const std::vector<std::string>& target_names,
+                    size_t cb_length, size_t umi_length)
+        : out_(filename, std::ios::binary),
+          cb_type_(rad_int_type_for_length(cb_length)),
+          umi_type_(rad_int_type_for_length(umi_length)),
+          read_value_size_(rad_int_width(cb_type_) + rad_int_width(umi_type_)) {
+        if (!out_) {
+            throw std::runtime_error("cannot write RAD output");
+        }
+        write_le<uint8_t>(out_, 0);
+        write_le<uint64_t>(out_, static_cast<uint64_t>(target_names.size()));
+        for (const std::string& target_name : target_names) {
+            write_string_with_u16_length(out_, target_name);
+        }
+        num_chunks_pos_ = out_.tellp();
+        write_le<uint64_t>(out_, 0);  // num_chunks placeholder, patched in finalize()
+
+        write_le<uint16_t>(out_, 2);
+        write_tag(out_, "cblen", kRadU16);
+        write_tag(out_, "ulen", kRadU16);
+        write_le<uint16_t>(out_, 2);
+        write_tag(out_, "b", cb_type_);
+        write_tag(out_, "u", umi_type_);
+        write_le<uint16_t>(out_, 1);
+        write_tag(out_, "compressed_ori_refid", kRadU32);
+        write_le<uint16_t>(out_, static_cast<uint16_t>(cb_length));
+        write_le<uint16_t>(out_, static_cast<uint16_t>(umi_length));
     }
 
-    const uint8_t cb_type = rad_int_type_for_length(cb_length);
-    const uint8_t umi_type = rad_int_type_for_length(umi_length);
-
-    write_le<uint8_t>(out, 0);
-    write_le<uint64_t>(out, static_cast<uint64_t>(target_names.size()));
-    for (const std::string& target_name : target_names) {
-        write_string_with_u16_length(out, target_name);
-    }
-    write_le<uint64_t>(out, records.empty() ? 0 : 1);
-
-    write_le<uint16_t>(out, 2);
-    write_tag(out, "cblen", kRadU16);
-    write_tag(out, "ulen", kRadU16);
-
-    write_le<uint16_t>(out, 2);
-    write_tag(out, "b", cb_type);
-    write_tag(out, "u", umi_type);
-
-    write_le<uint16_t>(out, 1);
-    write_tag(out, "compressed_ori_refid", kRadU32);
-
-    write_le<uint16_t>(out, static_cast<uint16_t>(cb_length));
-    write_le<uint16_t>(out, static_cast<uint16_t>(umi_length));
-
-    if (records.empty()) {
-        return;
-    }
-
-    const size_t read_value_size = (cb_type == kRadU64 ? 8 : cb_type == kRadU32 ? 4 : cb_type == kRadU16 ? 2 : 1) +
-                                   (umi_type == kRadU64 ? 8 : umi_type == kRadU32 ? 4 : umi_type == kRadU16 ? 2 : 1);
-    size_t chunk_size = 8;
-    for (const EmittedRecord& record : records) {
-        if (record.hits.empty()) {
+    void write_record(const MoleculeId& molecule, const std::vector<TargetHit>& hits) {
+        if (hits.empty()) {
             throw std::runtime_error("cannot write RAD record with no target hits");
         }
-        chunk_size += 4 + read_value_size + 4 * record.hits.size();
-    }
-    if (records.size() > std::numeric_limits<uint32_t>::max() || chunk_size > std::numeric_limits<uint32_t>::max()) {
-        throw std::runtime_error("RAD chunk is too large");
-    }
-    write_le<uint32_t>(out, static_cast<uint32_t>(chunk_size));
-    write_le<uint32_t>(out, static_cast<uint32_t>(records.size()));
-    for (const EmittedRecord& record : records) {
-        write_le<uint32_t>(out, static_cast<uint32_t>(record.hits.size()));
-        write_packed_value(out, cb_type, pack_sequence(record.molecule.barcode));
-        write_packed_value(out, umi_type, pack_sequence(record.molecule.umi));
-        for (const TargetHit& hit : record.hits) {
+        if (!chunk_started_) {
+            chunk_header_pos_ = out_.tellp();
+            write_le<uint32_t>(out_, 0);  // chunk nbytes placeholder
+            write_le<uint32_t>(out_, 0);  // chunk nrec placeholder
+            chunk_started_ = true;
+        }
+        write_le<uint32_t>(out_, static_cast<uint32_t>(hits.size()));
+        write_packed_value(out_, cb_type_, pack_sequence(molecule.barcode));
+        write_packed_value(out_, umi_type_, pack_sequence(molecule.umi));
+        for (const TargetHit& hit : hits) {
             if (hit.target_id > kRadTargetIdMask) {
                 throw std::runtime_error("RAD target ID exceeds 31-bit encoding limit");
             }
-            write_le<uint32_t>(out, hit.target_id | (hit.is_forward ? kRadForwardMask : 0));
+            write_le<uint32_t>(out_, hit.target_id | (hit.is_forward ? kRadForwardMask : 0));
+        }
+        chunk_bytes_ += 4 + read_value_size_ + 4 * hits.size();
+        if (nrec_ == std::numeric_limits<uint32_t>::max() || chunk_bytes_ > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error("RAD chunk is too large");
+        }
+        ++nrec_;
+    }
+
+    uint32_t record_count() const { return nrec_; }
+
+    void finalize() {
+        if (chunk_started_) {
+            out_.seekp(chunk_header_pos_);
+            write_le<uint32_t>(out_, static_cast<uint32_t>(chunk_bytes_));
+            write_le<uint32_t>(out_, nrec_);
+            out_.seekp(num_chunks_pos_);
+            write_le<uint64_t>(out_, 1);
+        }
+        out_.flush();
+        if (!out_) {
+            throw std::runtime_error("failed to finalize RAD file");
         }
     }
-}
+
+private:
+    std::ofstream out_;
+    uint8_t cb_type_;
+    uint8_t umi_type_;
+    size_t read_value_size_;
+    std::streampos num_chunks_pos_{};
+    std::streampos chunk_header_pos_{};
+    bool chunk_started_ = false;
+    uint32_t nrec_ = 0;
+    uint64_t chunk_bytes_ = 8;  // chunk header: nbytes(4) + nrec(4)
+};
 
 void write_text_file(const std::filesystem::path& filename, const std::string& contents) {
     std::ofstream out(filename);
@@ -495,9 +534,18 @@ int run_convert(int argc, char** argv) {
         };
     }
 
-    std::ifstream gamp_in(options.gamp, std::ios::binary);
-    if (!gamp_in) {
-        throw std::runtime_error("cannot open GAMP");
+    std::filesystem::create_directories(options.out_dir);
+    RadStreamWriter rad_writer(options.out_dir / "map.rad", t2g.target_names, options.raw_cb_length,
+                               options.raw_umi_length);
+
+    std::ifstream gamp_file;
+    std::istream* gamp_in = &std::cin;
+    if (options.gamp != std::filesystem::path("-")) {
+        gamp_file.open(options.gamp, std::ios::binary);
+        if (!gamp_file) {
+            throw std::runtime_error("cannot open GAMP");
+        }
+        gamp_in = &gamp_file;
     }
 
     size_t input_records = 0;
@@ -509,7 +557,6 @@ int run_convert(int argc, char** argv) {
     size_t raw_molecule_malformed_groups = 0;
     size_t raw_molecule_unsupported_groups = 0;
     size_t raw_molecule_skipped_groups = 0;
-    std::vector<EmittedRecord> emitted_records;
     std::set<std::string> completed_names;
     bool have_group = false;
     Group current_group;
@@ -591,12 +638,12 @@ int run_convert(int argc, char** argv) {
             }
             hits.push_back({target_id->second, target.forward});
         }
-        emitted_records.push_back({current_group.molecule, hits});
+        rad_writer.write_record(current_group.molecule, hits);
         completed_names.insert(current_group.name);
         have_group = false;
     };
 
-    vg::io::for_each<vg::MultipathAlignment>(gamp_in, [&](vg::MultipathAlignment& alignment) {
+    vg::io::for_each<vg::MultipathAlignment>(*gamp_in, [&](vg::MultipathAlignment& alignment) {
         ++input_records;
         if (!have_group) {
             start_group(alignment);
@@ -619,9 +666,7 @@ int run_convert(int argc, char** argv) {
         throw std::runtime_error("panCollapse convert expects at least one GAMP record");
     }
 
-    std::filesystem::create_directories(options.out_dir);
-    write_rad_file(options.out_dir / "map.rad", t2g.target_names, emitted_records, options.raw_cb_length,
-                   options.raw_umi_length);
+    rad_writer.finalize();
     std::string tx2gene;
     for (const std::string& target_name : t2g.target_names) {
         tx2gene += target_name + '\t' + t2g.transcript_gene.at(target_name) + '\n';
@@ -630,7 +675,7 @@ int run_convert(int argc, char** argv) {
     write_text_file(options.out_dir / "summary.tsv",
                     "input_records\t" + std::to_string(input_records) + "\ninput_read_groups\t" +
                         std::to_string(input_read_groups) + "\nemitted_groups\t" +
-                        std::to_string(emitted_records.size()) + "\nno_compatible_transcript_groups\t" +
+                        std::to_string(rad_writer.record_count()) + "\nno_compatible_transcript_groups\t" +
                         std::to_string(no_compatible_transcript_groups) + "\nunaligned_reads\t" +
                         std::to_string(unaligned_reads) + "\nraw_molecule_missing_groups\t" +
                         std::to_string(raw_molecule_missing_groups) + "\nraw_molecule_malformed_groups\t" +
