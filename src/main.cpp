@@ -3,6 +3,9 @@
 #include <vg/vg.pb.h>
 #include <xg.hpp>
 
+#include "pathtally.hpp"
+#include "pathtally_qualadj.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -12,12 +15,12 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <tuple>
 #include <type_traits>
-#include <utility>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -29,55 +32,21 @@ constexpr uint8_t kRadU64 = 4;
 constexpr uint32_t kRadForwardMask = 0x80000000U;
 constexpr uint32_t kRadTargetIdMask = 0x7fffffffU;
 
-using SourceKey = std::pair<std::string, std::string>;
+enum class MoleculeIdentityFailurePolicy { Skip, Fail };
 
-enum class MoleculeIdentityFailurePolicy {
-    Skip,
-    Fail,
-};
+enum class ScoreMode { Flat, QualAdj };
 
-enum class MoleculeParseStatus {
-    Ok,
-    Missing,
-    Malformed,
-    Unsupported,
-};
+enum class MoleculeParseStatus { Ok, Missing, Malformed, Unsupported };
 
 struct Options {
     std::filesystem::path gamp;
     std::filesystem::path xg;
-    std::filesystem::path gtf;
-    std::filesystem::path manifest;
+    std::filesystem::path t2g;
     std::filesystem::path out_dir;
     size_t raw_cb_length = 16;
     size_t raw_umi_length = 12;
-    size_t score_window = 0;
-    size_t min_splice_jump = 20;
-    size_t max_traversals_per_read = 100000;
     MoleculeIdentityFailurePolicy molecule_identity_failures = MoleculeIdentityFailurePolicy::Skip;
-};
-
-struct ManifestRow {
-    std::string source_path;
-    std::string source_transcript;
-    std::string canonical_transcript;
-    std::string canonical_gene;
-};
-
-struct TranscriptModel {
-    std::string source_path;
-    std::string source_transcript;
-    std::string source_gene;
-    std::vector<std::pair<size_t, size_t>> exons;
-    std::vector<std::pair<size_t, size_t>> introns;
-    bool is_reverse = false;
-};
-
-struct ManifestData {
-    std::map<SourceKey, ManifestRow> source_rows;
-    std::map<std::string, std::string> target_gene;
-    std::map<std::string, uint32_t> target_ids;
-    std::vector<std::string> target_names;
+    ScoreMode score_mode = ScoreMode::Flat;
 };
 
 struct MoleculeId {
@@ -92,23 +61,9 @@ struct MoleculeParseResult {
     std::string message;
 };
 
-struct ProjectedBlock {
-    std::string source_path;
-    size_t start = 0;
-    size_t end = 0;
-    bool is_forward_on_path = true;
-    bool previous_edge_is_connection = false;
-    size_t edit_index = 0;
-};
-
 struct TargetHit {
     uint32_t target_id = 0;
     bool is_forward = true;
-};
-
-struct TargetEvidence {
-    int64_t best_score = std::numeric_limits<int64_t>::min();
-    std::set<bool> orientations;
 };
 
 struct EmittedRecord {
@@ -116,35 +71,21 @@ struct EmittedRecord {
     std::vector<TargetHit> hits;
 };
 
-struct ReadGroupState {
-    std::string name;
-    MoleculeId molecule;
-    bool skip_for_molecule_identity = false;
-    MoleculeParseStatus molecule_status = MoleculeParseStatus::Ok;
-    std::string molecule_message;
-    std::map<uint32_t, TargetEvidence> target_evidence;
-    size_t traversal_count = 0;
-    bool saw_unaligned_record = false;
-    bool saw_subpath_record = false;
-};
-
-struct Traversal {
-    std::vector<uint32_t> subpaths;
-    std::vector<bool> incoming_connection;
-    int64_t score = 0;
-};
-
-struct ProjectedTraversal {
-    std::vector<ProjectedBlock> blocks;
-    size_t reference_edit_count = 0;
+// The transcript-to-gene map (t2g): HST_name -> gene. PathTally collapses HST
+// haplotype copies to a transcript id; the RAD dictionary is the sorted set of
+// those transcript ids.
+struct T2gData {
+    std::unordered_set<std::string> hst_names;
+    std::map<std::string, std::string> transcript_gene;
+    std::map<std::string, uint32_t> target_ids;
+    std::vector<std::string> target_names;
 };
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(
-        "usage: panCollapse convert --gamp reads.gamp --xg graph.xg --gtf annotation.gtf "
-        "--collapse-manifest collapse.tsv --out-dir out [--raw-cb-length N] [--raw-umi-length N] "
-        "[--assignment all] [--score-window N] [--min-splice-jump N] [--max-traversals-per-read N] "
-        "[--molecule-identity-failures skip|fail]");
+        "usage: panCollapse convert --gamp reads.gamp --xg graph.xg --t2g t2g.tsv "
+        "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
+        "[--score flat|qualadj] [--molecule-identity-failures skip|fail]");
 }
 
 size_t parse_size_option(const std::string& option_name, const std::string& value) {
@@ -184,33 +125,23 @@ Options parse_options(int argc, char** argv) {
             options.gamp = require_value("--gamp");
         } else if (arg == "--xg") {
             options.xg = require_value("--xg");
-        } else if (arg == "--gtf") {
-            options.gtf = require_value("--gtf");
-        } else if (arg == "--collapse-manifest") {
-            options.manifest = require_value("--collapse-manifest");
+        } else if (arg == "--t2g") {
+            options.t2g = require_value("--t2g");
         } else if (arg == "--out-dir") {
             options.out_dir = require_value("--out-dir");
-        } else if (arg == "--assignment") {
-            const std::string value = require_value("--assignment");
-            if (value == "all") {
-                continue;
-            }
-            if (value == "unique-transcript" || value == "unique-gene" || value == "starsolo-default") {
-                throw std::runtime_error("assignment policy '" + value +
-                                         "' is to be implemented outside GAMP-to-RAD conversion");
-            }
-            usage_error();
         } else if (arg == "--raw-cb-length") {
             options.raw_cb_length = parse_size_option("--raw-cb-length", require_value("--raw-cb-length"));
         } else if (arg == "--raw-umi-length") {
             options.raw_umi_length = parse_size_option("--raw-umi-length", require_value("--raw-umi-length"));
-        } else if (arg == "--score-window") {
-            options.score_window = parse_size_option("--score-window", require_value("--score-window"));
-        } else if (arg == "--min-splice-jump") {
-            options.min_splice_jump = parse_size_option("--min-splice-jump", require_value("--min-splice-jump"));
-        } else if (arg == "--max-traversals-per-read") {
-            options.max_traversals_per_read =
-                parse_size_option("--max-traversals-per-read", require_value("--max-traversals-per-read"));
+        } else if (arg == "--score") {
+            const std::string value = require_value("--score");
+            if (value == "flat") {
+                options.score_mode = ScoreMode::Flat;
+            } else if (value == "qualadj") {
+                options.score_mode = ScoreMode::QualAdj;
+            } else {
+                usage_error();
+            }
         } else if (arg == "--molecule-identity-failures") {
             const std::string value = require_value("--molecule-identity-failures");
             if (value == "skip") {
@@ -225,16 +156,12 @@ Options parse_options(int argc, char** argv) {
         }
     }
 
-    if (options.gamp.empty() || options.xg.empty() || options.gtf.empty() || options.manifest.empty() ||
-        options.out_dir.empty()) {
+    if (options.gamp.empty() || options.xg.empty() || options.t2g.empty() || options.out_dir.empty()) {
         usage_error();
     }
     if (options.raw_cb_length == 0 || options.raw_cb_length > 32 || options.raw_umi_length == 0 ||
         options.raw_umi_length > 32) {
         throw std::runtime_error("raw barcode and UMI lengths must be in 1..32");
-    }
-    if (options.min_splice_jump == 0 || options.max_traversals_per_read == 0) {
-        throw std::runtime_error("min splice jump and max traversals per read must be at least 1");
     }
 
     return options;
@@ -255,150 +182,41 @@ std::vector<std::string> split_tab(const std::string& line) {
     return fields;
 }
 
-std::string gtf_attribute(const std::string& attributes, const std::string& key) {
-    const std::string needle = key + " \"";
-    const size_t start = attributes.find(needle);
-    if (start == std::string::npos) {
-        return {};
-    }
-    const size_t value_start = start + needle.size();
-    const size_t value_end = attributes.find('"', value_start);
-    if (value_end == std::string::npos) {
-        return {};
-    }
-    return attributes.substr(value_start, value_end - value_start);
-}
-
-std::vector<std::pair<size_t, size_t>> merge_intervals(std::vector<std::pair<size_t, size_t>> intervals) {
-    if (intervals.empty()) {
-        return intervals;
-    }
-    std::sort(intervals.begin(), intervals.end());
-    std::vector<std::pair<size_t, size_t>> merged;
-    merged.push_back(intervals.front());
-    for (size_t i = 1; i < intervals.size(); ++i) {
-        auto& back = merged.back();
-        if (intervals[i].first <= back.second) {
-            back.second = std::max(back.second, intervals[i].second);
-        } else {
-            merged.push_back(intervals[i]);
-        }
-    }
-    return merged;
-}
-
-std::vector<std::pair<size_t, size_t>> implied_introns(const std::vector<std::pair<size_t, size_t>>& exons) {
-    std::vector<std::pair<size_t, size_t>> introns;
-    for (size_t i = 1; i < exons.size(); ++i) {
-        if (exons[i - 1].second < exons[i].first) {
-            introns.emplace_back(exons[i - 1].second, exons[i].first);
-        }
-    }
-    return introns;
-}
-
-ManifestData read_manifest(const std::filesystem::path& filename) {
+T2gData read_t2g(const std::filesystem::path& filename) {
     std::ifstream in(filename);
     if (!in) {
-        throw std::runtime_error("cannot open collapse manifest");
+        throw std::runtime_error("cannot open t2g");
     }
-
-    std::string header;
-    std::getline(in, header);
-    if (header != "source_path_name\tsource_transcript_id\tcanonical_transcript_id\tcanonical_gene_id") {
-        throw std::runtime_error("unexpected collapse manifest header");
-    }
-
-    ManifestData manifest;
-    std::string line;
-    while (std::getline(in, line)) {
-        if (line.empty()) {
-            continue;
-        }
-        const auto fields = split_tab(line);
-        if (fields.size() != 4) {
-            throw std::runtime_error("collapse manifest row must have 4 columns");
-        }
-        ManifestRow row{fields[0], fields[1], fields[2], fields[3]};
-        const SourceKey source_key{row.source_path, row.source_transcript};
-        const auto existing_source = manifest.source_rows.find(source_key);
-        if (existing_source != manifest.source_rows.end()) {
-            if (existing_source->second.canonical_transcript != row.canonical_transcript ||
-                existing_source->second.canonical_gene != row.canonical_gene) {
-                throw std::runtime_error("manifest_contradictory_rows");
-            }
-            continue;
-        }
-
-        const auto existing_gene = manifest.target_gene.find(row.canonical_transcript);
-        if (existing_gene != manifest.target_gene.end() && existing_gene->second != row.canonical_gene) {
-            throw std::runtime_error("manifest_gene_conflicts");
-        }
-        manifest.source_rows.emplace(source_key, row);
-        manifest.target_gene[row.canonical_transcript] = row.canonical_gene;
-    }
-
-    if (manifest.source_rows.empty()) {
-        throw std::runtime_error("collapse manifest has no data rows");
-    }
-    if (manifest.target_gene.size() > kRadTargetIdMask) {
-        throw std::runtime_error("RAD target dictionary exceeds 31-bit target IDs");
-    }
-    for (const auto& [target, gene] : manifest.target_gene) {
-        manifest.target_ids[target] = static_cast<uint32_t>(manifest.target_names.size());
-        manifest.target_names.push_back(target);
-    }
-    return manifest;
-}
-
-std::map<SourceKey, TranscriptModel> read_transcript_models(const std::filesystem::path& filename) {
-    std::ifstream in(filename);
-    if (!in) {
-        throw std::runtime_error("cannot open GTF");
-    }
-
-    std::map<SourceKey, TranscriptModel> models;
+    T2gData data;
     std::string line;
     while (std::getline(in, line)) {
         if (line.empty() || line.front() == '#') {
             continue;
         }
         const auto fields = split_tab(line);
-        if (fields.size() != 9 || fields[2] != "exon") {
-            continue;
+        if (fields.size() < 2 || fields[0].empty() || fields[1].empty()) {
+            throw std::runtime_error("t2g row must have transcript and gene columns");
         }
-
-        const std::string gene_id = gtf_attribute(fields[8], "gene_id");
-        const std::string transcript_id = gtf_attribute(fields[8], "transcript_id");
-        if (gene_id.empty() || transcript_id.empty()) {
-            throw std::runtime_error("GTF exon is missing gene_id or transcript_id");
+        const std::string& hst_name = fields[0];
+        const std::string& gene = fields[1];
+        data.hst_names.insert(hst_name);
+        const std::string transcript = pathtally::transcript_id_of(hst_name);
+        auto [it, inserted] = data.transcript_gene.emplace(transcript, gene);
+        if (!inserted && it->second != gene) {
+            throw std::runtime_error("t2g maps transcript " + transcript + " to multiple genes");
         }
-        if (fields[6] != "+" && fields[6] != "-") {
-            throw std::runtime_error("GTF exon has unsupported strand");
-        }
-        const size_t start_1_based = std::stoul(fields[3]);
-        const size_t end_inclusive = std::stoul(fields[4]);
-        if (start_1_based == 0 || end_inclusive < start_1_based) {
-            throw std::runtime_error("invalid GTF exon coordinates");
-        }
-        const SourceKey source_key{fields[0], transcript_id};
-        const bool is_reverse = fields[6] == "-";
-        auto [it, inserted] = models.emplace(
-            source_key, TranscriptModel{fields[0], transcript_id, gene_id, {}, {}, is_reverse});
-        if (!inserted && (it->second.source_gene != gene_id || it->second.is_reverse != is_reverse)) {
-            throw std::runtime_error("inconsistent GTF transcript model");
-        }
-        it->second.exons.emplace_back(start_1_based - 1, end_inclusive);
     }
-
-    if (models.empty()) {
-        throw std::runtime_error("GTF contains no exon model");
+    if (data.transcript_gene.empty()) {
+        throw std::runtime_error("t2g has no data rows");
     }
-    for (auto& [key, model] : models) {
-        model.exons = merge_intervals(std::move(model.exons));
-        model.introns = implied_introns(model.exons);
+    if (data.transcript_gene.size() > kRadTargetIdMask) {
+        throw std::runtime_error("RAD target dictionary exceeds 31-bit target IDs");
     }
-    return models;
+    for (const auto& [transcript, gene] : data.transcript_gene) {
+        data.target_ids[transcript] = static_cast<uint32_t>(data.target_names.size());
+        data.target_names.push_back(transcript);
+    }
+    return data;
 }
 
 bool is_supported_molecule_base(char base) {
@@ -492,18 +310,10 @@ uint64_t pack_sequence(const std::string& sequence) {
 }
 
 uint8_t rad_int_type_for_length(size_t length) {
-    if (length <= 4) {
-        return kRadU8;
-    }
-    if (length <= 8) {
-        return kRadU16;
-    }
-    if (length <= 16) {
-        return kRadU32;
-    }
-    if (length <= 32) {
-        return kRadU64;
-    }
+    if (length <= 4) return kRadU8;
+    if (length <= 8) return kRadU16;
+    if (length <= 16) return kRadU32;
+    if (length <= 32) return kRadU64;
     throw std::runtime_error("RAD cannot encode raw CB/UMI length greater than 32");
 }
 
@@ -618,270 +428,6 @@ void write_rad_file(const std::filesystem::path& filename,
     }
 }
 
-struct TraversalEdge {
-    uint32_t next = 0;
-    bool is_connection = false;
-    int64_t score = 0;
-};
-
-void check_subpath_index(uint32_t index, int subpath_count) {
-    if (index >= static_cast<uint32_t>(subpath_count)) {
-        throw std::runtime_error("GAMP subpath edge points outside the subpath list");
-    }
-}
-
-std::vector<Traversal> enumerate_traversals(const vg::MultipathAlignment& alignment,
-                                            size_t& group_traversal_count,
-                                            size_t traversal_cap) {
-    const int subpath_count = alignment.subpath_size();
-    if (subpath_count == 0) {
-        throw std::runtime_error("GAMP record has no subpaths");
-    }
-
-    std::vector<std::vector<TraversalEdge>> outgoing(static_cast<size_t>(subpath_count));
-    std::vector<size_t> incoming(static_cast<size_t>(subpath_count), 0);
-    for (int i = 0; i < subpath_count; ++i) {
-        const vg::Subpath& subpath = alignment.subpath(i);
-        for (const uint32_t next : subpath.next()) {
-            check_subpath_index(next, subpath_count);
-            outgoing[static_cast<size_t>(i)].push_back({next, false, 0});
-            ++incoming[next];
-        }
-        for (const vg::Connection& connection : subpath.connection()) {
-            check_subpath_index(connection.next(), subpath_count);
-            outgoing[static_cast<size_t>(i)].push_back(
-                {connection.next(), true, static_cast<int64_t>(connection.score())});
-            ++incoming[connection.next()];
-        }
-    }
-
-    std::vector<uint32_t> starts;
-    if (alignment.start_size() > 0) {
-        for (const uint32_t start : alignment.start()) {
-            check_subpath_index(start, subpath_count);
-            starts.push_back(start);
-        }
-    } else {
-        for (int i = 0; i < subpath_count; ++i) {
-            if (incoming[static_cast<size_t>(i)] == 0) {
-                starts.push_back(static_cast<uint32_t>(i));
-            }
-        }
-    }
-    if (starts.empty()) {
-        throw std::runtime_error("GAMP traversal graph has no start subpath");
-    }
-
-    std::vector<Traversal> traversals;
-    std::vector<uint32_t> path;
-    std::vector<bool> incoming_connection;
-    std::vector<bool> active(static_cast<size_t>(subpath_count), false);
-
-    std::function<void(uint32_t, bool, int64_t, int64_t)> dfs =
-        [&](uint32_t subpath_index, bool edge_is_connection, int64_t edge_score, int64_t prefix_score) {
-            if (active[subpath_index]) {
-                throw std::runtime_error("GAMP traversal graph is cyclic");
-            }
-            active[subpath_index] = true;
-            path.push_back(subpath_index);
-            incoming_connection.push_back(edge_is_connection);
-            const int64_t score = prefix_score + edge_score + alignment.subpath(subpath_index).score();
-
-            const auto& edges = outgoing[subpath_index];
-            if (edges.empty()) {
-                if (group_traversal_count >= traversal_cap) {
-                    throw std::runtime_error("traversal_cap_exceeded_groups=1");
-                }
-                ++group_traversal_count;
-                traversals.push_back({path, incoming_connection, score});
-            } else {
-                for (const TraversalEdge& edge : edges) {
-                    dfs(edge.next, edge.is_connection, edge.score, score);
-                }
-            }
-
-            incoming_connection.pop_back();
-            path.pop_back();
-            active[subpath_index] = false;
-        };
-
-    for (const uint32_t start : starts) {
-        dfs(start, false, 0, 0);
-    }
-
-    return traversals;
-}
-
-bool subpath_has_reference_consuming_edit(const vg::Subpath& subpath) {
-    for (const vg::Mapping& mapping : subpath.path().mapping()) {
-        for (const vg::Edit& edit : mapping.edit()) {
-            if (edit.from_length() < 0) {
-                throw std::runtime_error("GAMP edit has negative reference length");
-            }
-            if (edit.from_length() > 0) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-ProjectedTraversal project_traversal(const vg::MultipathAlignment& alignment, const Traversal& traversal, xg::XG& graph) {
-    handlegraph::PathPositionHandleGraph* positioned_graph = &graph;
-    ProjectedTraversal projected;
-    bool pending_connection = false;
-
-    for (size_t traversal_i = 0; traversal_i < traversal.subpaths.size(); ++traversal_i) {
-        const vg::Subpath& subpath = alignment.subpath(traversal.subpaths[traversal_i]);
-        pending_connection = pending_connection || traversal.incoming_connection[traversal_i];
-        if (!subpath_has_reference_consuming_edit(subpath)) {
-            continue;
-        }
-        bool first_reference_edit = true;
-        for (const vg::Mapping& mapping : subpath.path().mapping()) {
-            if (mapping.position().offset() < 0) {
-                throw std::runtime_error("GAMP mapping has negative node offset");
-            }
-
-            const auto& position = mapping.position();
-            const handlegraph::handle_t handle = graph.get_handle(position.node_id(), position.is_reverse());
-            const size_t node_length = graph.get_length(handle);
-            size_t edit_offset = static_cast<size_t>(position.offset());
-            if (edit_offset > node_length) {
-                throw std::runtime_error("GAMP mapping offset extends beyond node length");
-            }
-
-            for (const vg::Edit& edit : mapping.edit()) {
-                if (edit.from_length() < 0) {
-                    throw std::runtime_error("GAMP edit has negative reference length");
-                }
-                const size_t from_length = static_cast<size_t>(edit.from_length());
-                if (from_length == 0) {
-                    continue;
-                }
-                if (from_length > node_length || edit_offset + from_length > node_length) {
-                    throw std::runtime_error("GAMP mapping edit extends beyond node length");
-                }
-                const size_t edit_index = projected.reference_edit_count++;
-                const size_t node_start =
-                    position.is_reverse() ? node_length - edit_offset - from_length : edit_offset;
-                const bool edge_into_block_is_connection = first_reference_edit && pending_connection;
-                positioned_graph->for_each_step_position_on_handle(
-                    handle,
-                    [&](const handlegraph::step_handle_t& step,
-                        const bool& step_is_reverse,
-                        const size_t& step_position) {
-                        const std::string path_name = graph.get_path_name(graph.get_path_handle_of_step(step));
-                        const bool path_step_is_reverse = graph.get_is_reverse(graph.get_handle_of_step(step));
-                        const size_t start = path_step_is_reverse
-                                                 ? step_position + node_length - node_start - from_length
-                                                 : step_position + node_start;
-                        const size_t end = start + from_length;
-                        // step_is_reverse is relative to the queried handle. Its
-                        // negation is the read direction relative to the source path;
-                        // the path-step orientation controls coordinate mirroring.
-                        projected.blocks.push_back(
-                            {path_name, start, end, !step_is_reverse, edge_into_block_is_connection, edit_index});
-                        return true;
-                    });
-                first_reference_edit = false;
-                pending_connection = false;
-                edit_offset += from_length;
-            }
-        }
-    }
-
-    return projected;
-}
-
-bool overlaps(size_t a_start, size_t a_end, size_t b_start, size_t b_end) {
-    return a_start < b_end && b_start < a_end;
-}
-
-bool overlaps_any_interval(const ProjectedBlock& block, const std::vector<std::pair<size_t, size_t>>& intervals) {
-    for (const auto& [interval_start, interval_end] : intervals) {
-        if (overlaps(block.start, block.end, interval_start, interval_end)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool overlaps_transcript_model(const ProjectedBlock& block, const TranscriptModel& model) {
-    return overlaps_any_interval(block, model.exons) || overlaps_any_interval(block, model.introns);
-}
-
-bool has_junction(const TranscriptModel& model, size_t start, size_t end) {
-    for (const auto& [intron_start, intron_end] : model.introns) {
-        if (intron_start == start && intron_end == end) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool compatible_with_model(const ProjectedTraversal& traversal,
-                           const TranscriptModel& model,
-                           size_t min_splice_jump,
-                           std::set<bool>& target_orientations) {
-    std::vector<const ProjectedBlock*> model_blocks;
-    std::set<size_t> projected_edit_indexes;
-    for (const ProjectedBlock& block : traversal.blocks) {
-        if (block.source_path == model.source_path) {
-            model_blocks.push_back(&block);
-            projected_edit_indexes.insert(block.edit_index);
-        }
-    }
-    if (model_blocks.empty() || projected_edit_indexes.size() != traversal.reference_edit_count) {
-        return false;
-    }
-
-    bool has_anchor = false;
-    for (const ProjectedBlock* block : model_blocks) {
-        target_orientations.insert(block->is_forward_on_path != model.is_reverse);
-        if (overlaps_transcript_model(*block, model)) {
-            has_anchor = true;
-        }
-    }
-    if (!has_anchor) {
-        return false;
-    }
-
-    for (size_t i = 1; i < model_blocks.size(); ++i) {
-        const ProjectedBlock& previous = *model_blocks[i - 1];
-        const ProjectedBlock& current = *model_blocks[i];
-
-        size_t gap_start = 0;
-        size_t gap_end = 0;
-        bool has_gap = false;
-        if (previous.end <= current.start) {
-            gap_start = previous.end;
-            gap_end = current.start;
-            has_gap = true;
-        } else if (current.end <= previous.start) {
-            gap_start = current.end;
-            gap_end = previous.start;
-            has_gap = true;
-        }
-
-        if (!has_gap) {
-            if (current.previous_edge_is_connection) {
-                return false;
-            }
-            continue;
-        }
-
-        const size_t gap_length = gap_end - gap_start;
-        if (current.previous_edge_is_connection || gap_length >= min_splice_jump) {
-            if (!has_junction(model, gap_start, gap_end)) {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
-
 void write_text_file(const std::filesystem::path& filename, const std::string& contents) {
     std::ofstream out(filename);
     if (!out) {
@@ -890,10 +436,20 @@ void write_text_file(const std::filesystem::path& filename, const std::string& c
     out << contents;
 }
 
+struct Group {
+    std::string name;
+    MoleculeId molecule;
+    bool skip_for_molecule_identity = false;
+    MoleculeParseStatus molecule_status = MoleculeParseStatus::Ok;
+    std::string molecule_message;
+    std::vector<vg::MultipathAlignment> records;
+    bool saw_subpath_record = false;
+    bool saw_unaligned_record = false;
+};
+
 int run_convert(int argc, char** argv) {
     const Options options = parse_options(argc, argv);
-    const ManifestData manifest = read_manifest(options.manifest);
-    const std::map<SourceKey, TranscriptModel> transcript_models = read_transcript_models(options.gtf);
+    const T2gData t2g = read_t2g(options.t2g);
 
     xg::XG graph;
     std::ifstream xg_in(options.xg, std::ios::binary);
@@ -901,13 +457,42 @@ int run_convert(int argc, char** argv) {
         throw std::runtime_error("cannot open XG");
     }
     graph.deserialize(xg_in);
-    for (const auto& [source_key, row] : manifest.source_rows) {
-        if (transcript_models.count(source_key) == 0) {
-            throw std::runtime_error("annotation_manifest_mismatches");
+
+    // Injected HST lookup: emit each HST path (present in the t2g) crossing a node,
+    // with the path's orientation there.
+    pathtally::PathLookup lookup = [&](int64_t node_id,
+                                       const std::function<void(const std::string&, bool)>& emit) {
+        if (!graph.has_node(node_id)) {
+            return;
         }
-        if (!graph.has_path(row.source_path)) {
-            throw std::runtime_error("annotation_index_consistency_failures");
-        }
+        const handlegraph::handle_t handle = graph.get_handle(node_id, false);
+        graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
+            const std::string path_name = graph.get_path_name(graph.get_path_handle_of_step(step));
+            if (t2g.hst_names.find(path_name) == t2g.hst_names.end()) {
+                return true;
+            }
+            const bool path_is_reverse = graph.get_is_reverse(graph.get_handle_of_step(step));
+            emit(path_name, path_is_reverse);
+            return true;
+        });
+    };
+
+    std::shared_ptr<pathtally::QualAdjScorer> qual_adj_scorer;
+    pathtally::NodeScorer node_scorer = pathtally::flat_scorer();
+    if (options.score_mode == ScoreMode::QualAdj) {
+        qual_adj_scorer = std::make_shared<pathtally::QualAdjScorer>();
+        node_scorer = [qual_adj_scorer, &graph](const vg::MultipathAlignment& mp, int subpath_index,
+                                                size_t read_offset, std::vector<int64_t>& per_node) {
+            const std::string& seq = mp.sequence();
+            const std::string& qual = mp.quality();
+            if (!seq.empty() && qual.size() == seq.size()) {
+                qual_adj_scorer->score_subpath(graph, mp.subpath(subpath_index), seq, qual, read_offset, false,
+                                               &per_node);
+            } else {
+                pathtally::score_subpath(mp.subpath(subpath_index), read_offset, seq.size(), false,
+                                         pathtally::ScoreParams{}, &per_node);
+            }
+        };
     }
 
     std::ifstream gamp_in(options.gamp, std::ios::binary);
@@ -917,7 +502,6 @@ int run_convert(int argc, char** argv) {
 
     size_t input_records = 0;
     size_t input_read_groups = 0;
-    size_t mixed_orientation_dropped_groups = 0;
     size_t grouping_recurrence_failures = 0;
     size_t no_compatible_transcript_groups = 0;
     size_t unaligned_reads = 0;
@@ -925,11 +509,10 @@ int run_convert(int argc, char** argv) {
     size_t raw_molecule_malformed_groups = 0;
     size_t raw_molecule_unsupported_groups = 0;
     size_t raw_molecule_skipped_groups = 0;
-    size_t score_removed_targets = 0;
     std::vector<EmittedRecord> emitted_records;
     std::set<std::string> completed_names;
     bool have_group = false;
-    ReadGroupState current_group;
+    Group current_group;
 
     auto start_group = [&](const vg::MultipathAlignment& alignment) {
         if (completed_names.count(alignment.name()) != 0) {
@@ -939,7 +522,8 @@ int run_convert(int argc, char** argv) {
         current_group = {};
         current_group.name = alignment.name();
         ++input_read_groups;
-        const MoleculeParseResult molecule = parse_molecule_id(alignment.name(), options.raw_cb_length, options.raw_umi_length);
+        const MoleculeParseResult molecule =
+            parse_molecule_id(alignment.name(), options.raw_cb_length, options.raw_umi_length);
         if (molecule.status == MoleculeParseStatus::Ok) {
             current_group.molecule = molecule.id;
         } else {
@@ -978,7 +562,17 @@ int run_convert(int argc, char** argv) {
             have_group = false;
             return;
         }
-        if (current_group.target_evidence.empty()) {
+
+        std::vector<const vg::MultipathAlignment*> record_ptrs;
+        record_ptrs.reserve(current_group.records.size());
+        for (const vg::MultipathAlignment& record : current_group.records) {
+            record_ptrs.push_back(&record);
+        }
+        const std::map<std::string, pathtally::HstTally> tallies =
+            pathtally::tally_read_group(record_ptrs, lookup, node_scorer);
+        const std::vector<pathtally::RadTarget> targets = pathtally::select_targets(tallies);
+
+        if (targets.empty()) {
             ++no_compatible_transcript_groups;
             if (current_group.saw_unaligned_record && !current_group.saw_subpath_record) {
                 ++unaligned_reads;
@@ -988,75 +582,18 @@ int run_convert(int argc, char** argv) {
             return;
         }
 
-        int64_t best_score = std::numeric_limits<int64_t>::min();
-        for (const auto& [target_id, evidence] : current_group.target_evidence) {
-            best_score = std::max(best_score, evidence.best_score);
-        }
-
-        std::map<uint32_t, TargetEvidence> retained_targets;
-        for (const auto& [target_id, evidence] : current_group.target_evidence) {
-            const uint64_t score_delta = static_cast<uint64_t>(best_score - evidence.best_score);
-            if (score_delta <= options.score_window) {
-                retained_targets.emplace(target_id, evidence);
-            } else {
-                ++score_removed_targets;
-            }
-        }
-        if (retained_targets.empty()) {
-            throw std::runtime_error("internal score filtering removed all compatible targets");
-        }
-
-        bool has_mixed_target = false;
-        for (const auto& [target_id, evidence] : retained_targets) {
-            if (evidence.orientations.size() > 1) {
-                has_mixed_target = true;
-                break;
-            }
-        }
-        if (has_mixed_target) {
-            ++mixed_orientation_dropped_groups;
-            std::cerr << "panCollapse: warning: dropped read group with mixed target-relative orientations: "
-                      << current_group.name << '\n';
-            completed_names.insert(current_group.name);
-            have_group = false;
-            return;
-        }
         std::vector<TargetHit> hits;
-        for (const auto& [target_id, evidence] : retained_targets) {
-            hits.push_back({target_id, *evidence.orientations.begin()});
+        hits.reserve(targets.size());
+        for (const pathtally::RadTarget& target : targets) {
+            const auto target_id = t2g.target_ids.find(target.transcript);
+            if (target_id == t2g.target_ids.end()) {
+                throw std::runtime_error("compatible transcript " + target.transcript + " is absent from the t2g");
+            }
+            hits.push_back({target_id->second, target.forward});
         }
         emitted_records.push_back({current_group.molecule, hits});
         completed_names.insert(current_group.name);
         have_group = false;
-    };
-
-    auto update_group = [&](vg::MultipathAlignment& alignment) {
-        if (alignment.subpath_size() == 0) {
-            current_group.saw_unaligned_record = true;
-            return;
-        }
-        current_group.saw_subpath_record = true;
-        for (const Traversal& traversal :
-             enumerate_traversals(alignment, current_group.traversal_count, options.max_traversals_per_read)) {
-            const ProjectedTraversal projected_traversal = project_traversal(alignment, traversal, graph);
-            for (const auto& [source_key, model] : transcript_models) {
-                std::set<bool> target_orientations;
-                if (!compatible_with_model(projected_traversal, model, options.min_splice_jump, target_orientations)) {
-                    continue;
-                }
-                const auto manifest_row = manifest.source_rows.find(source_key);
-                if (manifest_row == manifest.source_rows.end()) {
-                    throw std::runtime_error("manifest_missing_source_identities");
-                }
-                const auto target_id = manifest.target_ids.find(manifest_row->second.canonical_transcript);
-                if (target_id == manifest.target_ids.end()) {
-                    throw std::runtime_error("internal target dictionary mismatch");
-                }
-                TargetEvidence& evidence = current_group.target_evidence[target_id->second];
-                evidence.best_score = std::max(evidence.best_score, traversal.score);
-                evidence.orientations.insert(target_orientations.begin(), target_orientations.end());
-            }
-        }
     };
 
     vg::io::for_each<vg::MultipathAlignment>(gamp_in, [&](vg::MultipathAlignment& alignment) {
@@ -1068,7 +605,12 @@ int run_convert(int argc, char** argv) {
             start_group(alignment);
         }
         if (!current_group.skip_for_molecule_identity) {
-            update_group(alignment);
+            if (alignment.subpath_size() == 0) {
+                current_group.saw_unaligned_record = true;
+            } else {
+                current_group.saw_subpath_record = true;
+                current_group.records.push_back(alignment);
+            }
         }
     });
     flush_group();
@@ -1078,33 +620,28 @@ int run_convert(int argc, char** argv) {
     }
 
     std::filesystem::create_directories(options.out_dir);
-    write_rad_file(options.out_dir / "map.rad",
-                   manifest.target_names,
-                   emitted_records,
-                   options.raw_cb_length,
+    write_rad_file(options.out_dir / "map.rad", t2g.target_names, emitted_records, options.raw_cb_length,
                    options.raw_umi_length);
     std::string tx2gene;
-    for (const std::string& target_name : manifest.target_names) {
-        tx2gene += target_name + '\t' + manifest.target_gene.at(target_name) + '\n';
+    for (const std::string& target_name : t2g.target_names) {
+        tx2gene += target_name + '\t' + t2g.transcript_gene.at(target_name) + '\n';
     }
     write_text_file(options.out_dir / "tx2gene.tsv", tx2gene);
     write_text_file(options.out_dir / "summary.tsv",
                     "input_records\t" + std::to_string(input_records) + "\ninput_read_groups\t" +
-                        std::to_string(input_read_groups) + "\nemitted_groups\t" + std::to_string(emitted_records.size()) +
-                        "\nmixed_orientation_dropped_groups\t" + std::to_string(mixed_orientation_dropped_groups) +
-                        "\nno_compatible_transcript_groups\t" + std::to_string(no_compatible_transcript_groups) +
-                        "\nunaligned_reads\t" + std::to_string(unaligned_reads) +
-                        "\nraw_molecule_missing_groups\t" + std::to_string(raw_molecule_missing_groups) +
-                        "\nraw_molecule_malformed_groups\t" + std::to_string(raw_molecule_malformed_groups) +
-                        "\nraw_molecule_unsupported_groups\t" + std::to_string(raw_molecule_unsupported_groups) +
-                        "\nraw_molecule_skipped_groups\t" + std::to_string(raw_molecule_skipped_groups) +
-                        "\nscore_removed_targets\t" + std::to_string(score_removed_targets) +
-                        "\ntraversal_cap_exceeded_groups\t0" +
-                        "\ngrouping_recurrence_failures\t" + std::to_string(grouping_recurrence_failures) + "\n");
+                        std::to_string(input_read_groups) + "\nemitted_groups\t" +
+                        std::to_string(emitted_records.size()) + "\nno_compatible_transcript_groups\t" +
+                        std::to_string(no_compatible_transcript_groups) + "\nunaligned_reads\t" +
+                        std::to_string(unaligned_reads) + "\nraw_molecule_missing_groups\t" +
+                        std::to_string(raw_molecule_missing_groups) + "\nraw_molecule_malformed_groups\t" +
+                        std::to_string(raw_molecule_malformed_groups) + "\nraw_molecule_unsupported_groups\t" +
+                        std::to_string(raw_molecule_unsupported_groups) + "\nraw_molecule_skipped_groups\t" +
+                        std::to_string(raw_molecule_skipped_groups) + "\ngrouping_recurrence_failures\t" +
+                        std::to_string(grouping_recurrence_failures) + "\n");
     return 0;
 }
 
-} // namespace
+}  // namespace
 
 int main(int argc, char** argv) {
     try {

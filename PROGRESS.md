@@ -68,9 +68,9 @@ bullets are retained as cumulative history.
 
 ## Next action
 
-Implement `docs/conversion-algorithm.md` one increment at a time, starting with per-node
-reproduction of vg's alignment score validated against `Subpath.score` on real GAMP subpaths
-(increment 1). D048 dissolves the earlier reference-path-vs-HST fork: compatibility now reads
+Implement `docs/conversion-algorithm.md` one increment at a time. Increment 1 (per-node vg
+score) is done and verified; next is increment 2 (node-to-HST attribution and transcript-ID
+collapse). D048 dissolves the earlier reference-path-vs-HST fork: compatibility now reads
 off the HST paths directly, so no GTF projection or manifest is needed at runtime. The
 human-pangenome MHC fixture (D047, `docs/testing_fixture_creation.md`) remains the
 production-applicability target. The RAD chunk-count policy conflict (D045 streaming
@@ -499,3 +499,35 @@ projection, or a custom index.
   `PROGRESS.md`, and the `CLAUDE.md` index and principles. Remaining doc-ecosystem updates
   (input/output contract, validation contract, fixture oracle, glossary, historical
   pointers) in progress. No production code changed yet.
+- 2026-07-02: PathTally increment 1 implemented and verified. Added `src/pathtally_score.hpp`
+  (per-node reproduction of vg's `score_partial_alignment`: match +1, mismatch -4, affine
+  gaps 6/1, +5 read-end bonus, soft-clip and affine-carry handling, plus a subpath read-offset
+  propagator) and `tests/vg/pathtally_score_test.cpp`. Synthetic unit asserts hold exactly;
+  the committed CTest (`pathtally_score_test`) runs those. Against the real MHC GAMP
+  (`build/real_mhc_scratch/mhcA.gamp`, 13.1M subpaths) the flat scorer reproduces
+  `Subpath.score` exactly for 93.14%; the remainder are base-quality-adjusted lower-quality
+  bases (confirmed: deviating subpaths mean base quality 22.4 vs 34.4 for exact matches, and
+  single-base mismatches score -3 at q25 / -2 at q11 instead of -4). Adopted the flat per-node
+  score as the ranking weight; exact quality-adjusted reproduction deferred as unnecessary.
+- 2026-07-02: PathTally increments 2-5 implemented and verified, plus the optional
+  quality-adjusted scorer. Added `src/pathtally.hpp` (node-to-HST attribution via injected
+  lookup, transcript-id collapse, top-score-plus-ties winner selection across a read's
+  alignments, majority-of-bases orientation) with `tests/vg/pathtally_pipeline_test.cpp`
+  (synthetic, all cases PASS). Rewrote `src/main.cpp` on PathTally: inputs are now
+  `--gamp/--xg/--t2g` (no GTF/manifest), with `--score flat|qualadj`; it converts the real
+  1M-read MHC GAMP (against `hst_index`) to a valid `map.rad` (39,103 records),
+  `tx2gene.tsv` (1022 transcripts), and summary in ~6 min (per-node path lookup is the perf
+  hotspot). Reimplemented vg's QualAdjAligner in `src/pathtally_qualadj.hpp` (recovered
+  log-base, quality-indexed log-odds matrix, per-base scoring) and validated it reproduces
+  `Subpath.score` for 99.2% of subpaths (residual +/-1 is score-matrix rounding). alevin-fry
+  0.15.0 consumed the real PathTally RAD through generate-permit-list (46 corrected barcodes),
+  collate (257 chunks), and quant to a 257-cell x 317-gene count matrix, completing increment
+  5's interop on real data. Increment 6 is also verified: an independent Python oracle
+  (`tests/vg/pathtally_oracle.py`, reimplementing steps 1-4 from the graph P-lines without
+  using PathTally code) matched panCollapse's RAD exactly for all 420 emitted records across a
+  10,551-read-group real MHC-GAMP sample. All six PathTally increments are implemented and
+  verified. Remaining (hygiene, not algorithm): retiring the old traversal-era CTest fixtures
+  (`phase2_*`/`phase3_*`/projection, which invoke the removed CLI), self-contained CTests for
+  the real-data score and oracle checks (they depend on build-dir scratch), and the
+  per-node-lookup performance work. New code (`src/pathtally*.hpp`, rewritten `src/main.cpp`,
+  `tests/vg/pathtally_*`) is uncommitted.

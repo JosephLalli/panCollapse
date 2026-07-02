@@ -4,6 +4,18 @@ target_link_libraries(vg_link_smoke PRIVATE panCollapse::vg_boundary)
 add_test(NAME vg_link_smoke COMMAND vg_link_smoke)
 set_tests_properties(vg_link_smoke PROPERTIES LABELS "vg;link")
 
+add_executable(pathtally_score_test pathtally_score_test.cpp)
+target_include_directories(pathtally_score_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(pathtally_score_test PRIVATE panCollapse::vg_boundary)
+add_test(NAME pathtally_score_test COMMAND pathtally_score_test)
+set_tests_properties(pathtally_score_test PROPERTIES LABELS "vg;pathtally")
+
+add_executable(pathtally_pipeline_test pathtally_pipeline_test.cpp)
+target_include_directories(pathtally_pipeline_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(pathtally_pipeline_test PRIVATE panCollapse::vg_boundary)
+add_test(NAME pathtally_pipeline_test COMMAND pathtally_pipeline_test)
+set_tests_properties(pathtally_pipeline_test PROPERTIES LABELS "vg;pathtally")
+
 add_executable(gamp_projection_fixture_writer gamp_projection_fixture_writer.cpp)
 
 add_executable(gamp_xg_gtf_projection_smoke gamp_xg_gtf_projection_smoke.cpp)

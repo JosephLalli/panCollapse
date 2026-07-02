@@ -67,6 +67,12 @@ scorer. If vg mapped with base-quality-adjusted scoring, the flat per-node sum w
 `Subpath.score` and the quality-adjusted matrix must be reproduced instead; the checksum
 reveals which regime applies.
 
+The default per-node scorer is the flat scheme. An optional `--score qualadj` selects a
+reimplementation of vg's QualAdjAligner (`src/pathtally_qualadj.hpp`) that reproduces
+`Subpath.score` for 99.2% of subpaths on the MHC GAMP (residual +/-1 is score-matrix
+rounding). The flat scorer is sufficient for ranking; qualadj is available when exact
+fidelity to vg's quality-adjusted scores is wanted.
+
 ## Output and determinism
 
 - `map.rad` via the streaming writer, `tx2gene.tsv` from the t2g, and a run summary with
@@ -90,7 +96,12 @@ Build one testable behavior at a time:
    build the spliced/HST graph with `vg rna`, simulate reads, map to GAMP, and compare
    panCollapse RAD against the independent GAMP-driven oracle.
 
+Per-increment verification is in `docs/conversion-algorithm-tests.md`.
+
 ## Open items
 
-- Confirm the per-node metric against `Subpath.score` on real GAMP (whether mpmap used
-  quality-adjusted scoring).
+- Step 1 is verified on real MHC GAMP: the flat per-node scorer reproduces `Subpath.score`
+  exactly for 93.1% of subpaths; the remainder are lower-quality bases whose mismatch penalty
+  vg attenuated under base-quality-adjusted mapping (deviating subpaths mean base quality 22.4
+  vs 34.4 for exact matches). The flat score is adopted as the per-node weight; exact
+  quality-adjusted reproduction is deferred as unnecessary for ranking.
