@@ -272,6 +272,11 @@ def main():
         if e != a:
             print(f"FAIL at record {i}:\n  oracle={e}\n  rad   ={a}")
             return 1
+    if len(sys.argv) > 5:
+        want = int(sys.argv[5])
+        if len(actual) != want:
+            print(f"FAIL: expected {want} emitted records, got {len(actual)}")
+            return 1
     print(f"oracle: PASS ({len(actual)} emitted records match exactly; {len(groups)} read groups)")
     return 0
 

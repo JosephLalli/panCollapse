@@ -71,11 +71,10 @@ bullets are retained as cumulative history.
 All six PathTally increments (`docs/conversion-algorithm.md`) plus D049 streaming (stdin
 input via `--gamp -` and a seek-and-backpatch RAD writer) are implemented and verified; the
 RAD chunk-count conflict is resolved by D049 with exact backpatched counts that alevin-fry
-accepts. Remaining work is hygiene, not algorithm: retire the old traversal-era CTest fixtures
-(`phase2_*`/`phase3_*`/projection, which invoke the removed CLI), add self-contained CTests
-for the real-data score and oracle checks (they depend on build-dir scratch, so they need a
-committed tiny fixture), and optimize the per-node `for_each_step_on_handle` lookup (the
-1M-read run took ~6 min).
+accepts. The old traversal-era CTest fixtures are retired, a self-contained end-to-end CTest
+is in place (committed tiny graph + independent oracle), and the per-node lookup is optimized
+(1M-read MHC run ~3m57s, byte-identical). Further speedups (reducing per-node step iteration
+or reintroducing threads under a later approval) remain future work.
 
 ## Required stop
 
@@ -546,3 +545,12 @@ projection, or a custom index.
   sim fixture, byte-identical between file and stdin input, the oracle still exact, and a
   no-emit run leaves a header-only `num_chunks = 0` file. This supersedes D045's
   `num_chunks = 0` output and resolves the chunk-count-versus-alevin-fry conflict.
+- 2026-07-02: Cleaned up the test suite and optimized the lookup. Retired the old traversal-era
+  CTest fixtures (`phase2_*`, `phase3_*`, GTF-projection smoke) that invoked the removed CLI,
+  and added a self-contained end-to-end CTest: a committed tiny graph + multipath GAMP
+  (`tests/vg/fixtures/pathtally_smoke/`) is converted to xg/GAMP by vg, run through panCollapse,
+  and checked exactly by the independent oracle (`pathtally_smoke_*`; 3 emitted records
+  covering haplotype collapse, a multi-gene record, and reverse orientation). Optimized the
+  per-node HST lookup by precomputing a path-handle -> HST-name map (removing per-step
+  `get_path_name` + string-set lookup); output stays byte-identical and the 1M-read MHC run
+  dropped from ~5m55s to ~3m57s. The pathtally + pure suite passes 9/9.

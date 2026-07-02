@@ -64,9 +64,9 @@ winning tallies collapse to transcripts. One test group per implementation incre
   scoring, node-to-HST attribution from the graph P-lines, winner selection, collapse,
   orientation) without using any PathTally code. On a 10,551-read-group sample of the real
   MHC pangenome GAMP, panCollapse's RAD matched the oracle exactly for all 420 emitted records
-  (target sets, orientation, packed CB/UMI). The oracle/comparator is committable; the
-  GAMP/graph inputs are build-dir scratch, so a self-contained CTest still needs a committed
-  tiny fixture.
+  (target sets, orientation, packed CB/UMI). The oracle/comparator plus a committed tiny
+  fixture (`tests/vg/fixtures/pathtally_smoke/`) run as a self-contained CTest
+  (`pathtally_smoke_oracle`); the large real-MHC comparison stays a manual run on scratch data.
 - Status: PASS on deterministic `vg sim` reads too. `vg sim -x spliced.xg -P <HST...> -n 400
   -l 90 -s 1 -q` produces spliced reads from four chosen HST paths; `tests/vg/fixture_tag_reads.py`
   appends synthetic CB/UMI; `vg mpmap -F GAMP` maps them; panCollapse emits RAD for all 400

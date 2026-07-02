@@ -1,4 +1,5 @@
 #include <handlegraph/path_position_handle_graph.hpp>
+#include <handlegraph/util.hpp>
 #include <vg/io/stream.hpp>
 #include <vg/vg.pb.h>
 #include <xg.hpp>
@@ -17,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <unordered_map>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -497,8 +499,19 @@ int run_convert(int argc, char** argv) {
     }
     graph.deserialize(xg_in);
 
-    // Injected HST lookup: emit each HST path (present in the t2g) crossing a node,
-    // with the path's orientation there.
+    // Precompute the HST paths (those named in the t2g) as a path-handle -> name map,
+    // so the per-node lookup avoids building a path-name string and hashing it for every
+    // step. Reference backbones and shared exon nodes carry many steps, so this per-step
+    // string work dominated the run; the precomputed integer-keyed map removes it.
+    std::unordered_map<uint64_t, std::string> hst_path_name;
+    graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+        std::string name = graph.get_path_name(path);
+        if (t2g.hst_names.find(name) != t2g.hst_names.end()) {
+            hst_path_name.emplace(handlegraph::as_integer(path), std::move(name));
+        }
+    });
+
+    // Injected HST lookup: emit each HST path crossing a node, with its orientation there.
     pathtally::PathLookup lookup = [&](int64_t node_id,
                                        const std::function<void(const std::string&, bool)>& emit) {
         if (!graph.has_node(node_id)) {
@@ -506,12 +519,11 @@ int run_convert(int argc, char** argv) {
         }
         const handlegraph::handle_t handle = graph.get_handle(node_id, false);
         graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
-            const std::string path_name = graph.get_path_name(graph.get_path_handle_of_step(step));
-            if (t2g.hst_names.find(path_name) == t2g.hst_names.end()) {
+            const auto it = hst_path_name.find(handlegraph::as_integer(graph.get_path_handle_of_step(step)));
+            if (it == hst_path_name.end()) {
                 return true;
             }
-            const bool path_is_reverse = graph.get_is_reverse(graph.get_handle_of_step(step));
-            emit(path_name, path_is_reverse);
+            emit(it->second, graph.get_is_reverse(graph.get_handle_of_step(step)));
             return true;
         });
     };
