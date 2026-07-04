@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,16 @@ public:
             per_node->assign(static_cast<size_t>(path.mapping_size()), 0);
         }
         const size_t read_len = read_seq.size();
+        if (read_start_offset > read_len) {
+            throw std::runtime_error(
+                "qualadj scorer: read_start_offset " + std::to_string(read_start_offset) +
+                " exceeds read_seq length " + std::to_string(read_len));
+        }
+        if (read_start_offset > read_qual.size()) {
+            throw std::runtime_error(
+                "qualadj scorer: read_start_offset " + std::to_string(read_start_offset) +
+                " exceeds read_qual length " + std::to_string(read_qual.size()));
+        }
         int64_t total = 0;
         size_t read_pos = read_start_offset;
         bool in_deletion = false;
@@ -83,6 +94,26 @@ public:
                 const int64_t to = edit.to_length();
                 if (from > 0) {
                     if (to > 0) {
+                        const size_t to_sz = static_cast<size_t>(to);
+                        if (read_pos + to_sz > read_seq.size()) {
+                            throw std::runtime_error(
+                                "qualadj scorer: read_seq index out of range: end " +
+                                std::to_string(read_pos + to_sz) + " > size " +
+                                std::to_string(read_seq.size()));
+                        }
+                        if (read_pos + to_sz > read_qual.size()) {
+                            throw std::runtime_error(
+                                "qualadj scorer: read_qual index out of range: end " +
+                                std::to_string(read_pos + to_sz) + " > size " +
+                                std::to_string(read_qual.size()));
+                        }
+                        if (ref_pos + to_sz > node_seq.size()) {
+                            throw std::runtime_error(
+                                "qualadj scorer: node_seq index out of range: end " +
+                                std::to_string(ref_pos + to_sz) + " > size " +
+                                std::to_string(node_seq.size()) + " (node " +
+                                std::to_string(mapping.position().node_id()) + ")");
+                        }
                         for (int64_t k = 0; k < to; ++k) {
                             const int q = static_cast<uint8_t>(read_qual[read_pos + static_cast<size_t>(k)]);
                             const int refn = nt_index(node_seq[ref_pos + static_cast<size_t>(k)]);
