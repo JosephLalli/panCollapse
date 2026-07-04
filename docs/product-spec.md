@@ -150,10 +150,12 @@ consumed by alevin-fry's expected-orientation filtering.
 
 The exact RAD header, record fields, orientation encoding, chunking, and metadata are
 defined by the supported alevin-fry/libradicl baseline. Current active V1 execution is
-single-threaded under D045, and `map.rad` should be written to disk incrementally with
-`num_chunks = 0` and complete chunks. If future supported execution modes include
-multiple worker threads or direct `vg mpmap` stdin streaming, RAD and companion artifacts
-must remain byte-identical for identical inputs and configuration.
+single-threaded under D045, and `map.rad` is streamed to disk incrementally: records roll
+into complete, self-describing chunks, and the writer seeks back to backpatch each chunk
+header and the file-level `num_chunks` with their final values once known (D049). If future
+supported execution modes include multiple worker threads or direct `vg mpmap` stdin
+streaming, RAD and companion artifacts must remain byte-identical for identical inputs and
+configuration.
 
 ## 12. Diagnostics
 
@@ -167,8 +169,6 @@ least:
   `raw_molecule_unsupported_groups`, and `raw_molecule_skipped_groups`;
 - grouping violations;
 - groups with no compatible transcript;
-- groups dropped because one emitted target has mixed target-relative orientations;
-- compatible targets removed by score-window filtering (`score_removed_targets`);
 - groups emitted and number of targets per emitted group;
 - manifest misses and annotation/index consistency failures.
 

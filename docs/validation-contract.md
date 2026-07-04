@@ -69,8 +69,9 @@ A tiny fixture must prove:
 6. no USA/splicing-state rows;
 7. Phase 2 uses one thread; D045 defers multithreading; any future mode must still prove
    byte-identical output;
-8. streaming-to-disk framing with header `num_chunks = 0` decodes through the supported
-   libradicl/alevin-fry path.
+8. streaming-to-disk framing (chunk headers and file-level `num_chunks` seek-and-backpatched
+   to their final values, D049) decodes through the supported libradicl/alevin-fry path,
+   including a forced multi-chunk split.
 
 ## 8. Failure and diagnostics
 
