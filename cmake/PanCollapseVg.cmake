@@ -1,10 +1,18 @@
 include_guard(GLOBAL)
 
-set(PANCOLLAPSE_VG_ROOT "/mnt/ssd/lalli/usr/local/src/vg" CACHE PATH
-  "Root of the local VG checkout/build used by panCollapse tests")
-set(PANCOLLAPSE_ABSL_PKGCONFIG "/mnt/ssd/lalli/.linuxbrew/Cellar/abseil/20260107.0/lib/pkgconfig" CACHE PATH
-  "pkg-config directory for the Abseil libraries used by protobuf in the local VG build")
+set(PANCOLLAPSE_VG_ROOT "" CACHE PATH
+  "Root of the local VG checkout/build used by panCollapse (required). \
+Pass -DPANCOLLAPSE_VG_ROOT=/path/to/vg at configure time.")
+set(PANCOLLAPSE_ABSL_PKGCONFIG "" CACHE PATH
+  "Optional: pkg-config directory for Abseil when it is not on the standard \
+pkg-config search path (e.g. a non-default Homebrew or Linuxbrew Cellar). \
+Leave empty to rely on PKG_CONFIG_PATH and CMAKE_PREFIX_PATH.")
 
+if(NOT PANCOLLAPSE_VG_ROOT)
+  message(FATAL_ERROR
+    "PANCOLLAPSE_VG_ROOT is not set. "
+    "Pass -DPANCOLLAPSE_VG_ROOT=/path/to/vg at configure time.")
+endif()
 if(NOT EXISTS "${PANCOLLAPSE_VG_ROOT}/include/xg.hpp")
   message(FATAL_ERROR "PANCOLLAPSE_VG_ROOT does not look like a VG checkout: ${PANCOLLAPSE_VG_ROOT}")
 endif()
@@ -16,7 +24,7 @@ if(DEFINED ENV{PKG_CONFIG_PATH} AND NOT "$ENV{PKG_CONFIG_PATH}" STREQUAL "")
 else()
   set(ENV{PKG_CONFIG_PATH} "${PANCOLLAPSE_VG_ROOT}/lib/pkgconfig")
 endif()
-if(EXISTS "${PANCOLLAPSE_ABSL_PKGCONFIG}")
+if(PANCOLLAPSE_ABSL_PKGCONFIG AND EXISTS "${PANCOLLAPSE_ABSL_PKGCONFIG}")
   set(ENV{PKG_CONFIG_PATH} "${PANCOLLAPSE_ABSL_PKGCONFIG}:$ENV{PKG_CONFIG_PATH}")
 endif()
 
