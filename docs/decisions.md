@@ -803,6 +803,39 @@ regular output file, which is why RAD goes to disk rather than stdout.
 **Rationale:** The user chose the go-back-and-patch method so output stays exact-count and
 alevin-fry-compatible while still streaming to disk without buffering all emitted records.
 
+### D050 — v0.1 release hardening (blocker and non-blocking review resolution)
+
+**Decision source:** User (directed resolution of the pre-release review in
+`docs/v0.1-review-findings.md`).
+
+**Decision:** The following behaviors are settled for v0.1. They extend, and do not reopen,
+D048/D049.
+
+- Multi-chunk RAD output. The streaming writer (D049) rolls records into a new chunk once the
+  current chunk would exceed a byte budget (`PANCOLLAPSE_MAX_CHUNK_BYTES`, default 1 GiB),
+  seek-and-backpatching every chunk header plus the file-level `num_chunks`. This removes the
+  single-chunk `u32` byte ceiling that would have aborted large runs, so v0.1 is no longer
+  restricted to small-scale inputs.
+- Atomic output. `map.rad` is written to a temporary path in the output directory and renamed
+  on successful finalize; a run that hard-fails leaves no valid-looking `map.rad`.
+- Node-id-space validation. An aligned GAMP node absent from the `--xg` graph is a hard failure
+  (the GAMP was aligned to a different graph), whereas a node that exists but lies on no HST
+  path remains legitimate and yields no target.
+- Diagnostics. `summary.tsv` reports the per-emitted-group target-size histogram
+  (`emitted_target_count_histogram`). The whole-run `completed_names` recurrence-detection set
+  is retained (exact non-contiguous-input detection) and its O(distinct read-group names) memory
+  cost is documented rather than bounded.
+- Robustness and ergonomics. The quality-adjusted scorer bounds-checks all read/node indexing
+  and throws on inconsistent input; `--version`/`--help` are success paths; project targets
+  build with `-Wall -Wextra`; and machine-specific build paths are parameterized and documented.
+- The canonical spec (`docs/product-spec.md`, `docs/validation-contract.md`) was reconciled to
+  the D048/D049 behavior (no `num_chunks = 0`, no `score_removed_targets`, no
+  mixed-orientation-drop counter).
+
+**Rationale:** The adversarial pre-release review found three blockers and eleven non-blocking
+issues; the user directed clearing all of them for a full (not small-scale-rescoped) v0.1. Each
+change is covered by a hermetic CTest; the full suite is 30/30.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

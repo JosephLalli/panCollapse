@@ -554,3 +554,18 @@ projection, or a custom index.
   per-node HST lookup by precomputing a path-handle -> HST-name map (removing per-step
   `get_path_name` + string-set lookup); output stays byte-identical and the 1M-read MHC run
   dropped from ~5m55s to ~3m57s. The pathtally + pure suite passes 9/9.
+- 2026-07-04: Cleared the pre-release review (`docs/v0.1-review-findings.md`) for a full v0.1.
+  Blockers: multi-chunk RAD writer with per-chunk and file-level seek-and-backpatch removing the
+  single-chunk u32 ceiling (B3); hermetic alevin-fry interop CTest asserting the exact
+  cell-by-gene matrix (B1); scoring-fidelity CTest that simulates reads from the HST paths, maps
+  them with mpmap, and checks the flat and quality-adjusted per-node scorers against vg's own
+  Subpath.score, plus stdin byte-identity and molecule/recurrence failure-mode tests (B2). Then
+  every non-blocking finding N1-N11: spec reconciliation to D048/D049 (N1); documented
+  completed_names memory cost (N2); GAMP/xg node-id-space hard failure with a regression fixture
+  (N4); quality-adjusted scorer bounds checks (N5); qualadj cross-platform determinism caveat
+  (N6); parameterized and documented build paths (N7); -Wall -Wextra on project targets (N8);
+  --version/--help success paths (N9); atomic map.rad via temp-path-and-rename (N10); and the
+  per-emitted-group target-size histogram in summary.tsv (N11). N3 was resolved earlier as
+  working-as-intended. Recorded as D050. Full CTest suite: 30/30. Commits c4df275 (blockers),
+  e7e2156 (N1), then 29b6794, a3a38e9, bf31524, 9fd1e3a, 92bc8a1, a8e5bea, c675cc8, 90b9a21,
+  1bcc288 (N-tasks), 1aa2567 (findings closeout).
