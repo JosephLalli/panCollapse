@@ -84,11 +84,13 @@ struct T2gData {
     std::vector<std::string> target_names;
 };
 
+constexpr const char* kUsageText =
+    "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv "
+    "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
+    "[--score flat|qualadj] [--molecule-identity-failures skip|fail]";
+
 [[noreturn]] void usage_error() {
-    throw std::runtime_error(
-        "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv "
-        "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
-        "[--score flat|qualadj] [--molecule-identity-failures skip|fail]");
+    throw std::runtime_error(kUsageText);
 }
 
 size_t parse_size_option(const std::string& option_name, const std::string& value) {
@@ -744,6 +746,19 @@ int run_convert(int argc, char** argv) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cout << kUsageText << '\n';
+        return 0;
+    }
+    const std::string first_arg = argv[1];
+    if (first_arg == "--version" || first_arg == "-V") {
+        std::cout << "panCollapse " << PANCOLLAPSE_VERSION << '\n';
+        return 0;
+    }
+    if (first_arg == "--help" || first_arg == "-h") {
+        std::cout << kUsageText << '\n';
+        return 0;
+    }
     try {
         return run_convert(argc, argv);
     } catch (const std::exception& e) {
