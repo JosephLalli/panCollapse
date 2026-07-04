@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -382,16 +383,19 @@ size_t rad_int_width(uint8_t type_id) {
 
 // Streams RAD to disk: writes the header and tag sections up front (the target
 // dictionary comes from the t2g, known before any record), then each read record
-// as it is produced, and seeks back at finalize() to patch the chunk byte/record
-// counts and the file-level num_chunks. Only the current record is ever held.
+// as it is produced. Records are split into chunks so no chunk's byte count or
+// record count exceeds the u32 fields the format uses; each chunk header and the
+// file-level num_chunks are seek-and-backpatched once their counts are known. Only
+// the current record is ever held.
 class RadStreamWriter {
 public:
     RadStreamWriter(const std::filesystem::path& filename, const std::vector<std::string>& target_names,
-                    size_t cb_length, size_t umi_length)
+                    size_t cb_length, size_t umi_length, uint64_t max_chunk_bytes)
         : out_(filename, std::ios::binary),
           cb_type_(rad_int_type_for_length(cb_length)),
           umi_type_(rad_int_type_for_length(umi_length)),
-          read_value_size_(rad_int_width(cb_type_) + rad_int_width(umi_type_)) {
+          read_value_size_(rad_int_width(cb_type_) + rad_int_width(umi_type_)),
+          max_chunk_bytes_(max_chunk_bytes) {
         if (!out_) {
             throw std::runtime_error("cannot write RAD output");
         }
@@ -419,12 +423,19 @@ public:
         if (hits.empty()) {
             throw std::runtime_error("cannot write RAD record with no target hits");
         }
-        if (!chunk_started_) {
-            chunk_header_pos_ = out_.tellp();
-            write_le<uint32_t>(out_, 0);  // chunk nbytes placeholder
-            write_le<uint32_t>(out_, 0);  // chunk nrec placeholder
-            chunk_started_ = true;
+        const uint64_t record_bytes = 4 + read_value_size_ + 4 * static_cast<uint64_t>(hits.size());
+        if (record_bytes + 8 > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error("RAD record is too large to encode in one chunk");
         }
+        // Roll to a new chunk before this record would push a non-empty chunk past
+        // the limit, so every chunk holds >=1 whole record and stays under u32.
+        if (chunk_open_ && chunk_nrec_ > 0 && chunk_bytes_ + record_bytes > max_chunk_bytes_) {
+            close_chunk();
+        }
+        if (!chunk_open_) {
+            open_chunk();
+        }
+
         write_le<uint32_t>(out_, static_cast<uint32_t>(hits.size()));
         write_packed_value(out_, cb_type_, pack_sequence(molecule.barcode));
         write_packed_value(out_, umi_type_, pack_sequence(molecule.umi));
@@ -434,23 +445,20 @@ public:
             }
             write_le<uint32_t>(out_, hit.target_id | (hit.is_forward ? kRadForwardMask : 0));
         }
-        chunk_bytes_ += 4 + read_value_size_ + 4 * hits.size();
-        if (nrec_ == std::numeric_limits<uint32_t>::max() || chunk_bytes_ > std::numeric_limits<uint32_t>::max()) {
-            throw std::runtime_error("RAD chunk is too large");
+        chunk_bytes_ += record_bytes;
+        ++chunk_nrec_;
+        ++total_records_;
+        if (chunk_nrec_ == std::numeric_limits<uint32_t>::max()) {
+            close_chunk();
         }
-        ++nrec_;
     }
 
-    uint32_t record_count() const { return nrec_; }
+    uint64_t record_count() const { return total_records_; }
 
     void finalize() {
-        if (chunk_started_) {
-            out_.seekp(chunk_header_pos_);
-            write_le<uint32_t>(out_, static_cast<uint32_t>(chunk_bytes_));
-            write_le<uint32_t>(out_, nrec_);
-            out_.seekp(num_chunks_pos_);
-            write_le<uint64_t>(out_, 1);
-        }
+        close_chunk();
+        out_.seekp(num_chunks_pos_);
+        write_le<uint64_t>(out_, num_chunks_);
         out_.flush();
         if (!out_) {
             throw std::runtime_error("failed to finalize RAD file");
@@ -458,15 +466,43 @@ public:
     }
 
 private:
+    void open_chunk() {
+        chunk_header_pos_ = out_.tellp();
+        write_le<uint32_t>(out_, 0);  // chunk nbytes placeholder
+        write_le<uint32_t>(out_, 0);  // chunk nrec placeholder
+        chunk_bytes_ = 8;             // the 8-byte chunk header
+        chunk_nrec_ = 0;
+        chunk_open_ = true;
+    }
+
+    void close_chunk() {
+        if (!chunk_open_) {
+            return;
+        }
+        if (chunk_bytes_ > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error("RAD chunk is too large");
+        }
+        const std::streampos end = out_.tellp();
+        out_.seekp(chunk_header_pos_);
+        write_le<uint32_t>(out_, static_cast<uint32_t>(chunk_bytes_));
+        write_le<uint32_t>(out_, chunk_nrec_);
+        out_.seekp(end);
+        ++num_chunks_;
+        chunk_open_ = false;
+    }
+
     std::ofstream out_;
     uint8_t cb_type_;
     uint8_t umi_type_;
     size_t read_value_size_;
+    uint64_t max_chunk_bytes_;
     std::streampos num_chunks_pos_{};
     std::streampos chunk_header_pos_{};
-    bool chunk_started_ = false;
-    uint32_t nrec_ = 0;
-    uint64_t chunk_bytes_ = 8;  // chunk header: nbytes(4) + nrec(4)
+    bool chunk_open_ = false;
+    uint32_t chunk_nrec_ = 0;
+    uint64_t chunk_bytes_ = 8;
+    uint64_t num_chunks_ = 0;
+    uint64_t total_records_ = 0;
 };
 
 void write_text_file(const std::filesystem::path& filename, const std::string& contents) {
@@ -547,8 +583,15 @@ int run_convert(int argc, char** argv) {
     }
 
     std::filesystem::create_directories(options.out_dir);
+    uint64_t max_chunk_bytes = static_cast<uint64_t>(1) << 30;  // 1 GiB, well under the u32 chunk field
+    if (const char* env = std::getenv("PANCOLLAPSE_MAX_CHUNK_BYTES")) {
+        max_chunk_bytes = std::strtoull(env, nullptr, 10);
+        if (max_chunk_bytes == 0) {
+            max_chunk_bytes = 1;
+        }
+    }
     RadStreamWriter rad_writer(options.out_dir / "map.rad", t2g.target_names, options.raw_cb_length,
-                               options.raw_umi_length);
+                               options.raw_umi_length, max_chunk_bytes);
 
     std::ifstream gamp_file;
     std::istream* gamp_in = &std::cin;

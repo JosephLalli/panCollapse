@@ -205,10 +205,10 @@ def read_rad(path):
     u(2)  # cblen value
     u(2)  # ulen value
     records = []
-    if num_chunks:
+    cb_w, umi_w = read_w[0], read_w[1]
+    for _ in range(num_chunks):
         u(4)  # chunk nbytes
         nrec = u(4)
-        cb_w, umi_w = read_w[0], read_w[1]
         for _ in range(nrec):
             naln = u(4)
             cb = u(cb_w)
