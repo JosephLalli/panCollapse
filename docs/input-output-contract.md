@@ -66,7 +66,14 @@ them fatal.
   the writer seeks back at finalize to patch the exact chunk byte/record counts and
   `num_chunks`. A run with no emitted record leaves a header-only file (`num_chunks = 0`).
 - Byte-identical output for identical inputs/configuration. The converter is single-threaded
-  under D045.
+  under D045. This guarantee applies fully to the default flat scorer, which is integer
+  arithmetic throughout and produces bit-for-bit identical RAD on any conforming platform.
+  Under `--score qualadj`, the score matrix and full-length-bonus table are constructed with
+  `std::exp`, `std::log`, `std::pow`, and `std::round` (`src/pathtally_qualadj.hpp`
+  `build_matrix`/`build_bonuses`); the last-bit rounding of those libm functions can differ
+  across platforms or libm versions. A difference of one in a matrix entry can flip a score
+  tie and change RAD bytes across machines. Within one machine and build, qualadj output
+  remains deterministic.
 - GAMP read groups whose records all have empty subpaths are unaligned: no RAD record, and
   `unaligned_reads` is incremented.
 

@@ -80,7 +80,13 @@ fidelity to vg's quality-adjusted scores is wanted.
   `num_chunks` counts patched at finalize), `tx2gene.tsv` from the t2g, and a run summary with
   stable counters. GAMP input streams from a file or stdin (`--gamp -`).
 - Single-threaded; the RAD target dictionary is lexicographically ordered; output is
-  byte-reproducible across runs.
+  byte-reproducible across runs. Cross-platform byte identity is guaranteed only for the
+  default flat scorer (integer arithmetic). Under `--score qualadj`, the score matrix and
+  full-length-bonus table are constructed with `std::exp`, `std::log`, `std::pow`, and
+  `std::round` (`src/pathtally_qualadj.hpp` `build_matrix`/`build_bonuses`); last-bit
+  rounding can differ across platforms or libm versions, so a score tie may resolve
+  differently and RAD bytes can vary across machines. Within one machine and build, qualadj
+  output is deterministic.
 - alevin-fry consumes `map.rad` downstream (permit-list, collate, quant).
 
 ## Implementation increments
