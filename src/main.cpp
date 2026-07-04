@@ -389,11 +389,18 @@ size_t rad_int_width(uint8_t type_id) {
 // record count exceeds the u32 fields the format uses; each chunk header and the
 // file-level num_chunks are seek-and-backpatched once their counts are known. Only
 // the current record is ever held.
+//
+// The file is written to a temporary path (<final_path>.tmp) in the same directory
+// and atomically renamed to the final path only after finalize() completes. If the
+// run aborts before finalize(), no map.rad is left on disk; the destructor removes
+// the temp file as a best-effort cleanup.
 class RadStreamWriter {
 public:
     RadStreamWriter(const std::filesystem::path& filename, const std::vector<std::string>& target_names,
                     size_t cb_length, size_t umi_length, uint64_t max_chunk_bytes)
-        : out_(filename, std::ios::binary),
+        : final_path_(filename),
+          temp_path_(filename.string() + ".tmp"),
+          out_(temp_path_, std::ios::binary),
           cb_type_(rad_int_type_for_length(cb_length)),
           umi_type_(rad_int_type_for_length(umi_length)),
           read_value_size_(rad_int_width(cb_type_) + rad_int_width(umi_type_)),
@@ -419,6 +426,14 @@ public:
         write_tag(out_, "compressed_ori_refid", kRadU32);
         write_le<uint16_t>(out_, static_cast<uint16_t>(cb_length));
         write_le<uint16_t>(out_, static_cast<uint16_t>(umi_length));
+    }
+
+    ~RadStreamWriter() {
+        if (!finalized_) {
+            out_.close();
+            std::error_code ec;
+            std::filesystem::remove(temp_path_, ec);
+        }
     }
 
     void write_record(const MoleculeId& molecule, const std::vector<TargetHit>& hits) {
@@ -465,6 +480,9 @@ public:
         if (!out_) {
             throw std::runtime_error("failed to finalize RAD file");
         }
+        out_.close();
+        std::filesystem::rename(temp_path_, final_path_);
+        finalized_ = true;
     }
 
 private:
@@ -493,6 +511,8 @@ private:
         chunk_open_ = false;
     }
 
+    std::filesystem::path final_path_;
+    std::filesystem::path temp_path_;
     std::ofstream out_;
     uint8_t cb_type_;
     uint8_t umi_type_;
@@ -505,6 +525,7 @@ private:
     uint64_t chunk_bytes_ = 8;
     uint64_t num_chunks_ = 0;
     uint64_t total_records_ = 0;
+    bool finalized_ = false;
 };
 
 void write_text_file(const std::filesystem::path& filename, const std::string& contents) {

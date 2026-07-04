@@ -185,6 +185,15 @@ set_tests_properties(pathtally_recur_fail PROPERTIES LABELS "vg;pathtally;groupi
   WILL_FAIL TRUE
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_recur_inputs")
 
+# A failed run must not leave a valid-looking map.rad (N10: atomic temp-rename).
+add_test(NAME pathtally_recur_no_partial
+  COMMAND /bin/sh -c "! '$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${PT_SMOKE_DIR}/reads_recur.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' \
+    --t2g '${PT_FIX}/t2g.tsv' --out-dir '${PT_SMOKE_DIR}/recur_no_partial_out' \
+    && test ! -f '${PT_SMOKE_DIR}/recur_no_partial_out/map.rad'")
+set_tests_properties(pathtally_recur_no_partial PROPERTIES LABELS "vg;pathtally;grouping"
+  FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_recur_inputs")
+
 # A GAMP aligned against a different graph (node IDs absent from the xg) must fail loudly.
 add_test(NAME pathtally_badnode_gamp
   COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${PT_FIX}/reads_badnode.gamp.json' > '${PT_SMOKE_DIR}/reads_badnode.gamp'")
