@@ -78,7 +78,13 @@ fidelity to vg's quality-adjusted scores is wanted.
 - `map.rad` via a streaming seek-and-backpatch writer (D049: header + target dictionary and
   tags up front with a placeholder `num_chunks`, records streamed as groups flush, chunk and
   `num_chunks` counts patched at finalize), `tx2gene.tsv` from the t2g, and a run summary with
-  stable counters. GAMP input streams from a file or stdin (`--gamp -`).
+  stable counters. GAMP input streams from a file or stdin (`--gamp -`). RAD records
+  stream to disk incrementally, but the converter also maintains an in-memory set of
+  every completed read-group name to guarantee exact detection of unsorted
+  (non-contiguous) input; peak resident memory therefore grows with the number of
+  distinct read-group names seen and can reach many GB on a whole-genome run. Bounding
+  the set would risk silent mis-grouping of reads whose alignments are non-adjacent in
+  the GAMP, so the tradeoff is accepted for v0.1.
 - Single-threaded; the RAD target dictionary is lexicographically ordered; output is
   byte-reproducible across runs. Cross-platform byte identity is guaranteed only for the
   default flat scorer (integer arithmetic). Under `--score qualadj`, the score matrix and

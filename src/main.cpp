@@ -639,6 +639,15 @@ int run_convert(int argc, char** argv) {
     size_t raw_molecule_skipped_groups = 0;
     // Histogram of emitted-group target-set sizes: target_count -> group_count.
     std::map<size_t, size_t> emitted_target_histogram;
+    // completed_names: one entry per read-group name that has been fully processed and
+    // flushed. Used exclusively to detect non-contiguous (unsorted) GAMP input: if a
+    // completed name recurs the run aborts rather than silently splitting the read's
+    // alignments into separate groups. Peak resident memory is O(number of distinct
+    // read-group names seen); on a whole-genome run this can reach many GB. Bounding
+    // or removing the set would trade that memory for a silent-correctness risk — a
+    // read whose alignments span non-adjacent GAMP positions would be mis-grouped
+    // without detection — so the full set is kept as the deliberate memory/correctness
+    // tradeoff for v0.1.
     std::set<std::string> completed_names;
     bool have_group = false;
     Group current_group;
