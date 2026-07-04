@@ -1,18 +1,18 @@
 add_executable(vg_link_smoke vg_link_smoke.cpp)
-target_link_libraries(vg_link_smoke PRIVATE panCollapse::vg_boundary)
+target_link_libraries(vg_link_smoke PRIVATE panCollapse::vg_boundary panCollapse::warnings)
 add_test(NAME vg_link_smoke COMMAND vg_link_smoke)
 set_tests_properties(vg_link_smoke PROPERTIES LABELS "vg;link")
 
 # PathTally unit tests (self-contained; no external data).
 add_executable(pathtally_score_test pathtally_score_test.cpp)
 target_include_directories(pathtally_score_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
-target_link_libraries(pathtally_score_test PRIVATE panCollapse::vg_boundary)
+target_link_libraries(pathtally_score_test PRIVATE panCollapse::vg_boundary panCollapse::warnings)
 add_test(NAME pathtally_score_test COMMAND pathtally_score_test)
 set_tests_properties(pathtally_score_test PROPERTIES LABELS "vg;pathtally")
 
 add_executable(pathtally_pipeline_test pathtally_pipeline_test.cpp)
 target_include_directories(pathtally_pipeline_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
-target_link_libraries(pathtally_pipeline_test PRIVATE panCollapse::vg_boundary)
+target_link_libraries(pathtally_pipeline_test PRIVATE panCollapse::vg_boundary panCollapse::warnings)
 add_test(NAME pathtally_pipeline_test COMMAND pathtally_pipeline_test)
 set_tests_properties(pathtally_pipeline_test PROPERTIES LABELS "vg;pathtally")
 
