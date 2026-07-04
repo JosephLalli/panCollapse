@@ -614,6 +614,8 @@ int run_convert(int argc, char** argv) {
     size_t raw_molecule_malformed_groups = 0;
     size_t raw_molecule_unsupported_groups = 0;
     size_t raw_molecule_skipped_groups = 0;
+    // Histogram of emitted-group target-set sizes: target_count -> group_count.
+    std::map<size_t, size_t> emitted_target_histogram;
     std::set<std::string> completed_names;
     bool have_group = false;
     Group current_group;
@@ -696,6 +698,7 @@ int run_convert(int argc, char** argv) {
             hits.push_back({target_id->second, target.forward});
         }
         rad_writer.write_record(current_group.molecule, hits);
+        ++emitted_target_histogram[hits.size()];
         completed_names.insert(current_group.name);
         have_group = false;
     };
@@ -729,6 +732,15 @@ int run_convert(int argc, char** argv) {
         tx2gene += target_name + '\t' + t2g.transcript_gene.at(target_name) + '\n';
     }
     write_text_file(options.out_dir / "tx2gene.tsv", tx2gene);
+    // Build the emitted-target-count histogram as "tc:gc;tc:gc;..." sorted ascending by target count.
+    // Each entry is target_count:group_count.  Empty when no groups were emitted.
+    std::string histogram_value;
+    for (const auto& [target_count, group_count] : emitted_target_histogram) {
+        if (!histogram_value.empty()) {
+            histogram_value += ';';
+        }
+        histogram_value += std::to_string(target_count) + ':' + std::to_string(group_count);
+    }
     write_text_file(options.out_dir / "summary.tsv",
                     "input_records\t" + std::to_string(input_records) + "\ninput_read_groups\t" +
                         std::to_string(input_read_groups) + "\nemitted_groups\t" +
@@ -739,7 +751,8 @@ int run_convert(int argc, char** argv) {
                         std::to_string(raw_molecule_malformed_groups) + "\nraw_molecule_unsupported_groups\t" +
                         std::to_string(raw_molecule_unsupported_groups) + "\nraw_molecule_skipped_groups\t" +
                         std::to_string(raw_molecule_skipped_groups) + "\ngrouping_recurrence_failures\t" +
-                        std::to_string(grouping_recurrence_failures) + "\n");
+                        std::to_string(grouping_recurrence_failures) + "\nemitted_target_count_histogram\t" +
+                        histogram_value + "\n");
     return 0;
 }
 

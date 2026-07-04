@@ -86,7 +86,9 @@ alevin-fry expected-orientation filtering.
 - `tx2gene.tsv` from the t2g;
 - configured raw barcode and UMI lengths, which set RAD `cblen` and `ulen`;
 - a run summary with the product-spec Section 12 counters, including groups skipped and
-  unaligned read groups;
+  unaligned read groups; the field `emitted_target_count_histogram` holds a
+  semicolon-separated list of `target_count:group_count` pairs (ascending by target count)
+  recording how many emitted groups had each distinct number of compatible targets;
 - version/build information and input identities/checksums where practical.
 
 ## Exit behavior
