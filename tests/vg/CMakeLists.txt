@@ -184,3 +184,17 @@ add_test(NAME pathtally_recur_fail
 set_tests_properties(pathtally_recur_fail PROPERTIES LABELS "vg;pathtally;grouping"
   WILL_FAIL TRUE
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_recur_inputs")
+
+# A GAMP aligned against a different graph (node IDs absent from the xg) must fail loudly.
+add_test(NAME pathtally_badnode_gamp
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${PT_FIX}/reads_badnode.gamp.json' > '${PT_SMOKE_DIR}/reads_badnode.gamp'")
+set_tests_properties(pathtally_badnode_gamp PROPERTIES LABELS "vg;pathtally;node-space"
+  FIXTURES_REQUIRED pathtally_smoke_dir FIXTURES_SETUP pathtally_badnode_inputs)
+
+add_test(NAME pathtally_badnode_fail
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${PT_SMOKE_DIR}/reads_badnode.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
+    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/badnode_out")
+set_tests_properties(pathtally_badnode_fail PROPERTIES LABELS "vg;pathtally;node-space"
+  WILL_FAIL TRUE
+  FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_badnode_inputs")

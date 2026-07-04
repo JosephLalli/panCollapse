@@ -97,6 +97,9 @@ Hard failure is expected for:
 
 - unreadable or incompatible inputs;
 - GAMP name-grouping violations (a completed name recurs);
+- a GAMP/xg node-id-space mismatch: if any aligned node ID is absent from the graph the run aborts
+  with a non-zero exit; a node that exists but lies on no HST path is legitimate and produces no
+  target hits for that node (not an error);
 - a graph missing the HST paths, or a t2g inconsistent with the emitted transcripts;
 - inability to encode standards-conformant RAD.
 

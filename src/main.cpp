@@ -553,7 +553,9 @@ int run_convert(int argc, char** argv) {
     pathtally::PathLookup lookup = [&](int64_t node_id,
                                        const std::function<void(const std::string&, bool)>& emit) {
         if (!graph.has_node(node_id)) {
-            return;
+            throw std::runtime_error(
+                "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
+                " is absent from the graph; the GAMP was likely aligned to a different graph");
         }
         const handlegraph::handle_t handle = graph.get_handle(node_id, false);
         graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
