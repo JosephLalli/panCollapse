@@ -24,6 +24,7 @@
 #include <string>
 #include <type_traits>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -672,6 +673,8 @@ int run_convert(int argc, char** argv) {
     std::set<std::string> completed_names;
     bool have_group = false;
     Group current_group;
+    // Reused across every group so the per-group tally does not reallocate its table.
+    pathtally::TallyMap tally_workspace;
 
     auto start_group = [&](const vg::MultipathAlignment& alignment) {
         if (completed_names.count(alignment.name()) != 0) {
@@ -727,9 +730,8 @@ int run_convert(int argc, char** argv) {
         for (const vg::MultipathAlignment& record : current_group.records) {
             record_ptrs.push_back(&record);
         }
-        const std::map<std::string, pathtally::HstTally> tallies =
-            pathtally::tally_read_group(record_ptrs, lookup, node_scorer);
-        const std::vector<pathtally::RadTarget> targets = pathtally::select_targets(tallies);
+        pathtally::tally_read_group_into(tally_workspace, record_ptrs, lookup, node_scorer);
+        const std::vector<pathtally::RadTarget> targets = pathtally::select_targets(tally_workspace);
 
         if (targets.empty()) {
             ++no_compatible_transcript_groups;
@@ -769,7 +771,11 @@ int run_convert(int argc, char** argv) {
                 current_group.saw_unaligned_record = true;
             } else {
                 current_group.saw_subpath_record = true;
-                current_group.records.push_back(alignment);
+                // Move, not copy: for_each hands us a mutable record it re-inits before the
+                // next parse, and we do not touch it again here. Copying deep-copied the whole
+                // protobuf MultipathAlignment (~21% of runtime in profiling); the move steals
+                // its internal storage instead.
+                current_group.records.push_back(std::move(alignment));
             }
         }
     });

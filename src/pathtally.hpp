@@ -13,6 +13,8 @@
 
 #include <vg/vg.pb.h>
 
+#include <absl/container/flat_hash_map.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -29,6 +31,15 @@ struct HstTally {
     int64_t forward_bases = 0;
     int64_t reverse_bases = 0;
 };
+
+// Per-read-group tally, keyed by HST path name. A flat (open-addressing) hash map
+// rather than std::map: the tally is written once per node-visit (the hot loop), so
+// its cost dominated the run as red-black-tree string comparisons (memcmp). The flat
+// map hashes instead of comparing, and callers reuse one instance across groups
+// (clear() keeps the backing storage) so per-group node allocation disappears. Order
+// does not matter: accumulation is commutative and select_targets re-derives the top
+// score and re-sorts.
+using TallyMap = absl::flat_hash_map<std::string, HstTally>;
 
 // For a graph node id, emit(path_name, path_is_reverse) once per HST path step on
 // that node.
@@ -78,14 +89,17 @@ inline NodeScorer flat_scorer(const ScoreParams& params = ScoreParams{}) {
     };
 }
 
-// Steps 2-3 (tally): across every alignment of one read, add each node's vg score
-// to every HST path crossing it, and accumulate orientation evidence (aligned
-// bases forward vs reverse relative to the path).
-inline std::map<std::string, HstTally> tally_read_group(
+// Steps 2-3 (tally), reused-workspace form: clears `tallies` (keeping its backing
+// storage) and refills it. Across every alignment of one read, add each node's vg
+// score to every HST path crossing it, and accumulate orientation evidence (aligned
+// bases forward vs reverse relative to the path). Callers that process many groups
+// pass one long-lived TallyMap here so per-group allocation is amortized away.
+inline void tally_read_group_into(
+    TallyMap& tallies,
     const std::vector<const vg::MultipathAlignment*>& records,
     const PathLookup& lookup,
     const NodeScorer& node_scorer = flat_scorer()) {
-    std::map<std::string, HstTally> tallies;
+    tallies.clear();
     std::vector<int64_t> per_node;
 
     for (const vg::MultipathAlignment* record : records) {
@@ -115,7 +129,16 @@ inline std::map<std::string, HstTally> tally_read_group(
             }
         }
     }
+}
 
+// Convenience form that allocates a fresh TallyMap. Prefer tally_read_group_into with
+// a reused map on hot paths that process many groups.
+inline TallyMap tally_read_group(
+    const std::vector<const vg::MultipathAlignment*>& records,
+    const PathLookup& lookup,
+    const NodeScorer& node_scorer = flat_scorer()) {
+    TallyMap tallies;
+    tally_read_group_into(tallies, records, lookup, node_scorer);
     return tallies;
 }
 
@@ -127,7 +150,7 @@ struct RadTarget {
 // Steps 3-4 (select): winners are the HSTs tied at the single top score; collapse
 // them to unique transcript IDs; per transcript, orientation is the majority of
 // aligned bases (forward on an exact tie); targets sorted by transcript id.
-inline std::vector<RadTarget> select_targets(const std::map<std::string, HstTally>& tallies) {
+inline std::vector<RadTarget> select_targets(const TallyMap& tallies) {
     std::vector<RadTarget> targets;
     if (tallies.empty()) {
         return targets;

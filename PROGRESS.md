@@ -590,5 +590,15 @@ projection, or a custom index.
   optimized build the default in `CMakeLists.txt`, bumped the version to 0.2.0, and built the
   `josephlalli/pancollapse:v0.2` runtime image from the `-O2` binary. Verified the image
   reports `panCollapse 0.2.0` and that a containerized smoke conversion is byte-identical to
-  the host `-O2` run. Recorded as D052. A callgrind profile of the remaining ~45s was running
-  at write time to break down where the optimized run spends its time.
+  the host `-O2` run. Recorded as D052.
+- 2026-07-05: Profiled the `-O2` binary (callgrind, 1M-read MHC) and acted on it (D053). The
+  scorer is ~1%; the run is dominated by GAMP ingestion (~60%) and the per-group tally (~34%),
+  with malloc/free (~27%) and string-compare memcmp (~13%) the top categories. Multithreading
+  judged low value (only ~34% parallelizable, Amdahl-capped near 1.5x without BGZF-stream
+  sharding). Applied two byte-identical single-threaded wins: move each parsed record into the
+  group buffer instead of deep-copying (`main.cpp`), and key the per-group tally with a reused
+  `absl::flat_hash_map` workspace instead of a per-group `std::map` (`pathtally.hpp`,
+  `main.cpp`, plus `absl_raw_hash_set` in `cmake/PanCollapseVg.cmake`). Measured 45.6s -> 41.2s
+  (move) -> 30.4s (flat tally), byte-identical each step, RSS 393 -> 281 MB, CTest 30/30. End to
+  end the v0.2 build is ~7.5x faster than the original `-O0` v0.1 (227s -> 30s), identical
+  output. Rebuilt the `josephlalli/pancollapse:v0.2` image on the fully-optimized binary.

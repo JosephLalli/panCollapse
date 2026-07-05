@@ -904,6 +904,36 @@ build fix. Making the optimized build the default (not a flag users must remembe
 documented build and the released image are fast. No production behavior changes, so no gate is
 implicated beyond the byte-identity checks already required for performance work.
 
+### D053 — Record move and reused flat tally (profile-guided single-threaded wins)
+
+**Decision source:** User (directed performance work after profiling).
+
+**Profiling** (callgrind on the `-O2` binary, 1M-read MHC): the scorer is about 1%; the run is
+dominated by GAMP ingestion (~60%: protobuf parse plus a per-record deep copy plus BGZF
+decompress) and the per-group tally (~34%). The largest cost categories are `malloc`/`free`
+(~27%) and `std::string` comparison (`memcmp`, ~13%). Multithreading was judged low value:
+only ~34% is parallelizable, so a producer/worker design is Amdahl-capped near 1.5x and would
+need BGZF-stream sharding to go further; the high-ROI work is single-threaded copy and
+allocation removal.
+
+**Decision:** Two byte-identical changes.
+- Move each parsed `MultipathAlignment` into the group buffer instead of copying it
+  (`main.cpp`), removing the roughly 21% per-record deep copy.
+- Key the per-group tally with a reused `absl::flat_hash_map` workspace instead of a per-group
+  `std::map` (`pathtally.hpp`, `main.cpp`): the flat map hashes instead of doing red-black-tree
+  string comparisons (removing the ~13% `memcmp`), and reusing one instance across groups
+  removes the per-group node allocation. `cmake/PanCollapseVg.cmake` links `absl_raw_hash_set`;
+  abseil is already a transitive project dependency, so this adds no new third-party library.
+
+**Measured** (1M-read MHC, `-O2`): 45.6s -> 41.2s (move) -> 30.4s (flat tally), byte-identical
+at each step, peak RSS 393 -> 281 MB, CTest 30/30. End to end the optimized v0.2 build is about
+7.5x faster than the original `-O0` v0.1 (227s -> 30s) with identical output.
+
+**Rationale:** The profile showed compute (scoring) is negligible and the cost is data movement
+-- copies and allocations. Both wins are local, byte-identical, and single-threaded, so no gate
+is implicated beyond the byte-identity checks. Threading stays deferred (D045) as low value per
+the profile.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current
