@@ -875,6 +875,35 @@ bottleneck is graph-lookup CPU, not GAMP I/O. No custom GAMP index is planned.
 node-visit) without changing behavior. The threading and GAMP-index findings were requested
 scoping and are recorded as analysis, not as approved work, to keep D045 authoritative.
 
+### D052 — Optimized default build and v0.2 runtime image
+
+**Decision source:** User (directed performance work; requested a v0.2 image built from the
+optimized tool).
+
+**Decision:** The build defaults to an optimized configuration. When neither `CMAKE_BUILD_TYPE`
+nor a multi-config generator is set, `CMakeLists.txt` forces `RelWithDebInfo` (`-O2 -g`).
+Earlier builds compiled at `-O0` because no build type was set, and both the documented recipe
+and `scripts/build-docker-image.sh` (which packages `build/src/panCollapse`) inherited that.
+
+**Measured:** On the real 1M-read MHC GAMP, `-O2` cut wall clock from 2:44 to 0:45.6 (about
+3.6x over the `-O0` cached build, roughly 5x over the original `-O0`), byte-identical output,
+full CTest 30/30. `-O3` (Release) measured within noise of `-O2` (0:46.1) and drops debug
+symbols, so `RelWithDebInfo` is the default rather than `Release`. There are no `assert()`s in
+production code, so the `-DNDEBUG` that both types set disables no runtime checks.
+
+**Decision:** The version is bumped to 0.2.0 (`project()` VERSION, propagated to `--version`
+and the Dockerfile image label), and the runtime image tag default is
+`josephlalli/pancollapse:v0.2`. v0.2 is a performance release: its output is byte-identical to
+v0.1, only faster.
+
+**Verification:** The v0.2 image built from the `-O2` binary reports `panCollapse 0.2.0`, and a
+containerized conversion of the hermetic smoke fixture is byte-identical to the host `-O2` run.
+
+**Rationale:** Shipping an `-O0` binary left roughly a 5x speedup unclaimed behind a one-line
+build fix. Making the optimized build the default (not a flag users must remember) ensures the
+documented build and the released image are fast. No production behavior changes, so no gate is
+implicated beyond the byte-identity checks already required for performance work.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

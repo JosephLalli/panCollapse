@@ -1,10 +1,20 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(panCollapse VERSION 0.1.0 LANGUAGES CXX)
+project(panCollapse VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Default to an optimized build with debug info when the user did not pick a
+# configuration.  Single-config generators otherwise compile at -O0, which is
+# several times slower on the scoring and per-node lookup hot paths (measured
+# about 5x on a 1M-read MHC GAMP).  -O2 and -O3 measured within noise here, so
+# RelWithDebInfo is preferred: same speed with symbols retained for diagnosis.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING
+      "Build type (default RelWithDebInfo: optimized binary with debug symbols)" FORCE)
+endif()
 
 option(PANCOLLAPSE_ENABLE_VG_TESTS "Enable tests that compile and link local VG artifacts" ON)
 

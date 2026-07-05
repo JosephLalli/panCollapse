@@ -581,4 +581,14 @@ projection, or a custom index.
   natural parallel unit (producer/worker/writer with an order-preserving reorder buffer for
   byte-identical output), identification only under D045; and a sorted/indexed GAMP is judged
   not worthwhile because the tool is a single linear streaming pass with no random access.
-  Code + doc changes uncommitted pending user direction on committing.
+  Committed on branch `perf/node-hst-cache` as `f3bda22`.
+- 2026-07-05: Found the dominant lever while profiling: the build set no `CMAKE_BUILD_TYPE`,
+  so the shipped binary (and the v0.1 Docker image, which packages `build/src/panCollapse`)
+  compiled at `-O0`. Building `-O2` (RelWithDebInfo) cut the 1M-read MHC run from 2:44 to
+  0:45.6 (about 3.6x, ~5x over the original `-O0`), byte-identical, CTest 30/30; `-O3` was
+  within noise (0:46.1) and loses symbols, so RelWithDebInfo is the default. Made the
+  optimized build the default in `CMakeLists.txt`, bumped the version to 0.2.0, and built the
+  `josephlalli/pancollapse:v0.2` runtime image from the `-O2` binary. Verified the image
+  reports `panCollapse 0.2.0` and that a containerized smoke conversion is byte-identical to
+  the host `-O2` run. Recorded as D052. A callgrind profile of the remaining ~45s was running
+  at write time to break down where the optimized run spends its time.
