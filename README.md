@@ -93,7 +93,7 @@ alevin-fry quant -i pl -m out/tx2gene.tsv -o quant -r cr-like --use-mtx
 
 ## Docker
 
-A runtime image is published as `josephlalli/pancollapse:v0.1`. It bundles the panCollapse
+A runtime image is published as `josephlalli/pancollapse:v0.2`. It bundles the panCollapse
 binary with the exact shared-library closure it was built against, so it does not need vg
 installed at runtime (vg and alevin-fry remain separate tools for the surrounding pipeline
 steps). Mount your inputs and an output directory:
@@ -101,14 +101,14 @@ steps). Mount your inputs and an output directory:
 ```sh
 docker run --rm \
   -v "$PWD":/work \
-  josephlalli/pancollapse:v0.1 convert \
+  josephlalli/pancollapse:v0.2 convert \
   --gamp /work/reads.gamp --xg /work/graph.spliced.xg \
   --t2g /work/t2g.tsv --out-dir /work/out
 ```
 
 It also reads a GAMP stream on stdin (`--gamp -`). To build the image locally after compiling
 the binary, run [`scripts/build-docker-image.sh`](scripts/build-docker-image.sh), which stages
-the binary and its library closure and tags `josephlalli/pancollapse:v0.1`.
+the binary and its library closure and tags `josephlalli/pancollapse:v0.2`.
 
 ## How it works
 
