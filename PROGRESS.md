@@ -72,9 +72,11 @@ All six PathTally increments (`docs/conversion-algorithm.md`) plus D049 streamin
 input via `--gamp -` and a seek-and-backpatch RAD writer) are implemented and verified; the
 RAD chunk-count conflict is resolved by D049 with exact backpatched counts that alevin-fry
 accepts. The old traversal-era CTest fixtures are retired, a self-contained end-to-end CTest
-is in place (committed tiny graph + independent oracle), and the per-node lookup is optimized
-(1M-read MHC run ~3m57s, byte-identical). Further speedups (reducing per-node step iteration
-or reintroducing threads under a later approval) remain future work.
+is in place (committed tiny graph + independent oracle), and the per-node HST lookup now
+memoizes each distinct node's crossings (D051): the 1M-read MHC run dropped from ~3m47s to
+~2m44s (about 28%), byte-identical, 30/30 CTest. Further
+speedups (reintroducing threads under a later approval per D045) remain future work; a
+sorted/indexed GAMP was analyzed and judged not worthwhile (D051).
 
 ## Required stop
 
@@ -569,3 +571,14 @@ projection, or a custom index.
   working-as-intended. Recorded as D050. Full CTest suite: 30/30. Commits c4df275 (blockers),
   e7e2156 (N1), then 29b6794, a3a38e9, bf31524, 9fd1e3a, 92bc8a1, a8e5bea, c675cc8, 90b9a21,
   1bcc288 (N-tasks), 1aa2567 (findings closeout).
+- 2026-07-05: Performance session. Optimized the per-node HST lookup by memoizing each
+  distinct node's HST crossings on first visit (lazy cache in `src/main.cpp`), so a node's
+  path steps are scanned at most once per run instead of once per node-visit. Measured on the
+  real 1M-read MHC GAMP against `sampleA` `spliced.xg`: wall clock 3:47 -> 2:44 (about 28%,
+  1.39x), `map.rad`/`tx2gene.tsv`/`summary.tsv` byte-identical (sha256 `7df66891...` on
+  map.rad), peak RSS +~16 MB, full CTest 30/30. Recorded as D051, which also captures two
+  requested analyses: the run is ~99% single-core CPU-bound so per-read-group work is the
+  natural parallel unit (producer/worker/writer with an order-preserving reorder buffer for
+  byte-identical output), identification only under D045; and a sorted/indexed GAMP is judged
+  not worthwhile because the tool is a single linear streaming pass with no random access.
+  Code + doc changes uncommitted pending user direction on committing.

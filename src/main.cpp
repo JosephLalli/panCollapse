@@ -570,23 +570,44 @@ int run_convert(int argc, char** argv) {
         }
     });
 
+    // Per-node HST-step cache. Scanning a node's path steps (for_each_step_on_handle)
+    // is the dominant runtime cost, and a run revisits the same nodes many times: every
+    // read that aligns through a shared exon or backbone node repeats the full step scan.
+    // Cache each distinct node's HST crossings on first lookup and replay the cached
+    // vector afterward, so each node is scanned at most once. Entries store pointers into
+    // hst_path_name, whose values are inserted once above and never modified afterward, so
+    // the addresses stay valid. Output is byte-identical: the tally accumulates per path
+    // name and is order-independent, and one entry is stored per step (a path visiting a
+    // node twice still contributes twice). Memory is O(HST steps on the nodes the GAMP
+    // actually touches) -- the working set, not the whole graph.
+    std::unordered_map<int64_t, std::vector<std::pair<const std::string*, bool>>> node_hst_cache;
+
     // Injected HST lookup: emit each HST path crossing a node, with its orientation there.
     pathtally::PathLookup lookup = [&](int64_t node_id,
                                        const std::function<void(const std::string&, bool)>& emit) {
-        if (!graph.has_node(node_id)) {
-            throw std::runtime_error(
-                "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
-                " is absent from the graph; the GAMP was likely aligned to a different graph");
-        }
-        const handlegraph::handle_t handle = graph.get_handle(node_id, false);
-        graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
-            const auto it = hst_path_name.find(handlegraph::as_integer(graph.get_path_handle_of_step(step)));
-            if (it == hst_path_name.end()) {
-                return true;
+        auto cached = node_hst_cache.find(node_id);
+        if (cached == node_hst_cache.end()) {
+            if (!graph.has_node(node_id)) {
+                throw std::runtime_error(
+                    "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
+                    " is absent from the graph; the GAMP was likely aligned to a different graph");
             }
-            emit(it->second, graph.get_is_reverse(graph.get_handle_of_step(step)));
-            return true;
-        });
+            std::vector<std::pair<const std::string*, bool>> entries;
+            const handlegraph::handle_t handle = graph.get_handle(node_id, false);
+            graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
+                const auto it =
+                    hst_path_name.find(handlegraph::as_integer(graph.get_path_handle_of_step(step)));
+                if (it != hst_path_name.end()) {
+                    entries.emplace_back(&it->second,
+                                         graph.get_is_reverse(graph.get_handle_of_step(step)));
+                }
+                return true;
+            });
+            cached = node_hst_cache.emplace(node_id, std::move(entries)).first;
+        }
+        for (const auto& [name_ptr, path_is_reverse] : cached->second) {
+            emit(*name_ptr, path_is_reverse);
+        }
     };
 
     std::shared_ptr<pathtally::QualAdjScorer> qual_adj_scorer;

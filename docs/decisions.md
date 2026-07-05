@@ -836,6 +836,45 @@ D048/D049.
 issues; the user directed clearing all of them for a full (not small-scale-rescoped) v0.1. Each
 change is covered by a hermetic CTest; the full suite is 30/30.
 
+### D051 — Per-node HST lookup cache and performance-scaling analysis
+
+**Decision source:** User (directed performance work).
+
+**Decision:** The per-node HST lookup memoizes each distinct node's HST crossings the first
+time the node is seen and replays the cached result on later visits, so a node's path steps
+are scanned at most once per run rather than once per node-visit. The cache stores
+`(HST-name pointer, orientation)` pairs pointing into the immutable `hst_path_name` map, and
+one entry per step so a path visiting a node twice still contributes twice. Output is
+byte-identical because the tally accumulates per path name and is order-independent; the
+node-id-space hard failure (D050) is preserved by validating `has_node` on cache miss.
+
+**Measured:** On the real 1M-read MHC GAMP (`build/real_mhc_scratch/mhcA.gamp`, 1,888,691
+records, 39,103 emitted) against `sampleA` `spliced.xg`, wall clock dropped from 3:47 to
+2:44 (about 28%, 1.39x) with `map.rad`, `tx2gene.tsv`, and `summary.tsv` byte-identical to
+the pre-cache output and peak RSS up about 16 MB. The full CTest suite stays 30/30.
+
+**Finding (multithreading, no implementation):** The run is about 99% single-core CPU-bound
+(user 162.5s vs wall 163.6s), and per-read-group work (`tally_read_group` + `select_targets`)
+is independent, so it is the natural parallel unit. The identified structure is a serial
+producer (GAMP parse + name-grouping), a pool of workers sharing the read-only `xg`/t2g, and
+a single writer, with an order-preserving reorder buffer keyed by input group index so RAD
+bytes stay deterministic. The per-node cache must become read-only during the parallel phase
+(eager precompute) or per-thread to avoid locking. This is identification only. D045 still
+governs: no `--threads` production surface is added without a later explicit approval, and
+any threaded mode returns to a gate and carries a byte-comparison acceptance criterion.
+
+**Finding (sorted/indexed GAMP):** A sorted and/or randomly indexed GAMP is judged not
+worthwhile for the current design. panCollapse is a single linear streaming pass that reads
+every record once in order; name-grouping is already a required correctness precondition
+(usually satisfied by `vg mpmap`), not a throughput lever, and there is no random access to
+accelerate. Partitioning at read-group boundaries is useful only as a parallelization
+enabler, and even then needs a few boundary split offsets, not a persistent index; the
+bottleneck is graph-lookup CPU, not GAMP I/O. No custom GAMP index is planned.
+
+**Rationale:** The cache attacks the measured hotspot (`for_each_step_on_handle` repeated per
+node-visit) without changing behavior. The threading and GAMP-index findings were requested
+scoping and are recorded as analysis, not as approved work, to keep D045 authoritative.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current
