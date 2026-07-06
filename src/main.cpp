@@ -1,5 +1,6 @@
 #include <handlegraph/path_position_handle_graph.hpp>
 #include <handlegraph/util.hpp>
+#include <htslib/sam.h>
 #include <vg/io/stream.hpp>
 #include <vg/vg.pb.h>
 #include <xg.hpp>
@@ -40,6 +41,10 @@ enum class MoleculeIdentityFailurePolicy { Skip, Fail };
 
 enum class ScoreMode { Flat, QualAdj };
 
+// XT-tag policy for reads compatible with more than one gene. Omit skips XT (a --per-gene
+// counter then ignores the read); First writes XT for the first gene in sorted order.
+enum class BamMultiGenePolicy { Omit, First };
+
 enum class MoleculeParseStatus { Ok, Missing, Malformed, Unsupported };
 
 struct Options {
@@ -51,6 +56,8 @@ struct Options {
     size_t raw_umi_length = 12;
     MoleculeIdentityFailurePolicy molecule_identity_failures = MoleculeIdentityFailurePolicy::Skip;
     ScoreMode score_mode = ScoreMode::Flat;
+    std::filesystem::path bam_out;  // empty => no BAM output
+    BamMultiGenePolicy bam_multigene = BamMultiGenePolicy::Omit;
 };
 
 struct MoleculeId {
@@ -83,12 +90,17 @@ struct T2gData {
     std::map<std::string, std::string> transcript_gene;
     std::map<std::string, uint32_t> target_ids;
     std::vector<std::string> target_names;
+    // Sorted unique gene ids and gene -> index, used only for the optional BAM output:
+    // one @SQ contig per gene, in this order.
+    std::vector<std::string> gene_names;
+    std::map<std::string, int32_t> gene_ids;
 };
 
 constexpr const char* kUsageText =
     "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv "
     "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
-    "[--score flat|qualadj] [--molecule-identity-failures skip|fail]";
+    "[--score flat|qualadj] [--molecule-identity-failures skip|fail] "
+    "[--bam-out reads.bam] [--bam-multigene omit|first]";
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(kUsageText);
@@ -157,6 +169,17 @@ Options parse_options(int argc, char** argv) {
             } else {
                 usage_error();
             }
+        } else if (arg == "--bam-out") {
+            options.bam_out = require_value("--bam-out");
+        } else if (arg == "--bam-multigene") {
+            const std::string value = require_value("--bam-multigene");
+            if (value == "omit") {
+                options.bam_multigene = BamMultiGenePolicy::Omit;
+            } else if (value == "first") {
+                options.bam_multigene = BamMultiGenePolicy::First;
+            } else {
+                usage_error();
+            }
         } else {
             usage_error();
         }
@@ -221,6 +244,12 @@ T2gData read_t2g(const std::filesystem::path& filename) {
     for (const auto& [transcript, gene] : data.transcript_gene) {
         data.target_ids[transcript] = static_cast<uint32_t>(data.target_names.size());
         data.target_names.push_back(transcript);
+        // std::map keeps genes sorted and unique; emplace assigns each its @SQ index in order.
+        data.gene_ids.emplace(gene, 0);
+    }
+    for (auto& [gene, id] : data.gene_ids) {
+        id = static_cast<int32_t>(data.gene_names.size());
+        data.gene_names.push_back(gene);
     }
     return data;
 }
@@ -529,6 +558,128 @@ private:
     bool finalized_ = false;
 };
 
+// Optional BAM output for a CellRanger-style counting stack (UMI-tools count --per-gene
+// --gene-tag, then DropletUtils emptyDropsCellRanger). The RAD remains the primary output;
+// this writer is only constructed when --bam-out is given.
+//
+// The BAM carries panCollapse's graph-derived gene assignment as 10x tags, not real
+// alignment coordinates: UMI-tools dedups by (cell, UMI, gene) and ignores position, so each
+// read is placed nominally at position 1 of a synthetic per-gene contig. This keeps reads
+// that would never surject to the linear genome (non-reference alleles/insertions), which is
+// the whole point of counting off panCollapse instead of a genome-surjected BAM. One record
+// per emitted read, always flagged mapped. Records are written in GAMP order (@HD SO:unsorted);
+// downstream must samtools sort + index before umi_tools count.
+class BamWriter {
+public:
+    // One synthetic contig per gene needs a length; the value is nominal (position is ignored
+    // downstream) but must exceed any read length so a POS=1 full-length M CIGAR stays valid.
+    static constexpr int32_t kNominalContigLength = 1 << 28;
+
+    BamWriter(const std::filesystem::path& filename, const std::vector<std::string>& gene_names,
+              const std::string& version, const std::string& command_line)
+        : final_path_(filename), temp_path_(filename.string() + ".tmp") {
+        fp_ = hts_open(temp_path_.c_str(), "wb");
+        if (fp_ == nullptr) {
+            throw std::runtime_error("cannot open BAM output");
+        }
+        hdr_ = sam_hdr_init();
+        rec_ = bam_init1();
+        if (hdr_ == nullptr || rec_ == nullptr) {
+            throw std::runtime_error("cannot allocate BAM header/record");
+        }
+        if (sam_hdr_add_line(hdr_, "HD", "VN", "1.6", "SO", "unsorted", NULL) < 0) {
+            throw std::runtime_error("cannot write BAM @HD line");
+        }
+        const std::string length = std::to_string(kNominalContigLength);
+        for (const std::string& gene : gene_names) {
+            if (sam_hdr_add_line(hdr_, "SQ", "SN", gene.c_str(), "LN", length.c_str(), NULL) < 0) {
+                throw std::runtime_error("cannot write BAM @SQ line for gene " + gene);
+            }
+        }
+        if (sam_hdr_add_line(hdr_, "PG", "ID", "panCollapse", "PN", "panCollapse", "VN",
+                             version.c_str(), "CL", command_line.c_str(), NULL) < 0) {
+            throw std::runtime_error("cannot write BAM @PG line");
+        }
+        if (sam_hdr_write(fp_, hdr_) < 0) {
+            throw std::runtime_error("cannot write BAM header");
+        }
+    }
+
+    ~BamWriter() {
+        if (rec_ != nullptr) {
+            bam_destroy1(rec_);
+        }
+        if (hdr_ != nullptr) {
+            sam_hdr_destroy(hdr_);
+        }
+        if (fp_ != nullptr) {
+            hts_close(fp_);
+        }
+        if (!finalized_) {
+            std::error_code ec;
+            std::filesystem::remove(temp_path_, ec);
+        }
+    }
+
+    // One nominal record: mapped (flag 0), placed at position 1 of the primary gene's contig,
+    // carrying 10x tags. xt is written only when has_xt is true.
+    void write_record(const std::string& qname, int32_t gene_tid, const std::string& seq,
+                      const std::string& qual, const std::string& cb, const std::string& ub,
+                      const std::string& gx, const std::string& gn, const std::string& xt,
+                      bool has_xt) {
+        const size_t l_seq = seq.size();
+        const uint32_t cigar = (static_cast<uint32_t>(l_seq) << BAM_CIGAR_SHIFT) | BAM_CMATCH;
+        const bool have_qual = !qual.empty() && qual.size() == l_seq;
+        if (bam_set1(rec_, qname.size(), qname.c_str(), /*flag=*/0, gene_tid, /*pos=*/0,
+                     /*mapq=*/255, l_seq > 0 ? 1 : 0, l_seq > 0 ? &cigar : nullptr,
+                     /*mtid=*/-1, /*mpos=*/-1, /*isize=*/0, l_seq, l_seq > 0 ? seq.data() : nullptr,
+                     have_qual ? qual.data() : nullptr, /*l_aux=*/0) < 0) {
+            throw std::runtime_error("cannot build BAM record");
+        }
+        append_tag("CB", cb);
+        append_tag("CR", cb);  // panCollapse carries only raw values, so raw == the CB/UB values
+        append_tag("UB", ub);
+        append_tag("UR", ub);
+        append_tag("GX", gx);
+        append_tag("GN", gn);
+        if (has_xt) {
+            append_tag("XT", xt);
+        }
+        if (sam_write1(fp_, hdr_, rec_) < 0) {
+            throw std::runtime_error("cannot write BAM record");
+        }
+        ++record_count_;
+    }
+
+    uint64_t record_count() const { return record_count_; }
+
+    void finalize() {
+        if (hts_close(fp_) < 0) {
+            fp_ = nullptr;
+            throw std::runtime_error("cannot finalize BAM file");
+        }
+        fp_ = nullptr;
+        std::filesystem::rename(temp_path_, final_path_);
+        finalized_ = true;
+    }
+
+private:
+    void append_tag(const char tag[2], const std::string& value) {
+        if (bam_aux_append(rec_, tag, 'Z', static_cast<int>(value.size()) + 1,
+                           reinterpret_cast<const uint8_t*>(value.c_str())) < 0) {
+            throw std::runtime_error("cannot append BAM tag");
+        }
+    }
+
+    std::filesystem::path final_path_;
+    std::filesystem::path temp_path_;
+    htsFile* fp_ = nullptr;
+    sam_hdr_t* hdr_ = nullptr;
+    bam1_t* rec_ = nullptr;
+    uint64_t record_count_ = 0;
+    bool finalized_ = false;
+};
+
 void write_text_file(const std::filesystem::path& filename, const std::string& contents) {
     std::ofstream out(filename);
     if (!out) {
@@ -639,6 +790,19 @@ int run_convert(int argc, char** argv) {
     }
     RadStreamWriter rad_writer(options.out_dir / "map.rad", t2g.target_names, options.raw_cb_length,
                                options.raw_umi_length, max_chunk_bytes);
+
+    std::unique_ptr<BamWriter> bam_writer;
+    if (!options.bam_out.empty()) {
+        std::string command_line;
+        for (int i = 0; i < argc; ++i) {
+            if (i > 0) {
+                command_line += ' ';
+            }
+            command_line += argv[i];
+        }
+        bam_writer = std::make_unique<BamWriter>(options.bam_out, t2g.gene_names, PANCOLLAPSE_VERSION,
+                                                 command_line);
+    }
 
     std::ifstream gamp_file;
     std::istream* gamp_in = &std::cin;
@@ -753,6 +917,29 @@ int run_convert(int argc, char** argv) {
             hits.push_back({target_id->second, target.forward});
         }
         rad_writer.write_record(current_group.molecule, hits);
+        if (bam_writer) {
+            // Same targets as the RAD record; collapse to the sorted unique gene set. std::set
+            // gives the deterministic order for GX and for the primary (first) gene contig.
+            std::set<std::string> genes;
+            for (const pathtally::RadTarget& target : targets) {
+                genes.insert(t2g.transcript_gene.at(target.transcript));
+            }
+            std::string gx;
+            for (const std::string& gene : genes) {
+                if (!gx.empty()) {
+                    gx += ';';
+                }
+                gx += gene;
+            }
+            const std::string& primary_gene = *genes.begin();
+            const bool has_xt =
+                genes.size() == 1 || options.bam_multigene == BamMultiGenePolicy::First;
+            const vg::MultipathAlignment& read = current_group.records.front();
+            bam_writer->write_record(current_group.molecule.original_name,
+                                     t2g.gene_ids.at(primary_gene), read.sequence(), read.quality(),
+                                     current_group.molecule.barcode, current_group.molecule.umi, gx,
+                                     /*gn=*/gx, /*xt=*/primary_gene, has_xt);
+        }
         ++emitted_target_histogram[hits.size()];
         completed_names.insert(current_group.name);
         have_group = false;
@@ -786,6 +973,9 @@ int run_convert(int argc, char** argv) {
     }
 
     rad_writer.finalize();
+    if (bam_writer) {
+        bam_writer->finalize();
+    }
     std::string tx2gene;
     for (const std::string& target_name : t2g.target_names) {
         tx2gene += target_name + '\t' + t2g.transcript_gene.at(target_name) + '\n';

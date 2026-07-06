@@ -47,6 +47,7 @@ The converter is `build/src/panCollapse`.
 panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir out
                     [--raw-cb-length 16] [--raw-umi-length 12]
                     [--score flat|qualadj] [--molecule-identity-failures skip|fail]
+                    [--bam-out reads.bam] [--bam-multigene omit|first]
 ```
 
 ### Inputs
@@ -69,6 +70,10 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
   quality-adjusted mapping.
 - `--molecule-identity-failures skip|fail` — how to treat reads whose name has a missing,
   malformed, or wrong-length CB/UMI (default `skip`, counted in the summary).
+- `--bam-out <path>` — also write a BAM for a CellRanger-style counting stack (UMI-tools +
+  DropletUtils `emptyDropsCellRanger`). Opt-in; the RAD is byte-identical with or without it.
+  See [`docs/bam-export.md`](docs/bam-export.md).
+- `--bam-multigene omit|first` — `XT` tag policy for multi-gene reads (default `omit`).
 
 ### Outputs (in `--out-dir`)
 
@@ -77,6 +82,10 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
 - `tx2gene.tsv` — transcript-to-gene map for `alevin-fry quant`.
 - `summary.tsv` — per-run counters (records, emitted groups, no-compatible / unaligned reads,
   molecule-identity skips).
+- `reads.bam` (only with `--bam-out`) — one mapped record per emitted read carrying 10x tags
+  (`CB`/`UB`/`GX`/`GN`, and `XT` for `umi_tools --gene-tag`), for a CellRanger-style counter.
+  Positions are nominal; genes come from the graph, not a linear reference. See
+  [`docs/bam-export.md`](docs/bam-export.md).
 
 ## Example
 

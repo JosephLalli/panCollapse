@@ -56,6 +56,8 @@ pkg_check_modules(DIVSUFSORT64 REQUIRED IMPORTED_TARGET libdivsufsort64)
 pkg_check_modules(ABSL_LOG_INTERNAL_CHECK_OP REQUIRED IMPORTED_TARGET absl_log_internal_check_op)
 # Backing library for absl::flat_hash_map, used by the per-group tally (pathtally.hpp).
 pkg_check_modules(ABSL_RAW_HASH_SET REQUIRED IMPORTED_TARGET absl_raw_hash_set)
+# htslib for the optional BAM output writer (src/main.cpp). Already present alongside vg.
+pkg_check_modules(HTSLIB REQUIRED IMPORTED_TARGET htslib)
 
 add_library(panCollapse_xg STATIC IMPORTED GLOBAL)
 set_target_properties(panCollapse_xg PROPERTIES
@@ -75,6 +77,7 @@ target_link_libraries(panCollapse_vg_boundary INTERFACE
   PkgConfig::DIVSUFSORT64
   PkgConfig::ABSL_LOG_INTERNAL_CHECK_OP
   PkgConfig::ABSL_RAW_HASH_SET
+  PkgConfig::HTSLIB
   OpenMP::OpenMP_CXX
   Threads::Threads
   m

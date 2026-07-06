@@ -591,6 +591,21 @@ projection, or a custom index.
   `josephlalli/pancollapse:v0.2` runtime image from the `-O2` binary. Verified the image
   reports `panCollapse 0.2.0` and that a containerized smoke conversion is byte-identical to
   the host `-O2` run. Recorded as D052.
+- 2026-07-06: Added an opt-in BAM output (`--bam-out`, D054) for a CellRanger-style counting
+  stack (`umi_tools count --per-gene --gene-tag=XT` -> DropletUtils `emptyDropsCellRanger`),
+  designed via plan-mode approval since a new output backend returns to a gate. One mapped
+  record per emitted read on a synthetic per-gene contig, carrying 10x tags (`CB`/`CR`,
+  `UB`/`UR`, full-set `GX`, `GN`, and single-gene-or-omitted `XT`); genes come from the same
+  t2g the RAD uses, so no surjection and no new runtime input. New `BamWriter` (htslib, already
+  a transitive dep) in `src/main.cpp`; `cmake/PanCollapseVg.cmake` links `htslib`. Ten hermetic
+  `bam`-label CTests (quickcheck, header, RAD byte-identity with/without `--bam-out`, oracle
+  `GX` parity, `umi_tools count` vs a naive tag recount, position independence); full suite
+  40/40. Real 1M-read MHC: `map.rad` byte-identical (sha `7df66891...`), BAM 39,103 records over
+  317 gene contigs, and the sort/index + `umi_tools count` pipeline yields 30,105 molecules over
+  9,701 cells x 203 genes (2,755 multi-gene reads skipped for lacking `XT`). Bumped to 0.3.0.
+  Documented in `docs/bam-export.md`, README, and `docs/input-output-contract.md`. umi_tools
+  1.1.6 installed to `~/.local`; the BAM tests need a python with pysam (the pysam+umi_tools
+  interpreter is `python@3.11`, passed via `-DPython3_EXECUTABLE`).
 - 2026-07-05: Profiled the `-O2` binary (callgrind, 1M-read MHC) and acted on it (D053). The
   scorer is ~1%; the run is dominated by GAMP ingestion (~60%) and the per-group tally (~34%),
   with malloc/free (~27%) and string-compare memcmp (~13%) the top categories. Multithreading

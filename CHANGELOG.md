@@ -3,6 +3,28 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.3.0]
+
+### Added
+
+- **Optional BAM output (`--bam-out`)** for a CellRanger-style counting stack
+  (`umi_tools count --per-gene --gene-tag=XT`, then DropletUtils `emptyDropsCellRanger`),
+  alongside the existing RAD. The BAM carries panCollapse's graph-derived gene assignment as
+  10x tags (`CB`/`CR`, `UB`/`UR`, `GX` = full compatible-gene set, `GN`, and `XT` = the single
+  gene or omitted for multi-gene reads), with one mapped record per emitted read placed at a
+  nominal position 1 of a synthetic per-gene contig. Because a `--per-gene --gene-tag` counter
+  dedups by `(cell, UMI, gene)` and ignores position, no real coordinates are needed; genes come
+  from the graph, so reads that never surject to the linear reference are kept. See
+  [`docs/bam-export.md`](docs/bam-export.md). (D054)
+- `--bam-multigene omit|first` — `XT` policy for multi-gene reads (default `omit`, matching
+  CellRanger `soloMultiMappers Unique`).
+
+### Notes
+
+- The RAD path is unchanged: `map.rad`/`tx2gene.tsv`/`summary.tsv` are byte-identical with or
+  without `--bam-out` (verified on the 1M-read MHC GAMP, sha `7df66891...`). No genome surjection,
+  no new runtime input; htslib was already a transitive dependency.
+
 ## [0.2.0]
 
 Performance release. Every change below is a speed or memory improvement only: the RAD,

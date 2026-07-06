@@ -934,6 +934,41 @@ at each step, peak RSS 393 -> 281 MB, CTest 30/30. End to end the optimized v0.2
 is implicated beyond the byte-identity checks. Threading stays deferred (D045) as low value per
 the profile.
 
+### D054 — Optional BAM output for a CellRanger-style counting stack
+
+**Decision source:** User (new goal, with contig scheme, umi_tools, no-gene, and GN choices
+confirmed via plan approval).
+
+**Decision:** Add an opt-in BAM output (`--bam-out`) alongside the RAD, consumable by
+`umi_tools count --per-gene --gene-tag=XT` then DropletUtils `emptyDropsCellRanger`. The RAD is
+unchanged and byte-identical with or without `--bam-out`; the BAM is written from the same
+`flush_group` pass, so gene assignments cannot diverge. No genome surjection, no new runtime
+input, no new persistent index; genes come only from `t2g.transcript_gene` (the same ids the
+RAD/tx2gene use). Single-threaded and streaming, via htslib (already a transitive dependency).
+
+**Decision:** The BAM carries panCollapse's graph-derived gene set as 10x tags, not real
+coordinates, because a `--per-gene --gene-tag` counter dedups by `(cell, UMI, gene)` and ignores
+position. One mapped record per emitted read (no-gene/unaligned reads skipped, matching RAD
+parity), placed at position 1 of a synthetic per-gene contig (one `@SQ` per gene). Tags: `CB`/`CR`,
+`UB`/`UR` (raw values, so `CB`==`CR` and `UB`==`UR`), `GX` = full sorted compatible-gene set
+(`;`-joined, never collapsed), `GN` = `GX` (the t2g has only gene ids), and `XT` = the single gene,
+or omitted when multi-gene (`--bam-multigene omit`, default; `first` writes the first gene). Header
+`@HD SO:unsorted` (sort + index downstream), `@SQ` per gene, `@PG panCollapse`.
+
+**Verification:** Ten hermetic CTests (label `bam`): `samtools quickcheck`, header `@SQ`/`@PG`,
+`map.rad` byte-identical with vs without `--bam-out`, tag/`GX` parity against the independent
+oracle, `umi_tools count` reproducing a naive tag recount (GENE1=2, GENE2=1), and
+position-independence (two records, same CB/UMI/XT, different POS -> one molecule). Full suite
+40/40. On the 1M-read MHC GAMP: `map.rad` byte-identical to the pre-BAM baseline (sha
+`7df66891...`), BAM `quickcheck` passes with 39,103 records over 317 gene contigs, and the full
+`samtools sort`/`index` + `umi_tools count` pipeline yields 30,105 molecules across 9,701 cells x
+203 genes (2,755 multi-gene reads correctly skipped for lacking `XT`).
+
+**Rationale:** Counting off panCollapse keeps reads that never surject to GRCh38 (non-reference
+alleles/insertions) that a genome-surject + featureCounts path would drop, because gene
+assignment is graph-native. Per the scope rule a new output backend returned to a design gate;
+the design was approved before implementation. This does not change any settled RAD behavior.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

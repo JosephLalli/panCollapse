@@ -24,6 +24,14 @@ find_program(PANCOLLAPSE_ALEVIN_FRY alevin-fry HINTS "/mnt/ssd/lalli/usr/local/b
 if(NOT PANCOLLAPSE_ALEVIN_FRY)
   message(FATAL_ERROR "alevin-fry executable not found; set -DPANCOLLAPSE_ALEVIN_FRY=/path/to/alevin-fry")
 endif()
+find_program(PANCOLLAPSE_SAMTOOLS samtools DOC "samtools executable for the BAM output tests")
+if(NOT PANCOLLAPSE_SAMTOOLS)
+  message(FATAL_ERROR "samtools executable not found; set -DPANCOLLAPSE_SAMTOOLS=/path/to/samtools")
+endif()
+find_program(PANCOLLAPSE_UMI_TOOLS umi_tools DOC "umi_tools executable for the BAM counting test")
+if(NOT PANCOLLAPSE_UMI_TOOLS)
+  message(FATAL_ERROR "umi_tools executable not found; set -DPANCOLLAPSE_UMI_TOOLS=/path/to/umi_tools")
+endif()
 set(PT_SMOKE_DIR "${CMAKE_CURRENT_BINARY_DIR}/pathtally_smoke_work")
 set(PT_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pathtally_smoke")
 set(PT_VG "${PANCOLLAPSE_VG_ROOT}/bin/vg")
@@ -62,6 +70,84 @@ add_test(NAME pathtally_smoke_oracle
     "${PT_SMOKE_DIR}/out/map.rad" 3)
 set_tests_properties(pathtally_smoke_oracle PROPERTIES LABELS "vg;pathtally"
   FIXTURES_REQUIRED "pathtally_smoke_out;pathtally_smoke_inputs")
+
+# Optional BAM output. Same convert pass emits reads.bam alongside map.rad; the RAD must be
+# byte-identical to the no-BAM smoke run, the BAM must be valid, and every record's tags and
+# GX gene set must match the independent oracle.
+add_test(NAME pathtally_bam_convert
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
+    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/out_bam"
+    --bam-out "${PT_SMOKE_DIR}/out_bam/reads.bam")
+set_tests_properties(pathtally_bam_convert PROPERTIES LABELS "vg;pathtally;bam"
+  FIXTURES_REQUIRED pathtally_smoke_inputs FIXTURES_SETUP pathtally_bam_out)
+
+add_test(NAME pathtally_bam_quickcheck
+  COMMAND "${PANCOLLAPSE_SAMTOOLS}" quickcheck "${PT_SMOKE_DIR}/out_bam/reads.bam")
+set_tests_properties(pathtally_bam_quickcheck PROPERTIES LABELS "vg;pathtally;bam"
+  FIXTURES_REQUIRED pathtally_bam_out)
+
+add_test(NAME pathtally_bam_header
+  COMMAND /bin/sh -c "'${PANCOLLAPSE_SAMTOOLS}' view -H '${PT_SMOKE_DIR}/out_bam/reads.bam' > '${PT_SMOKE_DIR}/bam_header.txt' \
+    && grep -q '^@HD.*SO:unsorted' '${PT_SMOKE_DIR}/bam_header.txt' \
+    && grep -q '^@SQ.*SN:GENE1' '${PT_SMOKE_DIR}/bam_header.txt' \
+    && grep -q '^@SQ.*SN:GENE2' '${PT_SMOKE_DIR}/bam_header.txt' \
+    && grep -q '^@PG.*ID:panCollapse' '${PT_SMOKE_DIR}/bam_header.txt'")
+set_tests_properties(pathtally_bam_header PROPERTIES LABELS "vg;pathtally;bam"
+  FIXTURES_REQUIRED pathtally_bam_out)
+
+# RAD regression: the map.rad written with --bam-out must equal the no-BAM smoke run's.
+add_test(NAME pathtally_bam_rad_identical
+  COMMAND ${CMAKE_COMMAND} -E compare_files "${PT_SMOKE_DIR}/out_bam/map.rad" "${PT_SMOKE_DIR}/out/map.rad")
+set_tests_properties(pathtally_bam_rad_identical PROPERTIES LABELS "vg;pathtally;bam"
+  FIXTURES_REQUIRED "pathtally_bam_out;pathtally_smoke_out")
+
+add_test(NAME pathtally_bam_parity
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/pathtally_bam_verify.py"
+    "${PT_SMOKE_DIR}/out_bam/reads.bam" "${PT_FIX}/reads.gamp.json" "${PT_SMOKE_DIR}/paths.gfa"
+    "${PT_FIX}/t2g.tsv" 3 omit)
+set_tests_properties(pathtally_bam_parity PROPERTIES LABELS "vg;pathtally;bam"
+  FIXTURES_REQUIRED "pathtally_bam_out;pathtally_smoke_inputs")
+
+# umi_tools counting: convert the multi-UMI af fixture to BAM, sort + index, and count per
+# gene per cell. bam_count_verify recomputes the counts from the BAM tags independently, so
+# it confirms umi_tools reads the panCollapse tags correctly (expected GENE1=2, GENE2=1).
+add_test(NAME pathtally_bam_count_convert
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${PT_SMOKE_DIR}/reads_af.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
+    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/bam_count"
+    --bam-out "${PT_SMOKE_DIR}/bam_count/reads.bam")
+set_tests_properties(pathtally_bam_count_convert PROPERTIES LABELS "vg;pathtally;bam"
+  FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_af_inputs" FIXTURES_SETUP pathtally_bam_count_bam)
+
+add_test(NAME pathtally_bam_count_run
+  COMMAND /bin/sh -c "'${PANCOLLAPSE_SAMTOOLS}' sort -o '${PT_SMOKE_DIR}/bam_count/reads.sorted.bam' '${PT_SMOKE_DIR}/bam_count/reads.bam' \
+    && '${PANCOLLAPSE_SAMTOOLS}' index '${PT_SMOKE_DIR}/bam_count/reads.sorted.bam' \
+    && '${PANCOLLAPSE_UMI_TOOLS}' count --per-gene --gene-tag=XT --per-cell --extract-umi-method=tag --umi-tag=UB --cell-tag=CB --method=unique -I '${PT_SMOKE_DIR}/bam_count/reads.sorted.bam' -S '${PT_SMOKE_DIR}/bam_count/counts.tsv'")
+set_tests_properties(pathtally_bam_count_run PROPERTIES LABELS "vg;pathtally;bam"
+  FIXTURES_REQUIRED pathtally_bam_count_bam FIXTURES_SETUP pathtally_bam_count_tsv)
+
+add_test(NAME pathtally_bam_count_verify
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/bam_count_verify.py"
+    "${PT_SMOKE_DIR}/bam_count/reads.sorted.bam" "${PT_SMOKE_DIR}/bam_count/counts.tsv")
+set_tests_properties(pathtally_bam_count_verify PROPERTIES LABELS "vg;pathtally;bam"
+  FIXTURES_REQUIRED pathtally_bam_count_tsv)
+
+# Position independence: two records with identical CB/UMI/XT at different positions must
+# count as one molecule. bam_count_verify recomputes ignoring position (naive = 1); umi_tools
+# must agree, which it can only do by grouping on the gene tag rather than coordinate.
+add_test(NAME pathtally_bam_posindep
+  COMMAND /bin/sh -c "'${PANCOLLAPSE_SAMTOOLS}' sort -o '${PT_SMOKE_DIR}/posindep.sorted.bam' '${PT_FIX}/position_independence.sam' \
+    && '${PANCOLLAPSE_SAMTOOLS}' index '${PT_SMOKE_DIR}/posindep.sorted.bam' \
+    && '${PANCOLLAPSE_UMI_TOOLS}' count --per-gene --gene-tag=XT --per-cell --extract-umi-method=tag --umi-tag=UB --cell-tag=CB --method=unique -I '${PT_SMOKE_DIR}/posindep.sorted.bam' -S '${PT_SMOKE_DIR}/posindep.counts.tsv'")
+set_tests_properties(pathtally_bam_posindep PROPERTIES LABELS "vg;pathtally;bam"
+  FIXTURES_REQUIRED pathtally_smoke_dir FIXTURES_SETUP pathtally_bam_posindep_tsv)
+
+add_test(NAME pathtally_bam_posindep_verify
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/bam_count_verify.py"
+    "${PT_SMOKE_DIR}/posindep.sorted.bam" "${PT_SMOKE_DIR}/posindep.counts.tsv")
+set_tests_properties(pathtally_bam_posindep_verify PROPERTIES LABELS "vg;pathtally;bam"
+  FIXTURES_REQUIRED pathtally_bam_posindep_tsv)
 
 # Multi-chunk path: force one chunk per record and confirm the oracle reads all
 # chunks and still matches exactly.

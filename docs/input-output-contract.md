@@ -91,6 +91,15 @@ alevin-fry expected-orientation filtering.
   recording how many emitted groups had each distinct number of compatible targets;
 - version/build information and input identities/checksums where practical.
 
+### Optional BAM (`--bam-out`)
+
+An opt-in BAM for a CellRanger-style counting stack (`umi_tools count --per-gene --gene-tag=XT`,
+then DropletUtils `emptyDropsCellRanger`). It does not change the RAD: `map.rad` is byte-identical
+with or without `--bam-out`. One mapped record per emitted read carries 10x tags
+(`CB`/`CR`, `UB`/`UR`, full-set `GX`, `GN`, and single-gene-or-omitted `XT`) at a nominal position
+on a synthetic per-gene contig; positions are ignored by the counter and genes come from the t2g,
+not a linear reference. Full contract in [`bam-export.md`](bam-export.md).
+
 ## Exit behavior
 
 Hard failure is expected for:
