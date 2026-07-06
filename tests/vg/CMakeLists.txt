@@ -32,6 +32,18 @@ find_program(PANCOLLAPSE_UMI_TOOLS umi_tools DOC "umi_tools executable for the B
 if(NOT PANCOLLAPSE_UMI_TOOLS)
   message(FATAL_ERROR "umi_tools executable not found; set -DPANCOLLAPSE_UMI_TOOLS=/path/to/umi_tools")
 endif()
+# The BAM tag/count checkers read the BAM with pysam. The interpreter find_package(Python3)
+# selects is not necessarily the one that has pysam (and umi_tools), so verify it up front and
+# fail with an actionable message rather than at test time.
+execute_process(
+  COMMAND "${Python3_EXECUTABLE}" -c "import pysam"
+  RESULT_VARIABLE PANCOLLAPSE_PYSAM_RC OUTPUT_QUIET ERROR_QUIET)
+if(NOT PANCOLLAPSE_PYSAM_RC EQUAL 0)
+  message(FATAL_ERROR
+    "The BAM tests need the 'pysam' module, but '${Python3_EXECUTABLE}' cannot import it. "
+    "Install pysam for that interpreter, or pass "
+    "-DPython3_EXECUTABLE=/path/to/python-with-pysam (the same interpreter umi_tools uses).")
+endif()
 set(PT_SMOKE_DIR "${CMAKE_CURRENT_BINARY_DIR}/pathtally_smoke_work")
 set(PT_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pathtally_smoke")
 set(PT_VG "${PANCOLLAPSE_VG_ROOT}/bin/vg")
