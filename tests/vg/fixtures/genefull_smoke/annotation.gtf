@@ -1,0 +1,4 @@
+chr1	panCollapse	gene	1	30	.	+	.	gene_id "GENE1";
+chr1	panCollapse	transcript	1	30	.	+	.	gene_id "GENE1"; transcript_id "NM_1.1";
+chr1	panCollapse	exon	1	10	.	+	.	gene_id "GENE1"; transcript_id "NM_1.1";
+chr1	panCollapse	exon	21	30	.	+	.	gene_id "GENE1"; transcript_id "NM_1.1";

@@ -350,3 +350,13 @@ add_test(NAME genefull_full_calls_intron
     && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/full/reads.bam' | grep intronread | grep -q 'GX:Z:GENE1'")
 set_tests_properties(genefull_full_calls_intron PROPERTIES LABELS "vg;pathtally;genefull;bam"
   FIXTURES_REQUIRED genefull_inputs)
+
+# The gene-loci map is generated from a GTF + the graph by scripts/make-gene-loci.sh (projecting
+# each gene's full span as one unspliced vg rna gene-body path). Confirm it reproduces the
+# hand-authored loci for this fixture (nodes 1,2,3 -> GENE1, including intron node 2).
+add_test(NAME genefull_loci_from_gtf
+  COMMAND /bin/sh -c "'${CMAKE_SOURCE_DIR}/scripts/make-gene-loci.sh' \
+    -x '${GF_DIR}/graph.xg' -n '${GF_FIX}/annotation.gtf' -o '${GF_DIR}/gene_loci.gen.tsv' --vg '${PT_VG}' \
+    && cmp '${GF_DIR}/gene_loci.gen.tsv' '${GF_FIX}/gene_loci.tsv'")
+set_tests_properties(genefull_loci_from_gtf PROPERTIES LABELS "vg;pathtally;genefull"
+  FIXTURES_REQUIRED genefull_inputs)

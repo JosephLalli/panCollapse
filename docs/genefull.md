@@ -31,11 +31,30 @@ node_id <TAB> gene_id [<TAB> strand(+/-)]
 
 A node may appear on several rows (overlapping gene loci). `strand` (default `+`) is the gene's
 orientation across that node and feeds the same forward/reverse accounting the HST path
-direction does. This map is built **once at fixture/index time** from the GTF gene spans and the
-graph — panCollapse consumes the map, not the GTF (consistent with D048: no runtime GTF). It
-must cover intron nodes as well as exon nodes for a gene, and, in a pangenome, the non-reference
-(alt) nodes within each gene body, so that reads on non-reference alleles are kept — the whole
-point of counting off the graph rather than a genome surjection.
+direction does. The map is built **once at index time** from the GTF gene spans and the graph —
+panCollapse consumes the map, not the GTF (consistent with D048: no runtime GTF).
+
+### Generating the map
+
+Use `scripts/make-gene-loci.sh`:
+
+```sh
+scripts/make-gene-loci.sh -x graph.xg -n annotation.gtf -o gene_loci.tsv \
+  [-l haplotypes.gbwt]
+```
+
+It works by the same mechanism that built the HST paths, run one level up: it projects each GTF
+**gene** span as a single unspliced `vg rna` path (`--feature-type gene`, grouped by `gene_id`).
+Because a gene is one feature, there are no exon junctions to splice, so the path is contiguous
+over the whole locus — it covers **intron** nodes, not just exons. The script then reads
+`node -> gene` off those gene-body paths (selecting only the paths `vg rna` newly adds, so
+pre-existing HST transcript paths are not mistaken for gene bodies) and records each step's
+orientation as the strand.
+
+Pass the haplotype GBWT the graph was built with (`-l`) so the gene-body paths are threaded
+through the pangenome haplotypes and cover the **non-reference (alt)** nodes inside each gene
+body. Without it only reference nodes are covered, and reads on alt alleles — the ones counting
+off the graph is meant to keep — are missed. So for a real pangenome run, always pass `-l`.
 
 ```
 panCollapse convert --gamp reads.gamp --xg graph.xg \

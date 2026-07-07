@@ -14,8 +14,11 @@ All notable changes to panCollapse are recorded here. Versions follow the projec
   from the graph, full reads a node -> gene-locus map. Genes are the RAD targets in full mode
   (identity `tx2gene`). See [`docs/genefull.md`](docs/genefull.md). (D055)
 - `--gene-loci loci.tsv` — for full mode: a `node_id<TAB>gene[<TAB>strand]` map of each gene's
-  full locus (exon + intron nodes, plus non-reference nodes in a pangenome), built at fixture
+  full locus (exon + intron nodes, plus non-reference nodes in a pangenome), built at index
   time from the GTF spans and the graph. panCollapse consumes the map, not the GTF.
+- `scripts/make-gene-loci.sh` — generates the `--gene-loci` map from a graph + GTF by projecting
+  each gene span as one unspliced `vg rna` gene-body path (`--feature-type gene`); pass the
+  haplotype GBWT (`-l`) to cover non-reference (alt) nodes.
 
 ### Notes
 
