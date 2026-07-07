@@ -969,6 +969,39 @@ alleles/insertions) that a genome-surject + featureCounts path would drop, becau
 assignment is graph-native. Per the scope rule a new output backend returned to a design gate;
 the design was approved before implementation. This does not change any settled RAD behavior.
 
+### D055 — GeneFull gene-calling mode (`--gene-mode full`)
+
+**Decision source:** User (directed after a counter-comparison analysis showed the STAR arm was
+run with STARsolo `--soloFeatures GeneFull` while panCollapse is spliced-only, an exon-vs-body
+confound worth an estimated ~6-7% of signal on MHC GEX).
+
+**Decision:** Add an opt-in `--gene-mode {spliced,full}` (default `spliced`). Full mode implements
+GeneFull: a read calls a gene if it overlaps the gene body (exon or intron), keeping the
+purely-intronic reads spliced mode drops. It reuses the whole scoring/select/RAD/BAM pipeline and
+changes only the injected per-node lookup -- spliced reads HST paths from the graph; full reads a
+node -> gene-locus map from a new `--gene-loci` input (`node_id<TAB>gene[<TAB>strand]`, a node may
+repeat for overlapping loci). In full mode genes are the RAD targets directly (identity tx2gene).
+The loci map is built at fixture/index time from the GTF gene spans and the graph; panCollapse
+consumes the map, not the GTF (consistent with D048). Spliced mode is unchanged and byte-identical.
+
+**Semantics (verified on fixtures):** GeneFull's only marginal call over spliced is the
+purely-intronic read; any read touching an exon node is already called in spliced mode via that
+node's HST. Overlapping gene loci (introns overlap neighbors) resolve by the same
+top-score-plus-ties rule: a read entirely in a shared region is multi-gene; a read dominant in one
+gene is called to that gene (a score-weighted resolution of proportional overlap, slightly more
+permissive than a strict any-overlap rule). Gene mode does not require genes to avoid introns; it
+never counts intronic membership, so the ambiguity does not arise.
+
+**Verification:** hermetic `genefull` CTests on a gene with exon nodes 1,3 (HST `1+,3+`) and
+intron node 2 (on no HST): the intronic read is dropped in spliced (`no_compatible=1`) and called
+to its gene in full (`emitted=2`), with the BAM carrying it. Full suite 45/45; spliced-mode
+regression byte-identical. Version bumped to 0.4.0.
+
+**Rationale:** panCollapse being spliced-only was a genuine capability gap versus modern
+CellRanger/STARsolo (include-introns by default), not only a benchmark confound. Full mode closes
+it via the existing lookup seam without disturbing settled spliced behavior; a new opt-in mode
+plus a small annotation input, gated behind the flag.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

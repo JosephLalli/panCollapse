@@ -41,6 +41,13 @@ enum class MoleculeIdentityFailurePolicy { Skip, Fail };
 
 enum class ScoreMode { Flat, QualAdj };
 
+// Gene-calling rule. Spliced (default) attributes each aligned node to the spliced HST
+// transcript paths crossing it (a read must lie on a transcript's exon structure). Full
+// (GeneFull) attributes each node to the gene loci covering it -- exon AND intron -- so an
+// intronic read still calls its gene, matching STARsolo/CellRanger GeneFull. Full replaces
+// the graph HST lookup with a node -> gene-locus map supplied by --gene-loci.
+enum class GeneMode { Spliced, Full };
+
 // XT-tag policy for reads compatible with more than one gene. Omit skips XT (a --per-gene
 // counter then ignores the read); First writes XT for the first gene in sorted order.
 enum class BamMultiGenePolicy { Omit, First };
@@ -56,6 +63,8 @@ struct Options {
     size_t raw_umi_length = 12;
     MoleculeIdentityFailurePolicy molecule_identity_failures = MoleculeIdentityFailurePolicy::Skip;
     ScoreMode score_mode = ScoreMode::Flat;
+    GeneMode gene_mode = GeneMode::Spliced;
+    std::filesystem::path gene_loci;  // required for --gene-mode full; node -> gene-locus map
     std::filesystem::path bam_out;  // empty => no BAM output
     BamMultiGenePolicy bam_multigene = BamMultiGenePolicy::Omit;
 };
@@ -97,10 +106,11 @@ struct T2gData {
 };
 
 constexpr const char* kUsageText =
-    "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv "
+    "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg "
+    "(--t2g t2g.tsv | --gene-mode full --gene-loci loci.tsv) "
     "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
     "[--score flat|qualadj] [--molecule-identity-failures skip|fail] "
-    "[--bam-out reads.bam] [--bam-multigene omit|first]";
+    "[--gene-mode spliced|full] [--bam-out reads.bam] [--bam-multigene omit|first]";
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(kUsageText);
@@ -169,6 +179,17 @@ Options parse_options(int argc, char** argv) {
             } else {
                 usage_error();
             }
+        } else if (arg == "--gene-mode") {
+            const std::string value = require_value("--gene-mode");
+            if (value == "spliced") {
+                options.gene_mode = GeneMode::Spliced;
+            } else if (value == "full") {
+                options.gene_mode = GeneMode::Full;
+            } else {
+                usage_error();
+            }
+        } else if (arg == "--gene-loci") {
+            options.gene_loci = require_value("--gene-loci");
         } else if (arg == "--bam-out") {
             options.bam_out = require_value("--bam-out");
         } else if (arg == "--bam-multigene") {
@@ -185,8 +206,22 @@ Options parse_options(int argc, char** argv) {
         }
     }
 
-    if (options.gamp.empty() || options.xg.empty() || options.t2g.empty() || options.out_dir.empty()) {
+    if (options.gamp.empty() || options.xg.empty() || options.out_dir.empty()) {
         usage_error();
+    }
+    // Gene-calling source: spliced mode reads the HST t2g; full (GeneFull) mode reads the
+    // node -> gene-locus map instead and does not use a t2g.
+    if (options.gene_mode == GeneMode::Full) {
+        if (options.gene_loci.empty()) {
+            throw std::runtime_error("--gene-mode full requires --gene-loci");
+        }
+    } else {
+        if (options.t2g.empty()) {
+            usage_error();
+        }
+        if (!options.gene_loci.empty()) {
+            throw std::runtime_error("--gene-loci is only used with --gene-mode full");
+        }
     }
     if (options.raw_cb_length == 0 || options.raw_cb_length > 32 || options.raw_umi_length == 0 ||
         options.raw_umi_length > 32) {
@@ -252,6 +287,70 @@ T2gData read_t2g(const std::filesystem::path& filename) {
         data.gene_names.push_back(gene);
     }
     return data;
+}
+
+// GeneFull gene loci: node id -> list of (gene target index, gene_is_reverse). The index
+// keys into the gene dictionary built alongside in `data`.
+using GeneLoci = std::unordered_map<int64_t, std::vector<std::pair<uint32_t, bool>>>;
+
+// Read the node -> gene-locus map for --gene-mode full. Rows are
+//   node_id <TAB> gene_id [<TAB> strand(+/-)]
+// A node may appear on several rows (overlapping gene loci, exon or intron). strand is the
+// gene's orientation across that node (default +) and feeds the same forward/reverse
+// accounting the spliced HST path direction does. Genes are the RAD targets in full mode, so
+// `data` gets a gene dictionary with an identity tx2gene (gene -> gene). This map is built at
+// fixture time from the GTF gene spans and the graph; panCollapse consumes it, not the GTF.
+GeneLoci read_gene_loci(const std::filesystem::path& filename, T2gData& data) {
+    std::ifstream in(filename);
+    if (!in) {
+        throw std::runtime_error("cannot open gene loci");
+    }
+    struct Row {
+        int64_t node;
+        std::string gene;
+        bool reverse;
+    };
+    std::vector<Row> rows;
+    std::set<std::string> genes;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line.front() == '#') {
+            continue;
+        }
+        const auto fields = split_tab(line);
+        if (fields.size() < 2 || fields[0].empty() || fields[1].empty()) {
+            throw std::runtime_error("gene loci row must have node and gene columns");
+        }
+        const int64_t node = static_cast<int64_t>(parse_size_option("gene loci node id", fields[0]));
+        bool reverse = false;
+        if (fields.size() >= 3 && !fields[2].empty()) {
+            if (fields[2] == "-") {
+                reverse = true;
+            } else if (fields[2] != "+") {
+                throw std::runtime_error("gene loci strand must be + or -");
+            }
+        }
+        rows.push_back({node, fields[1], reverse});
+        genes.insert(fields[1]);
+    }
+    if (genes.empty()) {
+        throw std::runtime_error("gene loci has no data rows");
+    }
+    if (genes.size() > kRadTargetIdMask) {
+        throw std::runtime_error("gene dictionary exceeds 31-bit target IDs");
+    }
+    for (const std::string& gene : genes) {
+        data.target_ids[gene] = static_cast<uint32_t>(data.target_names.size());
+        data.target_names.push_back(gene);
+        data.transcript_gene[gene] = gene;
+        data.gene_ids[gene] = static_cast<int32_t>(data.gene_names.size());
+        data.gene_names.push_back(gene);
+    }
+    GeneLoci loci;
+    for (const Row& row : rows) {
+        loci[row.node].emplace_back(data.target_ids.at(row.gene), row.reverse);
+    }
+    return loci;
 }
 
 bool is_supported_molecule_base(char base) {
@@ -701,7 +800,15 @@ struct Group {
 
 int run_convert(int argc, char** argv) {
     const Options options = parse_options(argc, argv);
-    const T2gData t2g = read_t2g(options.t2g);
+    // Gene-calling source. Spliced (default) reads the HST t2g; full (GeneFull) reads the
+    // node -> gene-locus map instead, and genes become the RAD targets (identity tx2gene).
+    T2gData t2g;
+    GeneLoci gene_loci;
+    if (options.gene_mode == GeneMode::Full) {
+        gene_loci = read_gene_loci(options.gene_loci, t2g);
+    } else {
+        t2g = read_t2g(options.t2g);
+    }
 
     xg::XG graph;
     std::ifstream xg_in(options.xg, std::ios::binary);
@@ -710,57 +817,69 @@ int run_convert(int argc, char** argv) {
     }
     graph.deserialize(xg_in);
 
-    // Precompute the HST paths (those named in the t2g) as a path-handle -> name map,
-    // so the per-node lookup avoids building a path-name string and hashing it for every
-    // step. Reference backbones and shared exon nodes carry many steps, so this per-step
-    // string work dominated the run; the precomputed integer-keyed map removes it.
+    // The per-node lookup: which features cross a node, and in which orientation. Spliced mode
+    // reads HST paths from the graph; full mode reads gene loci (exon and intron) from the map.
+    // Both validate the node-id space; the tally/select pipeline downstream is identical.
     std::unordered_map<uint64_t, std::string> hst_path_name;
-    graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
-        std::string name = graph.get_path_name(path);
-        if (t2g.hst_names.find(name) != t2g.hst_names.end()) {
-            hst_path_name.emplace(handlegraph::as_integer(path), std::move(name));
-        }
-    });
-
-    // Per-node HST-step cache. Scanning a node's path steps (for_each_step_on_handle)
-    // is the dominant runtime cost, and a run revisits the same nodes many times: every
-    // read that aligns through a shared exon or backbone node repeats the full step scan.
-    // Cache each distinct node's HST crossings on first lookup and replay the cached
-    // vector afterward, so each node is scanned at most once. Entries store pointers into
-    // hst_path_name, whose values are inserted once above and never modified afterward, so
-    // the addresses stay valid. Output is byte-identical: the tally accumulates per path
-    // name and is order-independent, and one entry is stored per step (a path visiting a
-    // node twice still contributes twice). Memory is O(HST steps on the nodes the GAMP
-    // actually touches) -- the working set, not the whole graph.
     std::unordered_map<int64_t, std::vector<std::pair<const std::string*, bool>>> node_hst_cache;
-
-    // Injected HST lookup: emit each HST path crossing a node, with its orientation there.
-    pathtally::PathLookup lookup = [&](int64_t node_id,
-                                       const std::function<void(const std::string&, bool)>& emit) {
-        auto cached = node_hst_cache.find(node_id);
-        if (cached == node_hst_cache.end()) {
+    pathtally::PathLookup lookup;
+    if (options.gene_mode == GeneMode::Full) {
+        // GeneFull: attribute each aligned node to the gene loci covering it. An intronic node
+        // is in its gene's locus, so intronic reads call their gene; overlapping loci emit
+        // multiple genes (handled as multi-gene downstream).
+        lookup = [&](int64_t node_id, const std::function<void(const std::string&, bool)>& emit) {
             if (!graph.has_node(node_id)) {
                 throw std::runtime_error(
                     "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
                     " is absent from the graph; the GAMP was likely aligned to a different graph");
             }
-            std::vector<std::pair<const std::string*, bool>> entries;
-            const handlegraph::handle_t handle = graph.get_handle(node_id, false);
-            graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
-                const auto it =
-                    hst_path_name.find(handlegraph::as_integer(graph.get_path_handle_of_step(step)));
-                if (it != hst_path_name.end()) {
-                    entries.emplace_back(&it->second,
-                                         graph.get_is_reverse(graph.get_handle_of_step(step)));
+            const auto it = gene_loci.find(node_id);
+            if (it == gene_loci.end()) {
+                return;
+            }
+            for (const auto& [gene_idx, gene_is_reverse] : it->second) {
+                emit(t2g.target_names[gene_idx], gene_is_reverse);
+            }
+        };
+    } else {
+        // Precompute the HST paths (those named in the t2g) as a path-handle -> name map, so the
+        // per-node lookup avoids building a path-name string and hashing it for every step.
+        graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+            std::string name = graph.get_path_name(path);
+            if (t2g.hst_names.find(name) != t2g.hst_names.end()) {
+                hst_path_name.emplace(handlegraph::as_integer(path), std::move(name));
+            }
+        });
+        // Per-node HST-step cache: scan each distinct node's path steps at most once, then
+        // replay. Entries point into hst_path_name (stable after the build above). Output is
+        // byte-identical: the tally accumulates per name and is order-independent, and one entry
+        // is stored per step (a path visiting a node twice still contributes twice).
+        lookup = [&](int64_t node_id, const std::function<void(const std::string&, bool)>& emit) {
+            auto cached = node_hst_cache.find(node_id);
+            if (cached == node_hst_cache.end()) {
+                if (!graph.has_node(node_id)) {
+                    throw std::runtime_error(
+                        "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
+                        " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
-                return true;
-            });
-            cached = node_hst_cache.emplace(node_id, std::move(entries)).first;
-        }
-        for (const auto& [name_ptr, path_is_reverse] : cached->second) {
-            emit(*name_ptr, path_is_reverse);
-        }
-    };
+                std::vector<std::pair<const std::string*, bool>> entries;
+                const handlegraph::handle_t handle = graph.get_handle(node_id, false);
+                graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
+                    const auto it =
+                        hst_path_name.find(handlegraph::as_integer(graph.get_path_handle_of_step(step)));
+                    if (it != hst_path_name.end()) {
+                        entries.emplace_back(&it->second,
+                                             graph.get_is_reverse(graph.get_handle_of_step(step)));
+                    }
+                    return true;
+                });
+                cached = node_hst_cache.emplace(node_id, std::move(entries)).first;
+            }
+            for (const auto& [name_ptr, path_is_reverse] : cached->second) {
+                emit(*name_ptr, path_is_reverse);
+            }
+        };
+    }
 
     std::shared_ptr<pathtally::QualAdjScorer> qual_adj_scorer;
     pathtally::NodeScorer node_scorer = pathtally::flat_scorer();

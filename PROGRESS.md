@@ -606,6 +606,18 @@ projection, or a custom index.
   Documented in `docs/bam-export.md`, README, and `docs/input-output-contract.md`. umi_tools
   1.1.6 installed to `~/.local`; the BAM tests need a python with pysam (the pysam+umi_tools
   interpreter is `python@3.11`, passed via `-DPython3_EXECUTABLE`).
+- 2026-07-07: Added GeneFull gene-calling (`--gene-mode full`, D055) so intronic reads call their
+  gene, closing the exon-only gap vs STARsolo `--soloFeatures GeneFull` (surfaced while explaining
+  a counter comparison: the STAR-CR arm counted introns via GeneFull; panCollapse is spliced-only,
+  an ~6-7% MHC GEX confound). Implemented by swapping only the injected per-node lookup: spliced
+  reads HST paths, full reads a `--gene-loci` node -> gene map (exon+intron nodes). Genes are the
+  RAD targets in full mode (identity tx2gene); the rest of the pipeline is unchanged. Hermetic
+  `genefull` CTests (exon nodes 1,3 on HST `1+,3+`, intron node 2 on no HST): intronic read dropped
+  in spliced, called in full. Verified edge cases: exon-intron boundary and multi-exon+spanned-
+  intron reads are called in both modes (the exon node is on the HST), so GeneFull's only marginal
+  call is the purely-intronic read; overlapping loci give multi-gene on full overlap and the
+  dominant gene on partial overlap. Full suite 45/45; spliced regression byte-identical. Version
+  0.4.0. Docs in `docs/genefull.md` + README.
 - 2026-07-05: Profiled the `-O2` binary (callgrind, 1M-read MHC) and acted on it (D053). The
   scorer is ~1%; the run is dominated by GAMP ingestion (~60%) and the per-group tally (~34%),
   with malloc/free (~27%) and string-compare memcmp (~13%) the top categories. Multithreading

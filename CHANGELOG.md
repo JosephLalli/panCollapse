@@ -3,6 +3,27 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.4.0]
+
+### Added
+
+- **GeneFull gene-calling (`--gene-mode full`)** — a read calls a gene if it overlaps the gene
+  body (exon **or** intron), matching STARsolo/CellRanger include-introns, keeping the
+  purely-intronic reads the default spliced/exonic mode drops. It reuses the whole
+  scoring/select/RAD/BAM pipeline and swaps only the per-node lookup: spliced reads HST paths
+  from the graph, full reads a node -> gene-locus map. Genes are the RAD targets in full mode
+  (identity `tx2gene`). See [`docs/genefull.md`](docs/genefull.md). (D055)
+- `--gene-loci loci.tsv` — for full mode: a `node_id<TAB>gene[<TAB>strand]` map of each gene's
+  full locus (exon + intron nodes, plus non-reference nodes in a pangenome), built at fixture
+  time from the GTF spans and the graph. panCollapse consumes the map, not the GTF.
+
+### Notes
+
+- The default (`--gene-mode spliced`) is unchanged and byte-identical to v0.3. GeneFull's only
+  marginal call over spliced is the purely-intronic read: any read touching an exon is already
+  called in spliced mode. Overlapping gene loci resolve by the same top-score-plus-ties rule
+  (entirely-shared -> multi-gene; dominant -> that gene).
+
 ## [0.3.0]
 
 ### Added

@@ -305,3 +305,48 @@ add_test(NAME pathtally_badnode_fail
 set_tests_properties(pathtally_badnode_fail PROPERTIES LABELS "vg;pathtally;node-space"
   WILL_FAIL TRUE
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_badnode_inputs")
+
+# GeneFull gene-calling: an intronic read (on no HST) is dropped in spliced mode but called
+# to its gene in --gene-mode full via the node -> gene-locus map. The fixture's gene GENE1 has
+# exon nodes 1,3 (spliced HST NM_1.1_H1 = 1+,3+) and intron node 2 (on no HST). exonread hits
+# nodes 1,3; intronread hits node 2 only.
+set(GF_DIR "${CMAKE_CURRENT_BINARY_DIR}/genefull_work")
+set(GF_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/genefull_smoke")
+
+add_test(NAME genefull_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${GF_DIR}")
+set_tests_properties(genefull_setup PROPERTIES LABELS "vg;pathtally;genefull"
+  FIXTURES_SETUP genefull_dir)
+
+add_test(NAME genefull_xg
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> convert -g '${GF_FIX}/graph.gfa' -x > '${GF_DIR}/graph.xg'")
+set_tests_properties(genefull_xg PROPERTIES LABELS "vg;pathtally;genefull"
+  FIXTURES_REQUIRED genefull_dir FIXTURES_SETUP genefull_inputs)
+
+add_test(NAME genefull_gamp
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${GF_FIX}/reads.gamp.json' > '${GF_DIR}/reads.gamp'")
+set_tests_properties(genefull_gamp PROPERTIES LABELS "vg;pathtally;genefull"
+  FIXTURES_REQUIRED genefull_dir FIXTURES_SETUP genefull_inputs)
+
+# Spliced mode: the intronic read is dropped (1 emitted, 1 no-compatible).
+add_test(NAME genefull_spliced_drops_intron
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/graph.xg' --t2g '${GF_FIX}/t2g.tsv' \
+    --out-dir '${GF_DIR}/spliced' \
+    && grep -qP '^emitted_groups\\t1$' '${GF_DIR}/spliced/summary.tsv' \
+    && grep -qP '^no_compatible_transcript_groups\\t1$' '${GF_DIR}/spliced/summary.tsv'")
+set_tests_properties(genefull_spliced_drops_intron PROPERTIES LABELS "vg;pathtally;genefull"
+  FIXTURES_REQUIRED genefull_inputs)
+
+# Full mode: the intronic read is called to its gene (2 emitted, 0 no-compatible), and the BAM
+# carries it as GENE1. Also checks the BAM is valid.
+add_test(NAME genefull_full_calls_intron
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/graph.xg' \
+    --gene-mode full --gene-loci '${GF_FIX}/gene_loci.tsv' \
+    --out-dir '${GF_DIR}/full' --bam-out '${GF_DIR}/full/reads.bam' \
+    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/full/summary.tsv' \
+    && grep -qP '^no_compatible_transcript_groups\\t0$' '${GF_DIR}/full/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' quickcheck '${GF_DIR}/full/reads.bam' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/full/reads.bam' | grep intronread | grep -q 'GX:Z:GENE1'")
+set_tests_properties(genefull_full_calls_intron PROPERTIES LABELS "vg;pathtally;genefull;bam"
+  FIXTURES_REQUIRED genefull_inputs)

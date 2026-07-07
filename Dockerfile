@@ -15,7 +15,7 @@
 FROM debian:bookworm-slim
 
 LABEL org.opencontainers.image.title="panCollapse" \
-      org.opencontainers.image.version="0.3.0" \
+      org.opencontainers.image.version="0.4.0" \
       org.opencontainers.image.description="Convert vg mpmap GAMP multipath alignments into alevin-fry RAD records (PathTally graph-native transcript-compatibility scoring)." \
       org.opencontainers.image.source="https://github.com/JosephLalli/panCollapse" \
       org.opencontainers.image.licenses="Apache-2.0"
