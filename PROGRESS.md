@@ -625,6 +625,14 @@ projection, or a custom index.
   the fixture graph and show the SAME graph drops the intron with the HST t2g and calls it with
   the gene t2g. Full suite 45/45; the converter is byte-identical to v0.3 (no binary change).
   Docs in `docs/genefull.md` + README.
+- 2026-07-07: Added an opt-in target-relative orientation filter `--strand {both,forward,reverse}`
+  (D056), applied after winner selection: `forward` keeps sense targets, `reverse` antisense,
+  `both` (default) filters nothing. Reads whose targets are all filtered emit no record and are
+  counted in a new `strand_filtered_groups` summary counter. This reintroduces (as opt-in) the
+  strand filtering D042 had pushed downstream, matching STARsolo `GeneFull_Ex50pAS`/`--soloStrand`;
+  the default `both` is byte-identical to before and still writes `dirs`. Hermetic `strand` CTests
+  on the smoke fixture (readfwd/readmulti forward, readrev reverse): `forward` emits 2
+  (`strand_filtered_groups=1`, no readrev), `reverse` emits 1 (`=2`). Full suite 47/47.
 - 2026-07-05: Profiled the `-O2` binary (callgrind, 1M-read MHC) and acted on it (D053). The
   scorer is ~1%; the run is dominated by GAMP ingestion (~60%) and the per-group tally (~34%),
   with malloc/free (~27%) and string-compare memcmp (~13%) the top categories. Multithreading

@@ -47,6 +47,7 @@ The converter is `build/src/panCollapse`.
 panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir out
                     [--raw-cb-length 16] [--raw-umi-length 12]
                     [--score flat|qualadj] [--molecule-identity-failures skip|fail]
+                    [--strand both|forward|reverse]
                     [--bam-out reads.bam] [--bam-multigene omit|first]
 ```
 
@@ -70,6 +71,11 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
   quality-adjusted mapping.
 - `--molecule-identity-failures skip|fail` — how to treat reads whose name has a missing,
   malformed, or wrong-length CB/UMI (default `skip`, counted in the summary).
+- `--strand both|forward|reverse` — target-relative orientation filter (default `both`, no
+  filtering). `forward` keeps only targets the read aligns to in the same (sense) orientation;
+  `reverse` keeps only antisense targets. Reads left with no matching target emit no record and
+  are counted in `strand_filtered_groups`. Orientation is the majority of aligned bases (the RAD
+  `dirs`). Use `forward` for a sense-stranded library to drop antisense artifacts.
 - `--bam-out <path>` — also write a BAM for a CellRanger-style counting stack (UMI-tools +
   DropletUtils `emptyDropsCellRanger`). Opt-in; the RAD is byte-identical with or without it.
   See [`docs/bam-export.md`](docs/bam-export.md).

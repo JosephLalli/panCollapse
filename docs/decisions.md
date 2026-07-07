@@ -1013,6 +1013,37 @@ already lives in the graph as paths, the same reason spliced mode needs no runti
 GeneFull a graph+t2g concern (not a flag) preserves the "annotation lives in the graph, no custom
 index" invariant and lets any feature layer be added as more paths, each selected by its own t2g.
 
+### D056 — Optional target-relative orientation filter (`--strand`)
+
+**Decision source:** User (directed after reviewing STARsolo's `GeneFull_Ex50pAS` antisense
+exclusion / `--soloStrand`: an orientation filter belongs at the gene-calling step).
+
+**Decision:** Add `--strand {both,forward,reverse}` (default `both`). After winner selection, keep
+only targets whose read orientation (majority of aligned bases -- the same value written to the
+RAD `dirs`) matches: `forward` keeps sense targets, `reverse` keeps antisense targets, `both`
+keeps all. A read whose compatible targets are all filtered out emits no RAD/BAM record and is
+counted in a new `strand_filtered_groups` summary counter (distinct from
+`no_compatible_transcript_groups`, which is for reads with no compatible target at all). The
+filter is per target, so a read that is sense for one gene and antisense for another keeps the
+matching target under a directional policy.
+
+**Supersedes:** D042 removed a `--strand sense|antisense|both` surface in favor of preserving
+orientation in the RAD `dirs` and leaving strand filtering to downstream (alevin-fry
+expected-orientation). D056 reintroduces panCollapse-side strand filtering **as an opt-in**: the
+default `both` preserves D042 exactly (output byte-identical, no filtering), and `dirs` is still
+written; `forward`/`reverse` add the filter for callers who want it applied at this step, e.g. a
+sense-stranded library dropping antisense reads before counting.
+
+**Verification:** hermetic `strand` CTests on the smoke fixture (readfwd/readmulti forward,
+readrev reverse): `--strand forward` emits 2 with `strand_filtered_groups=1` and no readrev in the
+BAM; `--strand reverse` emits 1 (readrev) with `strand_filtered_groups=2`. Full suite 47/47;
+`--strand both` output byte-identical to before.
+
+**Rationale:** STARsolo/CellRanger apply library strandedness at feature assignment; panCollapse
+had pushed it downstream (D042). Making it an opt-in at the gene-calling step matches the external
+tools and closes the `GeneFull_Ex50pAS`-style antisense gap, without changing the default
+(orientation-preserving) behavior.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

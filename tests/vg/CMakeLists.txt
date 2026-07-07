@@ -161,6 +161,28 @@ add_test(NAME pathtally_bam_posindep_verify
 set_tests_properties(pathtally_bam_posindep_verify PROPERTIES LABELS "vg;pathtally;bam"
   FIXTURES_REQUIRED pathtally_bam_posindep_tsv)
 
+# Orientation filter: in the smoke fixture readfwd/readmulti are forward, readrev is reverse.
+# --strand keeps only the matching orientation and counts the drops in strand_filtered_groups.
+add_test(NAME pathtally_strand_forward
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${PT_SMOKE_DIR}/reads.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' --t2g '${PT_FIX}/t2g.tsv' \
+    --strand forward --out-dir '${PT_SMOKE_DIR}/strand_fwd' --bam-out '${PT_SMOKE_DIR}/strand_fwd/reads.bam' \
+    && grep -qP '^emitted_groups\\t2$' '${PT_SMOKE_DIR}/strand_fwd/summary.tsv' \
+    && grep -qP '^strand_filtered_groups\\t1$' '${PT_SMOKE_DIR}/strand_fwd/summary.tsv' \
+    && ! '${PANCOLLAPSE_SAMTOOLS}' view '${PT_SMOKE_DIR}/strand_fwd/reads.bam' | grep -q readrev")
+set_tests_properties(pathtally_strand_forward PROPERTIES LABELS "vg;pathtally;strand"
+  FIXTURES_REQUIRED pathtally_smoke_inputs)
+
+add_test(NAME pathtally_strand_reverse
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${PT_SMOKE_DIR}/reads.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' --t2g '${PT_FIX}/t2g.tsv' \
+    --strand reverse --out-dir '${PT_SMOKE_DIR}/strand_rev' --bam-out '${PT_SMOKE_DIR}/strand_rev/reads.bam' \
+    && grep -qP '^emitted_groups\\t1$' '${PT_SMOKE_DIR}/strand_rev/summary.tsv' \
+    && grep -qP '^strand_filtered_groups\\t2$' '${PT_SMOKE_DIR}/strand_rev/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${PT_SMOKE_DIR}/strand_rev/reads.bam' | grep -q readrev")
+set_tests_properties(pathtally_strand_reverse PROPERTIES LABELS "vg;pathtally;strand"
+  FIXTURES_REQUIRED pathtally_smoke_inputs)
+
 # Multi-chunk path: force one chunk per record and confirm the oracle reads all
 # chunks and still matches exactly.
 add_test(NAME pathtally_smoke_convert_multichunk

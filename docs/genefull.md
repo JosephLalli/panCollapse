@@ -69,6 +69,15 @@ multi-exon (intron-spanned) reads call the gene either way. A read whose nodes l
 shared region of two genes' bodies is multi-gene; a read dominant in one gene is called to that
 gene (the top-score-plus-ties rule, applied to gene-body paths just as to transcripts).
 
+## Strandedness
+
+By default GeneFull counts a read for a gene regardless of the read's orientation. For a
+sense-stranded library, add `--strand forward` to keep only reads that align to the gene in the
+same (sense) orientation and drop antisense reads before counting — the orientation is the
+majority of aligned bases (the RAD `dirs`), and dropped reads are counted in
+`strand_filtered_groups`. This approximates STARsolo `GeneFull_Ex50pAS`'s antisense exclusion.
+`--strand reverse` keeps only antisense; `--strand both` (default) filters nothing.
+
 ## Prerequisite: the graph must retain intron sequence
 
 None of this works if the graph has no intron nodes. `vg rna` retains them by default (it only

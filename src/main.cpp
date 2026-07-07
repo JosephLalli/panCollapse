@@ -45,6 +45,12 @@ enum class ScoreMode { Flat, QualAdj };
 // counter then ignores the read); First writes XT for the first gene in sorted order.
 enum class BamMultiGenePolicy { Omit, First };
 
+// Target-relative orientation filter. Both keeps every compatible target (default, no
+// filtering). Forward keeps only targets the read aligns to in the same orientation (sense);
+// Reverse keeps only antisense targets. Orientation is the majority of aligned bases, as in
+// the RAD dirs.
+enum class StrandFilter { Both, Forward, Reverse };
+
 enum class MoleculeParseStatus { Ok, Missing, Malformed, Unsupported };
 
 struct Options {
@@ -58,6 +64,7 @@ struct Options {
     ScoreMode score_mode = ScoreMode::Flat;
     std::filesystem::path bam_out;  // empty => no BAM output
     BamMultiGenePolicy bam_multigene = BamMultiGenePolicy::Omit;
+    StrandFilter strand = StrandFilter::Both;
 };
 
 struct MoleculeId {
@@ -100,7 +107,7 @@ constexpr const char* kUsageText =
     "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv "
     "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
     "[--score flat|qualadj] [--molecule-identity-failures skip|fail] "
-    "[--bam-out reads.bam] [--bam-multigene omit|first]";
+    "[--strand both|forward|reverse] [--bam-out reads.bam] [--bam-multigene omit|first]";
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(kUsageText);
@@ -166,6 +173,17 @@ Options parse_options(int argc, char** argv) {
                 options.molecule_identity_failures = MoleculeIdentityFailurePolicy::Skip;
             } else if (value == "fail") {
                 options.molecule_identity_failures = MoleculeIdentityFailurePolicy::Fail;
+            } else {
+                usage_error();
+            }
+        } else if (arg == "--strand") {
+            const std::string value = require_value("--strand");
+            if (value == "both") {
+                options.strand = StrandFilter::Both;
+            } else if (value == "forward") {
+                options.strand = StrandFilter::Forward;
+            } else if (value == "reverse") {
+                options.strand = StrandFilter::Reverse;
             } else {
                 usage_error();
             }
@@ -818,6 +836,7 @@ int run_convert(int argc, char** argv) {
     size_t input_read_groups = 0;
     size_t grouping_recurrence_failures = 0;
     size_t no_compatible_transcript_groups = 0;
+    size_t strand_filtered_groups = 0;
     size_t unaligned_reads = 0;
     size_t raw_molecule_missing_groups = 0;
     size_t raw_molecule_malformed_groups = 0;
@@ -895,7 +914,7 @@ int run_convert(int argc, char** argv) {
             record_ptrs.push_back(&record);
         }
         pathtally::tally_read_group_into(tally_workspace, record_ptrs, lookup, node_scorer);
-        const std::vector<pathtally::RadTarget> targets = pathtally::select_targets(tally_workspace);
+        std::vector<pathtally::RadTarget> targets = pathtally::select_targets(tally_workspace);
 
         if (targets.empty()) {
             ++no_compatible_transcript_groups;
@@ -905,6 +924,24 @@ int run_convert(int argc, char** argv) {
             completed_names.insert(current_group.name);
             have_group = false;
             return;
+        }
+
+        // Optional target-relative orientation filter: keep only sense (forward) or antisense
+        // (reverse) targets. A read that had compatible targets but none in the wanted
+        // orientation emits no record and is counted separately from no-compatible.
+        if (options.strand != StrandFilter::Both) {
+            const bool keep_forward = options.strand == StrandFilter::Forward;
+            targets.erase(std::remove_if(targets.begin(), targets.end(),
+                                         [keep_forward](const pathtally::RadTarget& target) {
+                                             return target.forward != keep_forward;
+                                         }),
+                          targets.end());
+            if (targets.empty()) {
+                ++strand_filtered_groups;
+                completed_names.insert(current_group.name);
+                have_group = false;
+                return;
+            }
         }
 
         std::vector<TargetHit> hits;
@@ -994,7 +1031,8 @@ int run_convert(int argc, char** argv) {
                     "input_records\t" + std::to_string(input_records) + "\ninput_read_groups\t" +
                         std::to_string(input_read_groups) + "\nemitted_groups\t" +
                         std::to_string(rad_writer.record_count()) + "\nno_compatible_transcript_groups\t" +
-                        std::to_string(no_compatible_transcript_groups) + "\nunaligned_reads\t" +
+                        std::to_string(no_compatible_transcript_groups) + "\nstrand_filtered_groups\t" +
+                        std::to_string(strand_filtered_groups) + "\nunaligned_reads\t" +
                         std::to_string(unaligned_reads) + "\nraw_molecule_missing_groups\t" +
                         std::to_string(raw_molecule_missing_groups) + "\nraw_molecule_malformed_groups\t" +
                         std::to_string(raw_molecule_malformed_groups) + "\nraw_molecule_unsupported_groups\t" +

@@ -19,11 +19,18 @@ All notable changes to panCollapse are recorded here. Versions follow the projec
   gene (projected by `vg rna --feature-type gene`, covering introns) and writes the matching
   gene t2g; pass the haplotype GBWT (`-l`) to cover non-reference (alt) nodes. Output graph keeps
   the original HST paths, so it serves both counts.
+- **`--strand both|forward|reverse`** — target-relative orientation filter (default `both`, no
+  filtering). `forward` keeps only sense targets, `reverse` only antisense; reads left with no
+  matching target emit no record and are counted in the new `strand_filtered_groups`. Use
+  `forward` for a sense-stranded library to drop antisense reads (like STARsolo
+  `GeneFull_Ex50pAS`'s antisense exclusion / `--soloStrand`). Opt-in; `both` reverses nothing
+  (D042 preserved as the default). (D056)
 
 ### Notes
 
-- No binary behavior changed from v0.3: the converter is byte-identical; GeneFull rides on the
-  existing path-attribution mechanism. GeneFull's only marginal call over spliced is the
+- GeneFull adds no binary behavior: it rides on the existing path-attribution mechanism, and with
+  the default `--strand both` the converter output is byte-identical to v0.3. The only new binary
+  behavior is the opt-in `--strand` filter. GeneFull's only marginal call over spliced is the
   purely-intronic read (any read touching an exon is already called in spliced counting).
   Overlapping gene bodies resolve by the same top-score-plus-ties rule (entirely-shared ->
   multi-gene; dominant -> that gene). Requires a graph that retains intron sequence (do not build
