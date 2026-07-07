@@ -47,7 +47,6 @@ The converter is `build/src/panCollapse`.
 panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir out
                     [--raw-cb-length 16] [--raw-umi-length 12]
                     [--score flat|qualadj] [--molecule-identity-failures skip|fail]
-                    [--gene-mode spliced|full] [--gene-loci loci.tsv]
                     [--bam-out reads.bam] [--bam-multigene omit|first]
 ```
 
@@ -75,12 +74,14 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
   DropletUtils `emptyDropsCellRanger`). Opt-in; the RAD is byte-identical with or without it.
   See [`docs/bam-export.md`](docs/bam-export.md).
 - `--bam-multigene omit|first` — `XT` tag policy for multi-gene reads (default `omit`).
-- `--gene-mode spliced|full` — gene-calling rule (default `spliced`). `full` implements
-  GeneFull (STARsolo/CellRanger include-introns): a read calls a gene if it overlaps the gene
-  body (exon or intron), keeping the intronic reads spliced mode drops. Requires `--gene-loci`.
-  See [`docs/genefull.md`](docs/genefull.md).
-- `--gene-loci loci.tsv` — for `--gene-mode full`: a `node_id<TAB>gene[<TAB>strand]` map of each
-  gene's full locus (exon + intron nodes), built at fixture time from the GTF spans and graph.
+
+### GeneFull (intron-inclusive) counting
+
+GeneFull is not a flag — it is the ordinary count run against a graph annotated with **gene-body
+paths** and selected by the t2g. `scripts/make-gene-annotation.sh -x graph.xg -n annotation.gtf
+-o genefull -l haplotypes.gbwt` embeds one unspliced gene-body path per gene (covering introns)
+and writes `genefull.t2g.tsv`. Then the same graph gives a spliced count with your HST t2g or a
+GeneFull count with the gene t2g. See [`docs/genefull.md`](docs/genefull.md).
 
 ### Outputs (in `--out-dir`)
 

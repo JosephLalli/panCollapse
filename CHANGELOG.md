@@ -7,25 +7,27 @@ All notable changes to panCollapse are recorded here. Versions follow the projec
 
 ### Added
 
-- **GeneFull gene-calling (`--gene-mode full`)** — a read calls a gene if it overlaps the gene
-  body (exon **or** intron), matching STARsolo/CellRanger include-introns, keeping the
-  purely-intronic reads the default spliced/exonic mode drops. It reuses the whole
-  scoring/select/RAD/BAM pipeline and swaps only the per-node lookup: spliced reads HST paths
-  from the graph, full reads a node -> gene-locus map. Genes are the RAD targets in full mode
-  (identity `tx2gene`). See [`docs/genefull.md`](docs/genefull.md). (D055)
-- `--gene-loci loci.tsv` — for full mode: a `node_id<TAB>gene[<TAB>strand]` map of each gene's
-  full locus (exon + intron nodes, plus non-reference nodes in a pangenome), built at index
-  time from the GTF spans and the graph. panCollapse consumes the map, not the GTF.
-- `scripts/make-gene-loci.sh` — generates the `--gene-loci` map from a graph + GTF by projecting
-  each gene span as one unspliced `vg rna` gene-body path (`--feature-type gene`); pass the
-  haplotype GBWT (`-l`) to cover non-reference (alt) nodes.
+- **GeneFull (intron-inclusive) counting** — a read calls a gene if it overlaps the gene body
+  (exon **or** intron), matching STARsolo/CellRanger include-introns, keeping the
+  purely-intronic reads the default spliced/exonic count drops. This needs **no new panCollapse
+  code or flag**: it is the ordinary count run against a graph annotated with **gene-body
+  paths**, selected by the t2g. panCollapse reads gene-body membership off the embedded paths
+  exactly as it reads transcript membership off HST paths, so the same graph gives a spliced
+  count with the HST t2g or a GeneFull count with the gene t2g. See
+  [`docs/genefull.md`](docs/genefull.md). (D055)
+- `scripts/make-gene-annotation.sh` — annotates a graph with one unspliced gene-body path per
+  gene (projected by `vg rna --feature-type gene`, covering introns) and writes the matching
+  gene t2g; pass the haplotype GBWT (`-l`) to cover non-reference (alt) nodes. Output graph keeps
+  the original HST paths, so it serves both counts.
 
 ### Notes
 
-- The default (`--gene-mode spliced`) is unchanged and byte-identical to v0.3. GeneFull's only
-  marginal call over spliced is the purely-intronic read: any read touching an exon is already
-  called in spliced mode. Overlapping gene loci resolve by the same top-score-plus-ties rule
-  (entirely-shared -> multi-gene; dominant -> that gene).
+- No binary behavior changed from v0.3: the converter is byte-identical; GeneFull rides on the
+  existing path-attribution mechanism. GeneFull's only marginal call over spliced is the
+  purely-intronic read (any read touching an exon is already called in spliced counting).
+  Overlapping gene bodies resolve by the same top-score-plus-ties rule (entirely-shared ->
+  multi-gene; dominant -> that gene). Requires a graph that retains intron sequence (do not build
+  it with `vg rna -d/--remove-non-gene`).
 
 ## [0.3.0]
 

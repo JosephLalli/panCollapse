@@ -969,38 +969,49 @@ alleles/insertions) that a genome-surject + featureCounts path would drop, becau
 assignment is graph-native. Per the scope rule a new output backend returned to a design gate;
 the design was approved before implementation. This does not change any settled RAD behavior.
 
-### D055 — GeneFull gene-calling mode (`--gene-mode full`)
+### D055 — GeneFull counting via gene-body graph annotation (no mode flag)
 
 **Decision source:** User (directed after a counter-comparison analysis showed the STAR arm was
 run with STARsolo `--soloFeatures GeneFull` while panCollapse is spliced-only, an exon-vs-body
-confound worth an estimated ~6-7% of signal on MHC GEX).
+confound worth an estimated ~6-7% of signal on MHC GEX; then observed during implementation that
+gene calling can reuse the graph's native path mechanism instead of a custom map).
 
-**Decision:** Add an opt-in `--gene-mode {spliced,full}` (default `spliced`). Full mode implements
-GeneFull: a read calls a gene if it overlaps the gene body (exon or intron), keeping the
-purely-intronic reads spliced mode drops. It reuses the whole scoring/select/RAD/BAM pipeline and
-changes only the injected per-node lookup -- spliced reads HST paths from the graph; full reads a
-node -> gene-locus map from a new `--gene-loci` input (`node_id<TAB>gene[<TAB>strand]`, a node may
-repeat for overlapping loci). In full mode genes are the RAD targets directly (identity tx2gene).
-The loci map is built at fixture/index time from the GTF gene spans and the graph; panCollapse
-consumes the map, not the GTF (consistent with D048). Spliced mode is unchanged and byte-identical.
+**Decision:** GeneFull (a read calls a gene if it overlaps the gene body, exon or intron) is
+**not a panCollapse mode**. It is the ordinary spliced count run against a graph annotated with
+**gene-body paths**, selected by the t2g. panCollapse already reads transcript membership off the
+graph's embedded HST paths with no custom index (the t2g names which paths and their gene); a
+gene body embedded as one unspliced path behaves identically, and its intron nodes carry the
+gene. `scripts/make-gene-annotation.sh` embeds one gene-body path per gene (`vg rna
+--feature-type gene`, grouped by `gene_id`; `-l` to thread through haplotypes for alt-node
+coverage) alongside the original HST paths and writes the gene t2g (`gene_body_path <TAB> gene`).
+The same annotated graph then gives a spliced count with the HST t2g or a GeneFull count with the
+gene t2g. **No binary change:** the converter is byte-identical to D054/v0.3.
+
+**Superseded during implementation:** an earlier attempt added a `--gene-mode {spliced,full}`
+flag plus a `--gene-loci` node->gene TSV input and a parallel lookup branch. That was removed
+before merge: it duplicated the graph's own path index (a custom node->gene map is exactly the
+"custom lookup index" the transcript path avoids, against the D048/no-custom-index principle),
+and `--gene-mode spliced` already produced GeneFull when pointed at a gene-body t2g -- so the flag
+conflated "which mechanism" with "which feature layer," the latter being the t2g's job.
 
 **Semantics (verified on fixtures):** GeneFull's only marginal call over spliced is the
-purely-intronic read; any read touching an exon node is already called in spliced mode via that
-node's HST. Overlapping gene loci (introns overlap neighbors) resolve by the same
-top-score-plus-ties rule: a read entirely in a shared region is multi-gene; a read dominant in one
-gene is called to that gene (a score-weighted resolution of proportional overlap, slightly more
-permissive than a strict any-overlap rule). Gene mode does not require genes to avoid introns; it
-never counts intronic membership, so the ambiguity does not arise.
+purely-intronic read; any read touching an exon node is already called by spliced counting via
+that node's HST. Overlapping gene bodies resolve by the same top-score-plus-ties rule (entirely
+shared -> multi-gene; dominant -> that gene). A single t2g must not list both HST and gene-body
+paths: the gene call stays correct but the transcript dictionary gains a redundant gene
+pseudo-transcript (a spliced/GeneFull hybrid) -- one t2g per run. Prerequisite: the graph must
+retain intron sequence (not built with `vg rna -d`).
 
 **Verification:** hermetic `genefull` CTests on a gene with exon nodes 1,3 (HST `1+,3+`) and
-intron node 2 (on no HST): the intronic read is dropped in spliced (`no_compatible=1`) and called
-to its gene in full (`emitted=2`), with the BAM carrying it. Full suite 45/45; spliced-mode
-regression byte-identical. Version bumped to 0.4.0.
+intron node 2 (on no HST): `make-gene-annotation.sh` embeds the gene body; the SAME annotated
+graph drops the intronic read with the HST t2g (`emitted=1`) and calls it with the gene t2g
+(`emitted=2`, carried in the BAM as GENE1). Full suite 45/45.
 
 **Rationale:** panCollapse being spliced-only was a genuine capability gap versus modern
-CellRanger/STARsolo (include-introns by default), not only a benchmark confound. Full mode closes
-it via the existing lookup seam without disturbing settled spliced behavior; a new opt-in mode
-plus a small annotation input, gated behind the flag.
+CellRanger/STARsolo (include-introns by default). Closing it needs no code -- the annotation
+already lives in the graph as paths, the same reason spliced mode needs no runtime GTF. Keeping
+GeneFull a graph+t2g concern (not a flag) preserves the "annotation lives in the graph, no custom
+index" invariant and lets any feature layer be added as more paths, each selected by its own t2g.
 
 ## Architecture questions and Phase 0 resolution map
 

@@ -306,10 +306,12 @@ set_tests_properties(pathtally_badnode_fail PROPERTIES LABELS "vg;pathtally;node
   WILL_FAIL TRUE
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_badnode_inputs")
 
-# GeneFull gene-calling: an intronic read (on no HST) is dropped in spliced mode but called
-# to its gene in --gene-mode full via the node -> gene-locus map. The fixture's gene GENE1 has
-# exon nodes 1,3 (spliced HST NM_1.1_H1 = 1+,3+) and intron node 2 (on no HST). exonread hits
-# nodes 1,3; intronread hits node 2 only.
+# GeneFull gene-calling needs no panCollapse mode flag: it is spliced counting run against a
+# graph annotated with gene-body paths and selected by the t2g. scripts/make-gene-annotation.sh
+# embeds one unspliced gene-body path per gene (covering introns) and writes the gene t2g. The
+# fixture gene GENE1 has exon nodes 1,3 (HST NM_1.1_H1 = 1+,3+) and intron node 2 (on no HST);
+# exonread hits nodes 1,3, intronread hits node 2 only. The SAME annotated graph gives a spliced
+# count with the HST t2g and a GeneFull count with the gene t2g.
 set(GF_DIR "${CMAKE_CURRENT_BINARY_DIR}/genefull_work")
 set(GF_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/genefull_smoke")
 
@@ -317,46 +319,37 @@ add_test(NAME genefull_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${GF_DI
 set_tests_properties(genefull_setup PROPERTIES LABELS "vg;pathtally;genefull"
   FIXTURES_SETUP genefull_dir)
 
-add_test(NAME genefull_xg
-  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> convert -g '${GF_FIX}/graph.gfa' -x > '${GF_DIR}/graph.xg'")
-set_tests_properties(genefull_xg PROPERTIES LABELS "vg;pathtally;genefull"
-  FIXTURES_REQUIRED genefull_dir FIXTURES_SETUP genefull_inputs)
-
 add_test(NAME genefull_gamp
   COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${GF_FIX}/reads.gamp.json' > '${GF_DIR}/reads.gamp'")
 set_tests_properties(genefull_gamp PROPERTIES LABELS "vg;pathtally;genefull"
-  FIXTURES_REQUIRED genefull_dir FIXTURES_SETUP genefull_inputs)
+  FIXTURES_REQUIRED genefull_dir FIXTURES_SETUP genefull_reads)
 
-# Spliced mode: the intronic read is dropped (1 emitted, 1 no-compatible).
+# Annotate: embed gene-body paths and write the gene t2g from the GTF + graph.
+add_test(NAME genefull_annotate
+  COMMAND /bin/sh -c "'${CMAKE_SOURCE_DIR}/scripts/make-gene-annotation.sh' \
+    -x '${GF_FIX}/graph.gfa' -n '${GF_FIX}/annotation.gtf' -o '${GF_DIR}/genefull' --vg '${PT_VG}'")
+set_tests_properties(genefull_annotate PROPERTIES LABELS "vg;pathtally;genefull"
+  FIXTURES_REQUIRED genefull_dir FIXTURES_SETUP genefull_annotated)
+
+# Spliced count: annotated graph + HST t2g. The intronic read is dropped (1 emitted, 1 no-compat).
 add_test(NAME genefull_spliced_drops_intron
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
-    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/graph.xg' --t2g '${GF_FIX}/t2g.tsv' \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' --t2g '${GF_FIX}/t2g.tsv' \
     --out-dir '${GF_DIR}/spliced' \
     && grep -qP '^emitted_groups\\t1$' '${GF_DIR}/spliced/summary.tsv' \
     && grep -qP '^no_compatible_transcript_groups\\t1$' '${GF_DIR}/spliced/summary.tsv'")
 set_tests_properties(genefull_spliced_drops_intron PROPERTIES LABELS "vg;pathtally;genefull"
-  FIXTURES_REQUIRED genefull_inputs)
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
-# Full mode: the intronic read is called to its gene (2 emitted, 0 no-compatible), and the BAM
-# carries it as GENE1. Also checks the BAM is valid.
+# GeneFull count: the SAME annotated graph + the generated gene t2g. The intronic read is now
+# called to its gene (2 emitted, 0 no-compat), carried in the BAM as GENE1. No mode flag.
 add_test(NAME genefull_full_calls_intron
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
-    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/graph.xg' \
-    --gene-mode full --gene-loci '${GF_FIX}/gene_loci.tsv' \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' --t2g '${GF_DIR}/genefull.t2g.tsv' \
     --out-dir '${GF_DIR}/full' --bam-out '${GF_DIR}/full/reads.bam' \
     && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/full/summary.tsv' \
     && grep -qP '^no_compatible_transcript_groups\\t0$' '${GF_DIR}/full/summary.tsv' \
     && '${PANCOLLAPSE_SAMTOOLS}' quickcheck '${GF_DIR}/full/reads.bam' \
     && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/full/reads.bam' | grep intronread | grep -q 'GX:Z:GENE1'")
 set_tests_properties(genefull_full_calls_intron PROPERTIES LABELS "vg;pathtally;genefull;bam"
-  FIXTURES_REQUIRED genefull_inputs)
-
-# The gene-loci map is generated from a GTF + the graph by scripts/make-gene-loci.sh (projecting
-# each gene's full span as one unspliced vg rna gene-body path). Confirm it reproduces the
-# hand-authored loci for this fixture (nodes 1,2,3 -> GENE1, including intron node 2).
-add_test(NAME genefull_loci_from_gtf
-  COMMAND /bin/sh -c "'${CMAKE_SOURCE_DIR}/scripts/make-gene-loci.sh' \
-    -x '${GF_DIR}/graph.xg' -n '${GF_FIX}/annotation.gtf' -o '${GF_DIR}/gene_loci.gen.tsv' --vg '${PT_VG}' \
-    && cmp '${GF_DIR}/gene_loci.gen.tsv' '${GF_FIX}/gene_loci.tsv'")
-set_tests_properties(genefull_loci_from_gtf PROPERTIES LABELS "vg;pathtally;genefull"
-  FIXTURES_REQUIRED genefull_inputs)
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
