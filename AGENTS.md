@@ -23,6 +23,8 @@ This file is intentionally short; load detailed documents only when relevant.
 | Product contract | `docs/product-spec.md` |
 | Conversion algorithm (D048) | `docs/conversion-algorithm.md` |
 | Input/output contract | `docs/input-output-contract.md` |
+| Optional BAM output | `docs/bam-export.md` |
+| GeneFull / STARsolo count modes | `docs/genefull.md` |
 | Transcript compatibility semantics | `docs/compatibility-semantics.md` |
 | Settled decisions and open forks | `docs/decisions.md` |
 | Validation and acceptance criteria | `docs/validation-contract.md` |

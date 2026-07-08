@@ -38,6 +38,8 @@ an index, not the full manual; read detailed files only when working in their ar
 | Product contract | `docs/product-spec.md` |
 | Conversion algorithm (D048) | `docs/conversion-algorithm.md` |
 | Inputs and outputs | `docs/input-output-contract.md` |
+| Optional BAM output | `docs/bam-export.md` |
+| GeneFull / STARsolo count modes | `docs/genefull.md` |
 | Biological semantics | `docs/compatibility-semantics.md` |
 | Decisions and open forks | `docs/decisions.md` |
 | Acceptance criteria | `docs/validation-contract.md` |

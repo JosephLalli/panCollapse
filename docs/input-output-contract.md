@@ -40,6 +40,14 @@ prescribing the code architecture. The GAMP-to-RAD algorithm is defined by D048 
 A GTF and `vg rna` build the annotated graph during reference/fixture creation only; they
 are not runtime inputs.
 
+### Count mode and the gene-body t2g (optional)
+
+The default `--count-mode score` uses only the exon t2g above (the D048 count). The ledger
+count modes (`gene`, `genefull`, `genefull_exonoverintron`, `genefull_ex50pas`) reproduce
+STARsolo/CellRanger semantics and additionally take `--body-t2g`, a second ordinary
+`path<TAB>gene` t2g naming the graph's gene-body paths. Both t2gs name paths already embedded
+in the graph; there is no node->gene map. See [`genefull.md`](genefull.md).
+
 ### Barcode and UMI
 
 The raw cell barcode and raw UMI come from the GAMP name field. Values are written to RAD as
@@ -86,9 +94,11 @@ alevin-fry expected-orientation filtering.
 - `tx2gene.tsv` from the t2g;
 - configured raw barcode and UMI lengths, which set RAD `cblen` and `ulen`;
 - a run summary with the product-spec Section 12 counters, including groups skipped and
-  unaligned read groups; the field `emitted_target_count_histogram` holds a
-  semicolon-separated list of `target_count:group_count` pairs (ascending by target count)
-  recording how many emitted groups had each distinct number of compatible targets;
+  unaligned read groups, `strand_filtered_groups` (reads dropped by `--strand`) and
+  `multigene_dropped_groups` (reads dropped by the ledger `Unique` rule); the field
+  `emitted_target_count_histogram` holds a semicolon-separated list of
+  `target_count:group_count` pairs (ascending by target count) recording how many emitted
+  groups had each distinct number of compatible targets;
 - version/build information and input identities/checksums where practical.
 
 ### Optional BAM (`--bam-out`)
