@@ -1044,6 +1044,46 @@ had pushed it downstream (D042). Making it an opt-in at the gene-calling step ma
 tools and closes the `GeneFull_Ex50pAS`-style antisense gap, without changing the default
 (orientation-preserving) behavior.
 
+### D057 — Ledger count modes reproducing STARsolo/CellRanger Gene and GeneFull
+
+**Decision source:** User (proposed the per-read exon/intron base ledger to match STARsolo
+`soloFeatures` Gene/GeneFull and the CellRanger variants).
+
+**Decision:** Add opt-in `--count-mode {score,gene,genefull,genefull_exonoverintron,
+genefull_ex50pas}` (default `score`). The ledger modes count, per read per gene, the aligned
+**match** bases on exon nodes vs intron nodes, then apply the mode rule: `gene` keeps a gene the
+read is >=50% exonic for; `genefull` keeps any gene body overlapped; `genefull_exonoverintron`
+and `genefull_ex50pas` add exon-overlap tie-breaks and (Ex50pAS) exclude 100%-exonic antisense
+reads. All apply the CellRanger `Unique` rule: a read kept for >1 gene is dropped and counted in
+`multigene_dropped_groups`. The pure rule lives in `pathtally_ledger.hpp` (unit-tested).
+
+**Decision:** Membership comes from **two ordinary path->gene t2gs** read off the graph's
+embedded paths -- `--t2g` is the exon (HST) layer, `--body-t2g` the gene-body layer -- with no
+custom node->gene map ([[graph-native-feature-annotation]]). Per node, a gene is exonic if the
+node lies on any of its exon paths (exon wins over body), else intronic. It stays O(nodes): the
+same per-node walk as D048, accumulating base counts instead of vg scores (no traversal
+enumeration). This is genuinely different logic from the D048 top-score selection (overlap-based,
+not score-based) and needs both layers, so unlike the coarse gene-body t2g (D055) it does warrant
+a mode flag. `--count-mode score` (default) is the unchanged D048 count; RAD/BAM output is
+byte-identical without the flag.
+
+**Not implemented (documented):** exact splice-junction concordance for `Gene` (the >=50%-exonic
+gate approximates CellRanger, and spliced reads naturally contribute zero intronic bases because
+introns are deletions); the `Rescue`/`EM`/`Uniform` multimapper distribution modes (only
+`Unique`); STARsolo `SJ` (a junction/edge feature outside the node->path model).
+
+**Verification:** `pathtally_ledger_test` (14 assertions: Gene exonic gate incl. exon-A+intron-B
+-> A, GeneFull intronic/intergenic, ExonOverIntron and Ex50pAS tie-breaks, Ex50pAS 100%-exon
+antisense exclusion). Integration `genefull_ledger_*` on the both-annotated fixture: `gene` drops
+the intronic read (emit 1), `genefull` keeps it (emit 2), `genefull_ex50pas` drops a 100%-exonic
+antisense read while keeping the sense one; a read in two gene bodies is dropped with
+`multigene_dropped_groups=1`. Full suite 51/51.
+
+**Rationale:** the graph-native ledger is exactly CellRanger's overlap accounting, computed off
+the two annotation layers with no new index and no traversal enumeration, giving a fair
+like-for-like comparison against STARsolo `Gene`/`GeneFull`/`GeneFull_Ex50pAS` while keeping the
+D048 count as the untouched default.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

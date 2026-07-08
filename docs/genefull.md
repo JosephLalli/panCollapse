@@ -69,6 +69,29 @@ multi-exon (intron-spanned) reads call the gene either way. A read whose nodes l
 shared region of two genes' bodies is multi-gene; a read dominant in one gene is called to that
 gene (the top-score-plus-ties rule, applied to gene-body paths just as to transcripts).
 
+## Exact STARsolo/CellRanger rules (`--count-mode`)
+
+The t2g-selects-the-layer approach above is coarse (it counts by the D048 top-score rule).
+`--count-mode` reproduces STARsolo/CellRanger's exact `soloFeatures` semantics by counting
+per-gene **exonic vs intronic aligned bases**. It reads **both** layers at once — `--t2g` is the
+exon (HST) layer, `--body-t2g` the gene-body layer — so each aligned node is classified exonic
+(on an HST of the gene) or intronic (in the gene body but not an exon).
+
+For each read it accumulates, per gene, the aligned match bases on exon nodes vs intron nodes
+(deletions over introns, i.e. spliced reads, contribute no intronic bases), then applies:
+
+| `--count-mode` | keeps a gene when the read is… | STARsolo |
+|---|---|---|
+| `gene` | ≥50% of the read on the gene's **exons** | `Gene` |
+| `genefull` | overlapping the gene **body** at all (exon or intron) | `GeneFull` |
+| `genefull_exonoverintron` | as `genefull`, but among overlapped genes prefer 100%-exon ones | `GeneFull_ExonOverIntron` |
+| `genefull_ex50pas` | as `genefull`, prefer >50%-exon genes, and **drop 100%-exonic antisense** reads | `GeneFull_Ex50pAS` (CellRanger v7 default) |
+
+All modes then apply the **Unique** multimapper rule: a read kept for more than one gene is
+dropped and counted in `multigene_dropped_groups` (CellRanger's default; `Rescue`/`EM`
+distribution are not implemented). Reads kept for exactly one gene are emitted to the RAD/BAM as
+usual. The default `--count-mode score` is the D048 count and is unchanged.
+
 ## Strandedness
 
 By default GeneFull counts a read for a gene regardless of the read's orientation. For a

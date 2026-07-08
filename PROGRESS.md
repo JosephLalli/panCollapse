@@ -633,6 +633,18 @@ projection, or a custom index.
   the default `both` is byte-identical to before and still writes `dirs`. Hermetic `strand` CTests
   on the smoke fixture (readfwd/readmulti forward, readrev reverse): `forward` emits 2
   (`strand_filtered_groups=1`, no readrev), `reverse` emits 1 (`=2`). Full suite 47/47.
+- 2026-07-07: Added ledger count modes reproducing STARsolo/CellRanger exactly (D057):
+  `--count-mode {score,gene,genefull,genefull_exonoverintron,genefull_ex50pas}` + `--body-t2g`.
+  The ledger counts per read per gene the aligned match bases on exon vs intron nodes, then
+  applies the mode rule (gene = >=50% exonic; genefull = any body overlap; the variants add
+  exon-overlap tie-breaks and Ex50pAS's 100%-exon-antisense exclusion), then CellRanger `Unique`
+  (a read kept for >1 gene is dropped, counted in `multigene_dropped_groups`). Membership is two
+  ordinary path->gene t2gs (exon/HST via `--t2g`, gene-body via `--body-t2g`) read off the graph's
+  embedded paths -- no custom node->gene map (memory: graph-native-feature-annotation). Stays
+  O(nodes) like D048 (base counts instead of scores, no traversal). Default `score` is the
+  unchanged D048 count. Pure rule in `pathtally_ledger.hpp` with a 14-assertion unit test; graph
+  integration tests (`genefull_ledger_gene`/`genefull`/`ex50pas_antisense`, plus a manual
+  multi-gene Unique-drop check). Full suite 51/51; converter byte-identical without the flag.
 - 2026-07-05: Profiled the `-O2` binary (callgrind, 1M-read MHC) and acted on it (D053). The
   scorer is ~1%; the run is dominated by GAMP ingestion (~60%) and the per-group tally (~34%),
   with malloc/free (~27%) and string-compare memcmp (~13%) the top categories. Multithreading

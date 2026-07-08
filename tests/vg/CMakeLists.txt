@@ -16,6 +16,13 @@ target_link_libraries(pathtally_pipeline_test PRIVATE panCollapse::vg_boundary p
 add_test(NAME pathtally_pipeline_test COMMAND pathtally_pipeline_test)
 set_tests_properties(pathtally_pipeline_test PROPERTIES LABELS "vg;pathtally")
 
+# Ledger count-mode rules (Gene/GeneFull/variants); pure, no graph.
+add_executable(pathtally_ledger_test pathtally_ledger_test.cpp)
+target_include_directories(pathtally_ledger_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(pathtally_ledger_test PRIVATE panCollapse::warnings)
+add_test(NAME pathtally_ledger_test COMMAND pathtally_ledger_test)
+set_tests_properties(pathtally_ledger_test PROPERTIES LABELS "vg;pathtally;ledger")
+
 # Self-contained end-to-end smoke: a tiny hand-authored graph + multipath GAMP go
 # through panCollapse, and the independent oracle checks the RAD exactly.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -375,3 +382,42 @@ add_test(NAME genefull_full_calls_intron
     && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/full/reads.bam' | grep intronread | grep -q 'GX:Z:GENE1'")
 set_tests_properties(genefull_full_calls_intron PROPERTIES LABELS "vg;pathtally;genefull;bam"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
+
+# Ledger count modes (STARsolo/CellRanger Gene/GeneFull) on the both-annotated graph, reading the
+# exon (HST) t2g and the gene-body t2g together. --count-mode gene drops the intronic read;
+# genefull keeps it. (Rule semantics are unit-tested in pathtally_ledger_test.)
+add_test(NAME genefull_ledger_gene
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
+    --count-mode gene --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
+    --out-dir '${GF_DIR}/ledger_gene' \
+    && grep -qP '^emitted_groups\\t1$' '${GF_DIR}/ledger_gene/summary.tsv' \
+    && grep -qP '^no_compatible_transcript_groups\\t1$' '${GF_DIR}/ledger_gene/summary.tsv'")
+set_tests_properties(genefull_ledger_gene PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
+
+add_test(NAME genefull_ledger_genefull
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
+    --count-mode genefull --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
+    --out-dir '${GF_DIR}/ledger_full' \
+    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/ledger_full/summary.tsv'")
+set_tests_properties(genefull_ledger_genefull PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
+
+# Ex50pAS excludes a 100%-exonic ANTISENSE read: genefull keeps both a sense and an antisense
+# exon read, genefull_ex50pas drops the antisense one.
+add_test(NAME genefull_ledger_ex50pas_antisense
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${GF_FIX}/reads_antisense.gamp.json' > '${GF_DIR}/anti.gamp' \
+    && '$<TARGET_FILE:panCollapse>' convert --gamp '${GF_DIR}/anti.gamp' --xg '${GF_DIR}/genefull.xg' \
+       --count-mode genefull --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
+       --out-dir '${GF_DIR}/anti_full' \
+    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/anti_full/summary.tsv' \
+    && '$<TARGET_FILE:panCollapse>' convert --gamp '${GF_DIR}/anti.gamp' --xg '${GF_DIR}/genefull.xg' \
+       --count-mode genefull_ex50pas --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
+       --out-dir '${GF_DIR}/anti_ex50' --bam-out '${GF_DIR}/anti_ex50/reads.bam' \
+    && grep -qP '^emitted_groups\\t1$' '${GF_DIR}/anti_ex50/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep -q exonsense \
+    && ! '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep -q exonanti")
+set_tests_properties(genefull_ledger_ex50pas_antisense PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED genefull_annotated)

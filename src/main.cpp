@@ -6,6 +6,7 @@
 #include <xg.hpp>
 
 #include "pathtally.hpp"
+#include "pathtally_ledger.hpp"
 #include "pathtally_qualadj.hpp"
 
 #include <algorithm>
@@ -23,6 +24,7 @@
 #include <unordered_map>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -65,6 +67,8 @@ struct Options {
     std::filesystem::path bam_out;  // empty => no BAM output
     BamMultiGenePolicy bam_multigene = BamMultiGenePolicy::Omit;
     StrandFilter strand = StrandFilter::Both;
+    pathtally::CountMode count_mode = pathtally::CountMode::Score;
+    std::filesystem::path body_t2g;  // gene-body layer t2g, required for ledger count modes
 };
 
 struct MoleculeId {
@@ -107,7 +111,9 @@ constexpr const char* kUsageText =
     "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv "
     "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
     "[--score flat|qualadj] [--molecule-identity-failures skip|fail] "
-    "[--strand both|forward|reverse] [--bam-out reads.bam] [--bam-multigene omit|first]";
+    "[--strand both|forward|reverse] "
+    "[--count-mode score|gene|genefull|genefull_exonoverintron|genefull_ex50pas --body-t2g body.t2g] "
+    "[--bam-out reads.bam] [--bam-multigene omit|first]";
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(kUsageText);
@@ -187,6 +193,23 @@ Options parse_options(int argc, char** argv) {
             } else {
                 usage_error();
             }
+        } else if (arg == "--count-mode") {
+            const std::string value = require_value("--count-mode");
+            if (value == "score") {
+                options.count_mode = pathtally::CountMode::Score;
+            } else if (value == "gene") {
+                options.count_mode = pathtally::CountMode::Gene;
+            } else if (value == "genefull") {
+                options.count_mode = pathtally::CountMode::GeneFull;
+            } else if (value == "genefull_exonoverintron") {
+                options.count_mode = pathtally::CountMode::GeneFullExonOverIntron;
+            } else if (value == "genefull_ex50pas") {
+                options.count_mode = pathtally::CountMode::GeneFullEx50pAS;
+            } else {
+                usage_error();
+            }
+        } else if (arg == "--body-t2g") {
+            options.body_t2g = require_value("--body-t2g");
         } else if (arg == "--bam-out") {
             options.bam_out = require_value("--bam-out");
         } else if (arg == "--bam-multigene") {
@@ -209,6 +232,15 @@ Options parse_options(int argc, char** argv) {
     if (options.raw_cb_length == 0 || options.raw_cb_length > 32 || options.raw_umi_length == 0 ||
         options.raw_umi_length > 32) {
         throw std::runtime_error("raw barcode and UMI lengths must be in 1..32");
+    }
+    // Ledger count modes read two path->gene t2gs: --t2g is the exon/HST layer, --body-t2g the
+    // gene-body layer. --body-t2g is meaningless without a ledger mode.
+    if (options.count_mode == pathtally::CountMode::Score) {
+        if (!options.body_t2g.empty()) {
+            throw std::runtime_error("--body-t2g is only used with a ledger --count-mode");
+        }
+    } else if (options.body_t2g.empty()) {
+        throw std::runtime_error("--count-mode gene/genefull/... requires --body-t2g");
     }
 
     return options;
@@ -267,6 +299,59 @@ T2gData read_t2g(const std::filesystem::path& filename) {
     }
     for (auto& [gene, id] : data.gene_ids) {
         id = static_cast<int32_t>(data.gene_names.size());
+        data.gene_names.push_back(gene);
+    }
+    return data;
+}
+
+// Read a t2g as a raw path_name -> gene map (no transcript-id collapse). Used for the ledger
+// count modes, where the exon (HST) and gene-body layers are each an ordinary path->gene t2g.
+std::map<std::string, std::string> read_path_gene(const std::filesystem::path& filename) {
+    std::ifstream in(filename);
+    if (!in) {
+        throw std::runtime_error("cannot open t2g " + filename.string());
+    }
+    std::map<std::string, std::string> path_gene;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line.front() == '#') {
+            continue;
+        }
+        const auto fields = split_tab(line);
+        if (fields.size() < 2 || fields[0].empty() || fields[1].empty()) {
+            throw std::runtime_error("t2g row must have path and gene columns");
+        }
+        auto [it, inserted] = path_gene.emplace(fields[0], fields[1]);
+        if (!inserted && it->second != fields[1]) {
+            throw std::runtime_error("t2g maps path " + fields[0] + " to multiple genes");
+        }
+    }
+    if (path_gene.empty()) {
+        throw std::runtime_error("t2g has no data rows: " + filename.string());
+    }
+    return path_gene;
+}
+
+// Build the gene dictionary (RAD targets = genes, identity tx2gene) for the ledger count modes,
+// from the union of genes across the exon and gene-body layers.
+T2gData build_gene_dict(const std::map<std::string, std::string>& exon_path_gene,
+                        const std::map<std::string, std::string>& body_path_gene) {
+    T2gData data;
+    std::set<std::string> genes;
+    for (const auto& [path, gene] : exon_path_gene) {
+        genes.insert(gene);
+    }
+    for (const auto& [path, gene] : body_path_gene) {
+        genes.insert(gene);
+    }
+    if (genes.size() > kRadTargetIdMask) {
+        throw std::runtime_error("gene dictionary exceeds 31-bit target IDs");
+    }
+    for (const std::string& gene : genes) {
+        data.target_ids[gene] = static_cast<uint32_t>(data.target_names.size());
+        data.target_names.push_back(gene);
+        data.transcript_gene[gene] = gene;
+        data.gene_ids[gene] = static_cast<int32_t>(data.gene_names.size());
         data.gene_names.push_back(gene);
     }
     return data;
@@ -719,7 +804,20 @@ struct Group {
 
 int run_convert(int argc, char** argv) {
     const Options options = parse_options(argc, argv);
-    const T2gData t2g = read_t2g(options.t2g);
+    // Gene-calling source. Score mode (default, D048) reads the HST t2g and attributes each node
+    // to the HST paths crossing it. The ledger count modes read two path->gene t2gs -- the exon
+    // (HST) layer (--t2g) and the gene-body layer (--body-t2g) -- and per node classify each gene
+    // it touches as exon or intron.
+    T2gData t2g;
+    std::map<std::string, std::string> exon_path_gene;
+    std::map<std::string, std::string> body_path_gene;
+    if (options.count_mode == pathtally::CountMode::Score) {
+        t2g = read_t2g(options.t2g);
+    } else {
+        exon_path_gene = read_path_gene(options.t2g);
+        body_path_gene = read_path_gene(options.body_t2g);
+        t2g = build_gene_dict(exon_path_gene, body_path_gene);
+    }
 
     xg::XG graph;
     std::ifstream xg_in(options.xg, std::ios::binary);
@@ -728,57 +826,94 @@ int run_convert(int argc, char** argv) {
     }
     graph.deserialize(xg_in);
 
-    // Precompute the HST paths (those named in the t2g) as a path-handle -> name map,
-    // so the per-node lookup avoids building a path-name string and hashing it for every
-    // step. Reference backbones and shared exon nodes carry many steps, so this per-step
-    // string work dominated the run; the precomputed integer-keyed map removes it.
+    // Score-mode HST lookup (node -> HST names, cached per node) and ledger-mode lookup
+    // (node -> (gene index, is_exon, gene_is_reverse), cached per node). Only the one for the
+    // active mode is built. Both do the node-id-space validation on first touch.
     std::unordered_map<uint64_t, std::string> hst_path_name;
-    graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
-        std::string name = graph.get_path_name(path);
-        if (t2g.hst_names.find(name) != t2g.hst_names.end()) {
-            hst_path_name.emplace(handlegraph::as_integer(path), std::move(name));
-        }
-    });
-
-    // Per-node HST-step cache. Scanning a node's path steps (for_each_step_on_handle)
-    // is the dominant runtime cost, and a run revisits the same nodes many times: every
-    // read that aligns through a shared exon or backbone node repeats the full step scan.
-    // Cache each distinct node's HST crossings on first lookup and replay the cached
-    // vector afterward, so each node is scanned at most once. Entries store pointers into
-    // hst_path_name, whose values are inserted once above and never modified afterward, so
-    // the addresses stay valid. Output is byte-identical: the tally accumulates per path
-    // name and is order-independent, and one entry is stored per step (a path visiting a
-    // node twice still contributes twice). Memory is O(HST steps on the nodes the GAMP
-    // actually touches) -- the working set, not the whole graph.
     std::unordered_map<int64_t, std::vector<std::pair<const std::string*, bool>>> node_hst_cache;
+    pathtally::PathLookup lookup;
+    std::unordered_map<uint64_t, std::pair<uint32_t, bool>> path_gene_layer;  // path -> (gene, is_exon)
+    std::unordered_map<int64_t, std::vector<std::tuple<uint32_t, bool, bool>>> node_ledger_cache;
+    std::function<void(int64_t, const std::function<void(uint32_t, bool, bool)>&)> ledger_lookup;
 
-    // Injected HST lookup: emit each HST path crossing a node, with its orientation there.
-    pathtally::PathLookup lookup = [&](int64_t node_id,
-                                       const std::function<void(const std::string&, bool)>& emit) {
-        auto cached = node_hst_cache.find(node_id);
-        if (cached == node_hst_cache.end()) {
-            if (!graph.has_node(node_id)) {
-                throw std::runtime_error(
-                    "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
-                    " is absent from the graph; the GAMP was likely aligned to a different graph");
+    if (options.count_mode == pathtally::CountMode::Score) {
+        graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+            std::string name = graph.get_path_name(path);
+            if (t2g.hst_names.find(name) != t2g.hst_names.end()) {
+                hst_path_name.emplace(handlegraph::as_integer(path), std::move(name));
             }
-            std::vector<std::pair<const std::string*, bool>> entries;
-            const handlegraph::handle_t handle = graph.get_handle(node_id, false);
-            graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
-                const auto it =
-                    hst_path_name.find(handlegraph::as_integer(graph.get_path_handle_of_step(step)));
-                if (it != hst_path_name.end()) {
-                    entries.emplace_back(&it->second,
-                                         graph.get_is_reverse(graph.get_handle_of_step(step)));
+        });
+        lookup = [&](int64_t node_id, const std::function<void(const std::string&, bool)>& emit) {
+            auto cached = node_hst_cache.find(node_id);
+            if (cached == node_hst_cache.end()) {
+                if (!graph.has_node(node_id)) {
+                    throw std::runtime_error(
+                        "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
+                        " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
-                return true;
-            });
-            cached = node_hst_cache.emplace(node_id, std::move(entries)).first;
-        }
-        for (const auto& [name_ptr, path_is_reverse] : cached->second) {
-            emit(*name_ptr, path_is_reverse);
-        }
-    };
+                std::vector<std::pair<const std::string*, bool>> entries;
+                const handlegraph::handle_t handle = graph.get_handle(node_id, false);
+                graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
+                    const auto it =
+                        hst_path_name.find(handlegraph::as_integer(graph.get_path_handle_of_step(step)));
+                    if (it != hst_path_name.end()) {
+                        entries.emplace_back(&it->second,
+                                             graph.get_is_reverse(graph.get_handle_of_step(step)));
+                    }
+                    return true;
+                });
+                cached = node_hst_cache.emplace(node_id, std::move(entries)).first;
+            }
+            for (const auto& [name_ptr, path_is_reverse] : cached->second) {
+                emit(*name_ptr, path_is_reverse);
+            }
+        };
+    } else {
+        graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+            const std::string name = graph.get_path_name(path);
+            const auto e = exon_path_gene.find(name);
+            if (e != exon_path_gene.end()) {
+                path_gene_layer[handlegraph::as_integer(path)] = {t2g.target_ids.at(e->second), true};
+                return;
+            }
+            const auto b = body_path_gene.find(name);
+            if (b != body_path_gene.end()) {
+                path_gene_layer[handlegraph::as_integer(path)] = {t2g.target_ids.at(b->second), false};
+            }
+        });
+        ledger_lookup = [&](int64_t node_id, const std::function<void(uint32_t, bool, bool)>& emit) {
+            auto cached = node_ledger_cache.find(node_id);
+            if (cached == node_ledger_cache.end()) {
+                if (!graph.has_node(node_id)) {
+                    throw std::runtime_error(
+                        "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
+                        " is absent from the graph; the GAMP was likely aligned to a different graph");
+                }
+                // gene -> (is_exon, gene_is_reverse); a node on both a gene's exon and body paths
+                // is exonic (exon wins).
+                std::map<uint32_t, std::pair<bool, bool>> per_gene;
+                const handlegraph::handle_t handle = graph.get_handle(node_id, false);
+                graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
+                    const auto it = path_gene_layer.find(
+                        handlegraph::as_integer(graph.get_path_handle_of_step(step)));
+                    if (it != path_gene_layer.end()) {
+                        auto& entry = per_gene[it->second.first];
+                        entry.first = entry.first || it->second.second;
+                        entry.second = graph.get_is_reverse(graph.get_handle_of_step(step));
+                    }
+                    return true;
+                });
+                std::vector<std::tuple<uint32_t, bool, bool>> entries;
+                for (const auto& [gene_idx, flags] : per_gene) {
+                    entries.emplace_back(gene_idx, flags.first, flags.second);
+                }
+                cached = node_ledger_cache.emplace(node_id, std::move(entries)).first;
+            }
+            for (const auto& [gene_idx, is_exon, is_reverse] : cached->second) {
+                emit(gene_idx, is_exon, is_reverse);
+            }
+        };
+    }
 
     std::shared_ptr<pathtally::QualAdjScorer> qual_adj_scorer;
     pathtally::NodeScorer node_scorer = pathtally::flat_scorer();
@@ -837,6 +972,7 @@ int run_convert(int argc, char** argv) {
     size_t grouping_recurrence_failures = 0;
     size_t no_compatible_transcript_groups = 0;
     size_t strand_filtered_groups = 0;
+    size_t multigene_dropped_groups = 0;
     size_t unaligned_reads = 0;
     size_t raw_molecule_missing_groups = 0;
     size_t raw_molecule_malformed_groups = 0;
@@ -858,6 +994,7 @@ int run_convert(int argc, char** argv) {
     Group current_group;
     // Reused across every group so the per-group tally does not reallocate its table.
     pathtally::TallyMap tally_workspace;
+    std::map<std::string, pathtally::GeneLedger> gene_ledger;  // reused across groups (ledger modes)
 
     auto start_group = [&](const vg::MultipathAlignment& alignment) {
         if (completed_names.count(alignment.name()) != 0) {
@@ -908,13 +1045,54 @@ int run_convert(int argc, char** argv) {
             return;
         }
 
-        std::vector<const vg::MultipathAlignment*> record_ptrs;
-        record_ptrs.reserve(current_group.records.size());
-        for (const vg::MultipathAlignment& record : current_group.records) {
-            record_ptrs.push_back(&record);
+        std::vector<pathtally::RadTarget> targets;
+        if (options.count_mode == pathtally::CountMode::Score) {
+            std::vector<const vg::MultipathAlignment*> record_ptrs;
+            record_ptrs.reserve(current_group.records.size());
+            for (const vg::MultipathAlignment& record : current_group.records) {
+                record_ptrs.push_back(&record);
+            }
+            pathtally::tally_read_group_into(tally_workspace, record_ptrs, lookup, node_scorer);
+            targets = pathtally::select_targets(tally_workspace);
+        } else {
+            // Ledger modes: per gene, tally the read's exonic and intronic aligned bases (and
+            // orientation) over its aligned nodes, then keep the genes the mode rule accepts.
+            gene_ledger.clear();
+            int64_t read_length = 0;
+            for (const vg::MultipathAlignment& record : current_group.records) {
+                read_length = std::max(read_length, static_cast<int64_t>(record.sequence().size()));
+                for (int s = 0; s < record.subpath_size(); ++s) {
+                    const vg::Path& path = record.subpath(s).path();
+                    for (int i = 0; i < path.mapping_size(); ++i) {
+                        const vg::Mapping& mapping = path.mapping(i);
+                        const int64_t aligned = pathtally::mapping_aligned_bases(mapping);
+                        if (aligned == 0) {
+                            continue;
+                        }
+                        const bool read_is_reverse = mapping.position().is_reverse();
+                        ledger_lookup(mapping.position().node_id(),
+                                      [&](uint32_t gene_idx, bool is_exon, bool gene_is_reverse) {
+                                          pathtally::GeneLedger& gl =
+                                              gene_ledger[t2g.target_names[gene_idx]];
+                                          if (is_exon) {
+                                              gl.exonic_bases += aligned;
+                                          } else {
+                                              gl.intronic_bases += aligned;
+                                          }
+                                          if (read_is_reverse == gene_is_reverse) {
+                                              gl.forward_bases += aligned;
+                                          } else {
+                                              gl.reverse_bases += aligned;
+                                          }
+                                      });
+                    }
+                }
+            }
+            for (const auto& [gene, forward] :
+                 pathtally::apply_count_mode(options.count_mode, gene_ledger, read_length)) {
+                targets.push_back({gene, forward});
+            }
         }
-        pathtally::tally_read_group_into(tally_workspace, record_ptrs, lookup, node_scorer);
-        std::vector<pathtally::RadTarget> targets = pathtally::select_targets(tally_workspace);
 
         if (targets.empty()) {
             ++no_compatible_transcript_groups;
@@ -942,6 +1120,15 @@ int run_convert(int argc, char** argv) {
                 have_group = false;
                 return;
             }
+        }
+
+        // Ledger count modes are Unique (CellRanger default): a read compatible with more than
+        // one gene is dropped rather than emitted for all.
+        if (options.count_mode != pathtally::CountMode::Score && targets.size() > 1) {
+            ++multigene_dropped_groups;
+            completed_names.insert(current_group.name);
+            have_group = false;
+            return;
         }
 
         std::vector<TargetHit> hits;
@@ -1032,7 +1219,8 @@ int run_convert(int argc, char** argv) {
                         std::to_string(input_read_groups) + "\nemitted_groups\t" +
                         std::to_string(rad_writer.record_count()) + "\nno_compatible_transcript_groups\t" +
                         std::to_string(no_compatible_transcript_groups) + "\nstrand_filtered_groups\t" +
-                        std::to_string(strand_filtered_groups) + "\nunaligned_reads\t" +
+                        std::to_string(strand_filtered_groups) + "\nmultigene_dropped_groups\t" +
+                        std::to_string(multigene_dropped_groups) + "\nunaligned_reads\t" +
                         std::to_string(unaligned_reads) + "\nraw_molecule_missing_groups\t" +
                         std::to_string(raw_molecule_missing_groups) + "\nraw_molecule_malformed_groups\t" +
                         std::to_string(raw_molecule_malformed_groups) + "\nraw_molecule_unsupported_groups\t" +

@@ -48,6 +48,8 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
                     [--raw-cb-length 16] [--raw-umi-length 12]
                     [--score flat|qualadj] [--molecule-identity-failures skip|fail]
                     [--strand both|forward|reverse]
+                    [--count-mode score|gene|genefull|genefull_exonoverintron|genefull_ex50pas
+                     --body-t2g body.t2g]
                     [--bam-out reads.bam] [--bam-multigene omit|first]
 ```
 
@@ -81,13 +83,21 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
   See [`docs/bam-export.md`](docs/bam-export.md).
 - `--bam-multigene omit|first` — `XT` tag policy for multi-gene reads (default `omit`).
 
-### GeneFull (intron-inclusive) counting
+### GeneFull / STARsolo-style counting
 
-GeneFull is not a flag — it is the ordinary count run against a graph annotated with **gene-body
-paths** and selected by the t2g. `scripts/make-gene-annotation.sh -x graph.xg -n annotation.gtf
--o genefull -l haplotypes.gbwt` embeds one unspliced gene-body path per gene (covering introns)
-and writes `genefull.t2g.tsv`. Then the same graph gives a spliced count with your HST t2g or a
-GeneFull count with the gene t2g. See [`docs/genefull.md`](docs/genefull.md).
+`scripts/make-gene-annotation.sh -x graph.xg -n annotation.gtf -o genefull -l haplotypes.gbwt`
+embeds one unspliced gene-body path per gene (covering introns) alongside the HST paths, and
+writes `genefull.t2g.tsv`. There are two ways to use it:
+
+- **Coarse, no flag:** run the default count with your HST t2g for a spliced count, or with the
+  gene-body t2g for a GeneFull-ish count. Same graph, the t2g selects the layer.
+- **`--count-mode` for exact STARsolo/CellRanger rules:** `gene` (exonic, ≥50% of the read on
+  exons), `genefull` (any body overlap), `genefull_exonoverintron` / `genefull_ex50pas` (the
+  CellRanger v7 default, which prefers >50%-exon genes and drops 100%-exonic antisense reads).
+  These read **both** layers at once — `--t2g` is the exon layer, `--body-t2g` the gene-body
+  layer — and count reads by per-gene exonic/intronic aligned bases with CellRanger's `Unique`
+  multimapper rule (a read compatible with >1 gene is dropped, counted in
+  `multigene_dropped_groups`). See [`docs/genefull.md`](docs/genefull.md).
 
 ### Outputs (in `--out-dir`)
 

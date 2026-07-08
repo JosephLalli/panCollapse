@@ -25,6 +25,13 @@ All notable changes to panCollapse are recorded here. Versions follow the projec
   `forward` for a sense-stranded library to drop antisense reads (like STARsolo
   `GeneFull_Ex50pAS`'s antisense exclusion / `--soloStrand`). Opt-in; `both` reverses nothing
   (D042 preserved as the default). (D056)
+- **`--count-mode` + `--body-t2g`** — reproduce STARsolo/CellRanger `soloFeatures` exactly by
+  counting per-gene exonic vs intronic aligned bases across two path->gene t2gs (exon/HST +
+  gene-body). Modes: `gene` (>=50% exonic), `genefull` (any body overlap),
+  `genefull_exonoverintron`, `genefull_ex50pas` (CellRanger v7 default: prefer >50%-exon genes,
+  drop 100%-exonic antisense). All apply the `Unique` multimapper rule (a read compatible with >1
+  gene is dropped, counted in the new `multigene_dropped_groups`). Default `--count-mode score` is
+  the unchanged D048 count. See [`docs/genefull.md`](docs/genefull.md). (D057)
 
 ### Notes
 
