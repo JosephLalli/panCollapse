@@ -405,6 +405,14 @@ add_test(NAME genefull_ledger_genefull
 set_tests_properties(genefull_ledger_genefull PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
+# A bare, suffix-stripped tx<TAB>gene (the standard downstream format) must give the SAME ledger
+# result as the path-keyed t2g -- panCollapse strips each embedded path's _R<n>/_H<n> copy suffix and
+# falls back to the bare id. Regression guard for the v0.4.1 bare-t2g fallback.
+add_test(NAME genefull_ledger_bare_t2g
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/bare_t2g_regression.sh" "$<TARGET_FILE:panCollapse>" "${GF_FIX}" "${GF_DIR}")
+set_tests_properties(genefull_ledger_bare_t2g PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
+
 # Ex50pAS excludes a 100%-exonic ANTISENSE read: genefull keeps both a sense and an antisense
 # exon read, genefull_ex50pas drops the antisense one.
 add_test(NAME genefull_ledger_ex50pas_antisense

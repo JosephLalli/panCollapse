@@ -871,12 +871,23 @@ int run_convert(int argc, char** argv) {
     } else {
         graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
             const std::string name = graph.get_path_name(path);
-            const auto e = exon_path_gene.find(name);
+            // Accept either a raw path-name-keyed t2g or a suffix-stripped (bare transcript/gene)
+            // t2g: look up the full embedded path name first, then fall back to the copy-suffix-
+            // stripped id (trailing _R<n>/_H<n> removed) so a standard tx<TAB>gene file works
+            // unchanged. The full name wins if both are present, preserving exact path-keyed behavior.
+            const std::string base = pathtally::transcript_id_of(name);
+            auto e = exon_path_gene.find(name);
+            if (e == exon_path_gene.end() && base != name) {
+                e = exon_path_gene.find(base);
+            }
             if (e != exon_path_gene.end()) {
                 path_gene_layer[handlegraph::as_integer(path)] = {t2g.target_ids.at(e->second), true};
                 return;
             }
-            const auto b = body_path_gene.find(name);
+            auto b = body_path_gene.find(name);
+            if (b == body_path_gene.end() && base != name) {
+                b = body_path_gene.find(base);
+            }
             if (b != body_path_gene.end()) {
                 path_gene_layer[handlegraph::as_integer(path)] = {t2g.target_ids.at(b->second), false};
             }
