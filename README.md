@@ -50,7 +50,7 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
                     [--strand both|forward|reverse]
                     [--count-mode score|gene|genefull|genefull_exonoverintron|genefull_ex50pas
                      --body-t2g body.t2g]
-                    [--bam-out reads.bam] [--bam-multigene omit|first]
+                    [--bam-out reads.bam] [--bam-multigene omit|first|all]
 ```
 
 ### Inputs
@@ -81,7 +81,9 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
 - `--bam-out <path>` — also write a BAM for a CellRanger-style counting stack (UMI-tools +
   DropletUtils `emptyDropsCellRanger`). Opt-in; the RAD is byte-identical with or without it.
   See [`docs/bam-export.md`](docs/bam-export.md).
-- `--bam-multigene omit|first` — `XT` tag policy for multi-gene reads (default `omit`).
+- `--bam-multigene omit|first|all` — `XT` tag policy for multi-gene reads (default `omit`). `all` is
+  a ledger-`--count-mode`-only rescue path that carries a multi-gene read into the BAM instead of
+  dropping it, for a downstream UMI-level rescue; see [`docs/bam-export.md`](docs/bam-export.md).
 
 ### GeneFull / STARsolo-style counting
 
