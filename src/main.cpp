@@ -44,8 +44,14 @@ enum class MoleculeIdentityFailurePolicy { Skip, Fail };
 enum class ScoreMode { Flat, QualAdj };
 
 // XT-tag policy for reads compatible with more than one gene. Omit skips XT (a --per-gene
-// counter then ignores the read); First writes XT for the first gene in sorted order.
-enum class BamMultiGenePolicy { Omit, First };
+// counter then ignores the read); First writes XT for the first gene in sorted order; All is a
+// ledger-count-mode-only policy that additionally carries the read into the BAM at all (it is
+// otherwise hard-dropped from both RAD and BAM for the ledger --count-mode Unique rule), tagged
+// with its full candidate-gene GX set and no XT, so a downstream UMI-level rescue
+// (STARsolo/CellRanger MultiGeneUMI_CR) can resolve the dominant gene. All has no effect in
+// --count-mode score, where multi-target reads are ordinary D048 multimapping evidence, already
+// emitted to both RAD and BAM.
+enum class BamMultiGenePolicy { Omit, First, All };
 
 // Target-relative orientation filter. Both keeps every compatible target (default, no
 // filtering). Forward keeps only targets the read aligns to in the same orientation (sense);
@@ -113,7 +119,7 @@ constexpr const char* kUsageText =
     "[--score flat|qualadj] [--molecule-identity-failures skip|fail] "
     "[--strand both|forward|reverse] "
     "[--count-mode score|gene|genefull|genefull_exonoverintron|genefull_ex50pas --body-t2g body.t2g] "
-    "[--bam-out reads.bam] [--bam-multigene omit|first]";
+    "[--bam-out reads.bam] [--bam-multigene omit|first|all]";
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(kUsageText);
@@ -218,6 +224,8 @@ Options parse_options(int argc, char** argv) {
                 options.bam_multigene = BamMultiGenePolicy::Omit;
             } else if (value == "first") {
                 options.bam_multigene = BamMultiGenePolicy::First;
+            } else if (value == "all") {
+                options.bam_multigene = BamMultiGenePolicy::All;
             } else {
                 usage_error();
             }
@@ -1133,28 +1141,42 @@ int run_convert(int argc, char** argv) {
             }
         }
 
-        // Ledger count modes are Unique (CellRanger default): a read compatible with more than
-        // one gene is dropped rather than emitted for all.
-        if (options.count_mode != pathtally::CountMode::Score && targets.size() > 1) {
+        // Ledger count modes are Unique (CellRanger default) for the RAD/alevin-fry path: a read
+        // compatible with more than one gene gets no RAD record. --bam-multigene all is a
+        // BAM-only exception to that drop (see the BamMultiGenePolicy::All comment): it still
+        // carries the read into the optional BAM, tagged with its full candidate-gene set and no
+        // XT, so a downstream UMI-level rescue can resolve the dominant gene the RAD/Unique rule
+        // discards. Without --bam-out (or under omit/first), a ledger multi-gene read is dropped
+        // from both outputs exactly as before.
+        const bool ledger_multigene =
+            options.count_mode != pathtally::CountMode::Score && targets.size() > 1;
+        const bool bam_rescues_multigene =
+            ledger_multigene && bam_writer && options.bam_multigene == BamMultiGenePolicy::All;
+        if (ledger_multigene) {
             ++multigene_dropped_groups;
-            completed_names.insert(current_group.name);
-            have_group = false;
-            return;
+            if (!bam_rescues_multigene) {
+                completed_names.insert(current_group.name);
+                have_group = false;
+                return;
+            }
         }
 
         std::vector<TargetHit> hits;
-        hits.reserve(targets.size());
-        for (const pathtally::RadTarget& target : targets) {
-            const auto target_id = t2g.target_ids.find(target.transcript);
-            if (target_id == t2g.target_ids.end()) {
-                throw std::runtime_error("compatible transcript " + target.transcript + " is absent from the t2g");
+        if (!ledger_multigene) {
+            hits.reserve(targets.size());
+            for (const pathtally::RadTarget& target : targets) {
+                const auto target_id = t2g.target_ids.find(target.transcript);
+                if (target_id == t2g.target_ids.end()) {
+                    throw std::runtime_error("compatible transcript " + target.transcript + " is absent from the t2g");
+                }
+                hits.push_back({target_id->second, target.forward});
             }
-            hits.push_back({target_id->second, target.forward});
+            rad_writer.write_record(current_group.molecule, hits);
         }
-        rad_writer.write_record(current_group.molecule, hits);
         if (bam_writer) {
-            // Same targets as the RAD record; collapse to the sorted unique gene set. std::set
-            // gives the deterministic order for GX and for the primary (first) gene contig.
+            // Same targets as the RAD record (or, for a bam_rescues_multigene read, the targets
+            // the RAD dropped): collapse to the sorted unique gene set. std::set gives the
+            // deterministic order for GX and for the primary (first) gene contig.
             std::set<std::string> genes;
             for (const pathtally::RadTarget& target : targets) {
                 genes.insert(t2g.transcript_gene.at(target.transcript));
@@ -1175,7 +1197,11 @@ int run_convert(int argc, char** argv) {
                                      current_group.molecule.barcode, current_group.molecule.umi, gx,
                                      /*gn=*/gx, /*xt=*/primary_gene, has_xt);
         }
-        ++emitted_target_histogram[hits.size()];
+        // hits stays empty for a ledger multi-gene read (RAD skipped even when the BAM rescues
+        // it), so the RAD emitted-target histogram reflects only actual RAD records.
+        if (!ledger_multigene) {
+            ++emitted_target_histogram[hits.size()];
+        }
         completed_names.insert(current_group.name);
         have_group = false;
     };

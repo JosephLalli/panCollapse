@@ -3,6 +3,37 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.4.3]
+
+### Added
+
+- **`--bam-multigene all`** (D058). For the ledger `--count-mode` modes (`gene`, `genefull`,
+  `genefull_exonoverintron`, `genefull_ex50pas`) ONLY, a read compatible with more than one gene is
+  still dropped from `map.rad` exactly as before (`multigene_dropped_groups`), but under `all` it is
+  now also written to the optional `--bam-out` BAM, tagged with its full candidate-gene set (`GX`)
+  and no `XT`. Previously such a read was hard-dropped from BOTH outputs, so a downstream UMI-level
+  rescue (STARsolo/CellRanger `MultiGeneUMI_CR`: assign the UMI to its dominant gene, discard on an
+  exact tie) never saw it. `--count-mode score` and `--bam-multigene omit`/`first` are byte-identical
+  to v0.4.2 -- this is purely additive. See `docs/decisions.md` D058 for the full mechanism and the
+  STARsolo-source tie-rule verification.
+
+## [0.4.2]
+
+Infrastructure release. No change to the binary, its inputs, or its output: the RAD,
+`tx2gene.tsv`, `summary.tsv`, and optional BAM are byte-identical to v0.4.1 on the same
+inputs (the bundled binary still reports `panCollapse 0.4.1`). Only the runtime image
+changed.
+
+### Changed
+
+- **Runtime image installs `procps`.** The Nextflow docker executor invokes `ps` inside the
+  container to collect per-task resource metrics; the v0.4.1 image (`debian:bookworm-slim`,
+  which omits it) made Nextflow abort the task with "Command 'ps' required by nextflow to
+  collect task metrics cannot be found". The image now adds the `procps` package
+  (`/bin/ps`) in its own layer. `ps` is unrelated to the bundled binary, which runs through
+  its own dynamic loader independent of the base image. Published as
+  `josephlalli/pancollapse:v0.4.2`.
+
 ## [0.4.0]
 
 ### Added

@@ -14,8 +14,16 @@
 
 FROM debian:bookworm-slim
 
+# procps provides /bin/ps, which the Nextflow docker executor invokes inside the
+# container to collect per-task resource metrics. It is unrelated to the bundled
+# binary (which runs through its own loader below); without it Nextflow aborts the
+# task with "Command 'ps' ... cannot be found".
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends procps \
+ && rm -rf /var/lib/apt/lists/*
+
 LABEL org.opencontainers.image.title="panCollapse" \
-      org.opencontainers.image.version="0.4.0" \
+      org.opencontainers.image.version="0.4.3" \
       org.opencontainers.image.description="Convert vg mpmap GAMP multipath alignments into alevin-fry RAD records (PathTally graph-native transcript-compatibility scoring)." \
       org.opencontainers.image.source="https://github.com/JosephLalli/panCollapse" \
       org.opencontainers.image.licenses="Apache-2.0"

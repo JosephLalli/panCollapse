@@ -40,7 +40,7 @@ gene are skipped, as they are in the RAD). Each record is:
 | `UB` / `UR` | UMI (raw). Likewise `UB` == `UR`. |
 | `GX` | the **full set** of compatible gene ids, sorted and `;`-separated. Never collapsed to one gene — emitting the complete set is what keeps the export lossless. |
 | `GN` | gene names paired with `GX`. panCollapse's t2g carries only gene ids, so `GN` == `GX`. |
-| `XT` | a **single** resolved gene for `umi_tools --gene-tag=XT`. Present (= the one gene) when the read is compatible with exactly one gene; **omitted** when compatible with more than one gene, so a `--per-gene` counter skips it (matching CellRanger `soloMultiMappers Unique`). `--bam-multigene first` instead writes `XT` = the first gene. `GX`/`GN` always carry the full set regardless. |
+| `XT` | a **single** resolved gene for `umi_tools --gene-tag=XT`. Present (= the one gene) when the read is compatible with exactly one gene; **omitted** when compatible with more than one gene, so a `--per-gene` counter skips it (matching CellRanger `soloMultiMappers Unique`). `--bam-multigene first` instead writes `XT` = the first gene; `all` also omits `XT` (like the default) but ONLY has an effect in a ledger `--count-mode`, where it additionally stops the read from being dropped before it reaches the BAM at all (see below). `GX`/`GN` always carry the full set regardless. |
 
 The gene ids in `GX`/`XT` are exactly the t2g/`tx2gene.tsv` gene ids the RAD uses, so a
 BAM-derived matrix and a RAD-derived matrix live over the same gene space.
@@ -54,7 +54,22 @@ BAM-derived matrix and a RAD-derived matrix live over the same gene space.
 ## CLI
 
 - `--bam-out <path>` — write the BAM in addition to the RAD.
-- `--bam-multigene {omit|first}` — `XT` policy for multi-gene reads; default `omit`.
+- `--bam-multigene {omit|first|all}` — `XT` policy for multi-gene reads; default `omit`. `all` is a
+  ledger-`--count-mode`-only rescue path: see [GeneFull counting](genefull.md#multi-gene-bam-rescue).
+
+## Non-ledger multi-gene reads (`--count-mode score`, the default)
+
+Everything above is the unconditional `score`-mode behavior: a multi-gene-compatible read is
+ordinary D048 multimapping evidence and is ALWAYS written to both the RAD and the BAM (with the full
+`GX` and, per `--bam-multigene`, an `omit`ted/`first`/absent `XT`). `--bam-multigene all` has no
+additional effect here — there is nothing to rescue, since `score` mode never drops the read in the
+first place.
+
+## Ledger multi-gene reads (`--count-mode gene`/`genefull`/`genefull_exonoverintron`/`genefull_ex50pas`)
+
+The ledger count modes are different: they apply CellRanger's `Unique` rule and DROP a multi-gene
+read from the RAD (`docs/genefull.md`). `--bam-multigene all` is the exception for the BAM only —
+see `docs/genefull.md#multi-gene-bam-rescue`.
 
 ## Recipe
 

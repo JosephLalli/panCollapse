@@ -429,3 +429,84 @@ add_test(NAME genefull_ledger_ex50pas_antisense
     && ! '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep -q exonanti")
 set_tests_properties(genefull_ledger_ex50pas_antisense PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED genefull_annotated)
+
+# D058: --bam-multigene all. A dedicated fixture with TWO overlapping genes -- GENE1 (exons 1,3;
+# intron/body node 2) and GENE2 (body = node 2 exactly, wholly inside GENE1's intron) -- so a read
+# on the shared node 2 (multigeneread) is genuinely compatible with both gene bodies under a ledger
+# mode; exonread (nodes 1,3) stays GENE1-only, a control proving single-gene reads are untouched.
+set(MG_DIR "${CMAKE_CURRENT_BINARY_DIR}/multigene_bam_work")
+set(MG_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/multigene_bam_smoke")
+
+add_test(NAME multigene_bam_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${MG_DIR}")
+set_tests_properties(multigene_bam_setup PROPERTIES LABELS "vg;pathtally;genefull;multigene"
+  FIXTURES_SETUP multigene_bam_dir)
+
+add_test(NAME multigene_bam_gamp
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${MG_FIX}/reads.gamp.json' > '${MG_DIR}/reads.gamp'")
+set_tests_properties(multigene_bam_gamp PROPERTIES LABELS "vg;pathtally;genefull;multigene"
+  FIXTURES_REQUIRED multigene_bam_dir FIXTURES_SETUP multigene_bam_reads)
+
+add_test(NAME multigene_bam_annotate
+  COMMAND /bin/sh -c "'${CMAKE_SOURCE_DIR}/scripts/make-gene-annotation.sh' \
+    -x '${MG_FIX}/graph.gfa' -n '${MG_FIX}/annotation.gtf' -o '${MG_DIR}/genefull' --vg '${PT_VG}'")
+set_tests_properties(multigene_bam_annotate PROPERTIES LABELS "vg;pathtally;genefull;multigene"
+  FIXTURES_REQUIRED multigene_bam_dir FIXTURES_SETUP multigene_bam_annotated)
+
+# --bam-multigene omit (default): multigeneread is dropped from BOTH RAD and BAM, exactly as
+# before D058 -- this is the regression guard that the new flag did not change the old default.
+add_test(NAME multigene_bam_omit_drops_both
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
+    --count-mode genefull --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
+    --out-dir '${MG_DIR}/omit' --bam-out '${MG_DIR}/omit/reads.bam' --bam-multigene omit \
+    && grep -qP '^emitted_groups\\t1$' '${MG_DIR}/omit/summary.tsv' \
+    && grep -qP '^multigene_dropped_groups\\t1$' '${MG_DIR}/omit/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' quickcheck '${MG_DIR}/omit/reads.bam' \
+    && [ \"$('${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/omit/reads.bam' | wc -l)\" = 1 ] \
+    && ! '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/omit/reads.bam' | grep -q multigeneread")
+set_tests_properties(multigene_bam_omit_drops_both PROPERTIES LABELS "vg;pathtally;genefull;multigene"
+  FIXTURES_REQUIRED "multigene_bam_annotated;multigene_bam_reads")
+
+# --bam-multigene all: the multi-gene read now FLOWS THROUGH to the BAM (proving it is not
+# hard-dropped) carrying its full candidate-gene set (GX, no XT) for a downstream UMI-level rescue,
+# while the RAD stays completely unchanged (same multigene_dropped_groups=1, same emitted_groups=1,
+# byte-identical map.rad to a fresh --bam-multigene omit run) -- the ledger Unique/RAD contract from
+# D057 is untouched, only the optional BAM gains the record. exonread (single-gene) is unaffected
+# either way. Self-contained (runs its own omit comparison run rather than depending on another
+# test's output directory, so it has no ordering dependency beyond the shared annotated fixture).
+add_test(NAME multigene_bam_all_rescues_bam_only
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
+    --count-mode genefull --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
+    --out-dir '${MG_DIR}/all_cmp_omit' --bam-multigene omit \
+    && '$<TARGET_FILE:panCollapse>' convert \
+       --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
+       --count-mode genefull --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
+       --out-dir '${MG_DIR}/all' --bam-out '${MG_DIR}/all/reads.bam' --bam-multigene all \
+    && grep -qP '^emitted_groups\\t1$' '${MG_DIR}/all/summary.tsv' \
+    && grep -qP '^multigene_dropped_groups\\t1$' '${MG_DIR}/all/summary.tsv' \
+    && cmp '${MG_DIR}/all_cmp_omit/map.rad' '${MG_DIR}/all/map.rad' \
+    && '${PANCOLLAPSE_SAMTOOLS}' quickcheck '${MG_DIR}/all/reads.bam' \
+    && [ \"$('${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/all/reads.bam' | wc -l)\" = 2 ] \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/all/reads.bam' | grep multigeneread | grep -q 'GX:Z:GENE1;GENE2' \
+    && ! ('${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/all/reads.bam' | grep multigeneread | grep -q 'XT:Z') \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/all/reads.bam' | grep -w exonread | grep -q 'XT:Z:GENE1'")
+set_tests_properties(multigene_bam_all_rescues_bam_only PROPERTIES LABELS "vg;pathtally;genefull;multigene;bam"
+  FIXTURES_REQUIRED "multigene_bam_annotated;multigene_bam_reads")
+
+# score mode has no ledger drop to rescue from: --bam-multigene all is a true no-op there (RAD and
+# BAM records identical to omit; only the recorded @PG command line differs, which this test does
+# not compare). Confirms D058 does not touch the D048 default path.
+add_test(NAME multigene_bam_all_noop_in_score_mode
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' --t2g '${MG_FIX}/t2g.tsv' \
+    --out-dir '${MG_DIR}/score_omit' --bam-out '${MG_DIR}/score_omit/reads.bam' --bam-multigene omit \
+    && '$<TARGET_FILE:panCollapse>' convert \
+       --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' --t2g '${MG_FIX}/t2g.tsv' \
+       --out-dir '${MG_DIR}/score_all' --bam-out '${MG_DIR}/score_all/reads.bam' --bam-multigene all \
+    && cmp '${MG_DIR}/score_omit/map.rad' '${MG_DIR}/score_all/map.rad' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/score_omit/reads.bam' > '${MG_DIR}/score_omit_records.txt' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/score_all/reads.bam' > '${MG_DIR}/score_all_records.txt' \
+    && cmp '${MG_DIR}/score_omit_records.txt' '${MG_DIR}/score_all_records.txt'")
+set_tests_properties(multigene_bam_all_noop_in_score_mode PROPERTIES LABELS "vg;pathtally;genefull;multigene;bam"
+  FIXTURES_REQUIRED "multigene_bam_annotated;multigene_bam_reads")

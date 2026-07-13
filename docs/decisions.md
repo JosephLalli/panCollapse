@@ -1084,6 +1084,87 @@ the two annotation layers with no new index and no traversal enumeration, giving
 like-for-like comparison against STARsolo `Gene`/`GeneFull`/`GeneFull_Ex50pAS` while keeping the
 D048 count as the untouched default.
 
+### D058 — `--bam-multigene all`: carry ledger multi-gene reads into the BAM for a downstream UMI-level rescue
+
+**Decision source:** User (directed after a downstream consumer -- panSC, the sibling project that
+runs panCollapse through `count_cr.py` -- root-caused a ~4% gene-UMI undercount vs STARsolo,
+concentrated in classical-HLA/paralog loci, to exactly this gap; see that repo's
+`CAUSE_ANALYSIS.md` and its own `docs/decisions.md` entry `rna-crcount-multigene-rescue`).
+
+**Problem:** D057's ledger `gene`/`genefull_ex50pas`/`genefull_exonoverintron`/`genefull` modes
+correctly apply CellRanger's read-level `Unique` rule (a read kept for >1 gene is dropped,
+`multigene_dropped_groups`) but that is only HALF of CellRanger/STARsolo's actual algorithm.
+STARsolo layers a UMI-level rescue on top (`MultiGeneUMI_CR`): a UMI whose reads span >1 gene is
+still assigned to the gene where it has the most reads, discarding only on an exact tie. Because
+panCollapse hard-dropped the read before BAM emission, a downstream counter implementing that
+rescue (panSC's `count_cr.py`) never received the read to rescue -- the drop and the rescue must
+happen in different places (read-level drop is panCollapse's job pre-emission; UMI-level rescue
+needs to see every read for a UMI across cells first, which only the downstream counter can do),
+so closing the gap requires panCollapse to stop discarding the evidence, not to implement the
+rescue itself.
+
+**Decision:** Add `--bam-multigene all` alongside the existing `omit` (default) and `first`. It is
+active ONLY when a ledger `--count-mode` is set (in `score` mode there is no Unique drop to rescue
+from -- multi-target reads there are ordinary D048 multimapping evidence, already emitted to both
+RAD and BAM regardless of `--bam-multigene`) and ONLY when `--bam-out` is given (it is otherwise
+inert, matching how `omit`/`first` already behave without a BAM writer). Under `all`, a read the
+ledger Unique rule keeps for more than one gene is:
+- still counted in `multigene_dropped_groups` and still given NO `map.rad` record -- the RAD /
+  `emitted_target_histogram` / alevin-fry-facing contract is completely unchanged from D057; this
+  is a BAM-only change;
+- but IS written to the optional BAM (when `--bam-out` is set), carrying its full candidate-gene
+  set exactly as the existing `GX`/`GN` tags already do generically for any multi-gene read (no
+  change needed there) and no `XT` (so a `--per-gene --gene-tag=XT` counter still skips it, but a
+  counter reading `GX` can rescue it).
+
+**Implementation:** the read-level drop (`main.cpp`, formerly one unconditional early-return) is
+split into "drop from RAD" (unconditional for a ledger multi-gene read, as before) and "also skip
+BAM" (now conditional on `--bam-multigene all` AND a BAM writer being active). The BAM-emission
+block was already mode-agnostic (it builds `GX`/`GN`/`has_xt` from whatever `targets` it is given,
+regardless of `--count-mode`), so letting a ledger multi-gene read reach that block needed no
+changes to it beyond the existing `has_xt` computation, which already defaults to false for
+`genes.size() > 1` under any policy but `first`. `score` mode's code path is unaffected byte-for-byte:
+its multi-target reads were never subject to the D057 drop, so every new conditional degrades to
+the pre-D058 behavior for it.
+
+**Tie rule (verified against STARsolo source, not the docs, per the user's explicit request):**
+panCollapse does not implement the rescue itself -- that is the downstream counter's job (panSC's
+`count_cr.py`, which already had a correct `MultiGeneUMI_CR` implementation before this change; only
+its read-acceptance gate needed to stop skipping multi-gene reads). But the rule was still confirmed
+here because panCollapse's emission format (whether to carry the FULL gene set, and whether to omit
+or fabricate an `XT`) has to match what that rule needs to operate on. STARsolo 2.7.11b
+(`SoloFeature_collapseUMIall.cpp`, commit `b1edc1208d91a53bf40ebae8669f71d50b994851`, lines 203-238):
+a UMI (already 1MM_CR-corrected within a cell) is assigned to the gene with the STRICTLY highest
+read count; an exact tie for the max discards the UMI for every gene (not "keep first," not
+EM/Rescue distribution -- those are a separate mechanism gated by a different flag and do not apply
+here); a second guard re-checks each gene's PRE-correction raw read count for that UMI sequence and
+discards even a non-tied winner if another gene had a strictly higher raw count there. Also verified
+(`SoloReadFeature_record.cpp` `outputReadCB()`, the `reFe.geneMult` path): STARsolo's own upstream
+per-gene raw tally, for a single-alignment read overlapping more than one gene locus, logs one
+independent `(cell, gene, UMI, read)` entry per candidate gene -- i.e. the SAME physical read
+contributes a raw read to every gene it is compatible with, before the cross-gene resolution above
+picks the dominant one. This is the mechanism `--bam-multigene all`'s full `GX` set exists to make
+possible: the full candidate-gene set is exactly the input that upstream tally step needs.
+
+**Verification:** `pathtally_ledger_test` and the pure-rule unit tests are unaffected (the rule
+itself, `apply_count_mode`, was already correct and already returns every kept candidate gene for a
+multi-gene overlap -- see the existing `GeneFull: two bodies -> both` case -- the gap was entirely
+in the caller's post-rule drop). New hermetic CTests (label `multigene`) on the `genefull_smoke`
+fixture, extended with a second gene body overlapping the first gene's intron node so a read on
+that shared node is genuinely multi-gene under a ledger mode: `--bam-multigene omit` (default)
+still drops the read from BOTH RAD and BAM exactly as D057 (`multigene_dropped_groups` increments,
+no BAM record); `--bam-multigene all` drops it from RAD (`multigene_dropped_groups` still
+increments, `emitted_groups` unchanged) but the read now appears in the BAM tagged `GX` with both
+genes and no `XT`. Full suite 58/58.
+
+**Rationale:** This closes the gap without duplicating the rescue logic panSC's `count_cr.py`
+already implements and had independently verified against STARsolo source -- panCollapse's job is
+only to stop discarding the evidence a correct downstream rescue needs, which is exactly the
+"graph annotation carries the evidence, no custom logic duplicated downstream" pattern D055/D057
+already established for gene-body annotation. Making `all` an explicit opt-in (not the new default)
+keeps `omit`/`first` byte-identical to before, so no existing consumer's BAM output changes unless
+it asks for the new policy.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

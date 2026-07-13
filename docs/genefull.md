@@ -92,6 +92,25 @@ dropped and counted in `multigene_dropped_groups` (CellRanger's default; `Rescue
 distribution are not implemented). Reads kept for exactly one gene are emitted to the RAD/BAM as
 usual. The default `--count-mode score` is the D048 count and is unchanged.
 
+## Multi-gene BAM rescue (`--bam-multigene all`)
+
+`Unique` is only HALF of CellRanger/STARsolo's actual multi-gene handling. STARsolo layers a
+UMI-level rescue on top (`MultiGeneUMI_CR`): a UMI whose reads span more than one gene is still
+assigned to the gene where it has the most reads, discarding only on an exact tie. panCollapse does
+not implement that rescue itself — it needs to see every read for a UMI across the whole run first,
+which is a downstream counter's job, not a per-read-group streaming converter's. What panCollapse
+*can* do is stop discarding the evidence the rescue needs.
+
+`--bam-multigene all` does exactly that, and ONLY for the optional BAM: a ledger-mode read kept for
+more than one gene is still dropped from `map.rad` (`multigene_dropped_groups` still counts it, the
+RAD/alevin-fry contract is unchanged), but it is now ALSO written to `--bam-out`, carrying its full
+candidate-gene `GX` set and no `XT` — the same tags any multi-gene read already gets under `omit`,
+except the read is no longer hard-dropped before reaching the BAM at all. A downstream counter that
+reads `GX` for a no-`XT` record (rather than skipping it, as a plain `--gene-tag=XT` counter does)
+can then apply its own `MultiGeneUMI_CR`-equivalent resolution across the candidate genes. `all` has
+no effect in `--count-mode score` (there is no Unique drop there to rescue from — a multi-target
+`score`-mode read was never dropped, under any `--bam-multigene` policy) or without `--bam-out`.
+
 ## Strandedness
 
 By default GeneFull counts a read for a gene regardless of the read's orientation. For a
