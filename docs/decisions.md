@@ -1087,9 +1087,14 @@ D048 count as the untouched default.
 ### D058 — `--bam-multigene all`: carry ledger multi-gene reads into the BAM for a downstream UMI-level rescue
 
 **Decision source:** User (directed after a downstream consumer -- panSC, the sibling project that
-runs panCollapse through `count_cr.py` -- root-caused a ~4% gene-UMI undercount vs STARsolo,
-concentrated in classical-HLA/paralog loci, to exactly this gap; see that repo's
-`CAUSE_ANALYSIS.md` and its own `docs/decisions.md` entry `rna-crcount-multigene-rescue`).
+runs panCollapse through `count_cr.py` -- root-caused a ~4% gene-UMI undercount vs STARsolo
+(target-2 MHC GEX, 2,388,781 read pairs) to exactly this gap: panCollapse's ledger `Unique` rule
+correctly drops a read compatible with >1 gene, but never carries it anywhere a UMI-level rescue
+could see it, so STARsolo's `MultiGeneUMI_CR` rescue -- which panSC's `count_cr.py` already
+implements -- had nothing to rescue. The deficit was concentrated in classical-HLA/paralog loci
+(89.7% of |delta|; HLA-B alone -10,694 UMIs, Gene model); H2/H3/H4 (UMI dedup, mapping gap,
+gene-set mismatch) were each ruled out as contributing 0. See panSC's own `docs/decisions.md` entry
+`rna-crcount-multigene-rescue` for the full root-cause writeup this decision acts on).
 
 **Problem:** D057's ledger `gene`/`genefull_ex50pas`/`genefull_exonoverintron`/`genefull` modes
 correctly apply CellRanger's read-level `Unique` rule (a read kept for >1 gene is dropped,
