@@ -3,6 +3,31 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.4.4]
+
+### Changed
+
+- **Per-gene target orientation moved out of the collapse stage into a new `GD` BAM tag (D059).**
+  panCollapse now *emits* each read's per-gene orientation instead of only being able to *filter* on it,
+  so a downstream counter owns the sense/antisense policy. This fixes a strand gap in the ledger
+  `genefull_ex50pas`/`genefull` count modes: they kept antisense **intronic** reads that STARsolo's
+  `GeneFull_Ex50pAS` excludes (`intronicAS`), inflating large (−)-strand genes that overlap antisense
+  transcription. On a chr20 pangenome GEX benchmark, `count_cr.py --strand forward` (STARsolo sense-
+  strand default) now reproduces STARsolo: PTPRT 26,432 → 157 UMI (STAR 36), per-gene Pearson
+  0.966 → 0.995, shared-space UMI delta +12.4% → +1.55%. `--strand both` reproduces the pre-0.4.4
+  numbers exactly (Ex50pAS 1,078,434; gene 740,205), so the change is behavior-preserving with strand
+  the only new lever.
+
+### Added
+
+- **`GD` BAM tag** (`docs/bam-export.md`): per-gene target orientation, one `F` (sense/forward) / `R`
+  (antisense/reverse) per `GX` gene, `;`-separated and positionally parallel to `GX`. Additive — the
+  RAD path, the existing `--strand` RAD-side filter (D056), and `--count-mode score` are unchanged, and
+  all 58 tests pass. A STARsolo genome BAM carries no `GD`, so a `GD`-gated counter is a no-op there and
+  its counts are unchanged: Gene stays bit-identical to STARsolo (0 UMI diff) and GeneFull /
+  GeneFull_Ex50pAS match to 100.000% (a pre-existing 2-UMI/~922k residual from a MultiGeneUMI_CR
+  multimapper-tie edge, unrelated to this change). See `docs/decisions.md` D059.
+
 ## [0.4.3]
 
 ### Added

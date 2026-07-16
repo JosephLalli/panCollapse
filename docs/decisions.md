@@ -1170,6 +1170,60 @@ already established for gene-body annotation. Making `all` an explicit opt-in (n
 keeps `omit`/`first` byte-identical to before, so no existing consumer's BAM output changes unless
 it asks for the new policy.
 
+### D059 — Emit per-gene orientation (`GD`) and move the sense/antisense policy to the counter
+
+**Decision source:** User (directed after the same downstream consumer -- panSC's `count_cr.py` --
+benchmarked the vg pangenome arm against STARsolo on whole chr20 and found the intron-inclusive
+`genefull_ex50pas` count inflated by antisense reads: large (−)-strand genes overlapping antisense
+transcription over-counted up to ~700x, e.g. PTPRT vg 26,432 vs STAR 36, the pattern universal across
+the top over-counted genes -- PAK5, KIF16B, RALGAPA2, ATP9A -- every one (−)-strand and swamped by
+forward/antisense reads that STARsolo strand-excludes. The user's directive: "the correct strand
+(forward, reverse, both) should be an argument for the counter (default forward)").
+
+**Problem:** D056's `--strand` filter and D057's `genefull_ex50pas` both apply a strand *policy* inside
+the collapse/feature stage. D057's Ex50pAS rule dropped only a read that was 100%-exonic AND antisense
+(`pathtally_ledger.hpp`: `if (intronic_bases == 0 && !forward) break;`), so antisense *intronic* reads
+passed. STARsolo's `GeneFull_Ex50pAS` instead excludes ALL antisense body overlap (`intronicAS`
+included). The gap is invisible on small genes (the MHC benchmark missed it -- HLA genes have little
+intron) but on a genomic pangenome a large gene's body path collects the uniquely-mapped antisense
+reads physically present across its introns. The strand fact was also discarded at the BAM boundary
+(every record written forward, no strand tag), so a downstream counter could not re-apply the policy
+even though it owns the rest of the STARsolo-faithful counting.
+
+**Decision:** panCollapse *classifies* orientation (it already computes `target.forward` per candidate)
+and *emits* it as a new `GD` BAM tag -- one `F`/`R` per `GX` gene, `;`-separated and parallel to `GX`
+(a gene is `F` if any of the read's targets for it is forward, matching how the D056 `--strand` filter
+collapses targets to genes) -- rather than filtering on it. The sense/antisense *policy* moves
+downstream to the counter (`count_cr.py --strand forward|reverse|both`, default `forward` = STARsolo
+sense-strand). panCollapse runs strand-agnostic (`--strand both`, the default) so both orientations
+reach the BAM with their `GD`. This keeps panCollapse's per-read gene summary complete and lossless
+(the `GX`-is-the-full-set principle, D054), concentrates STARsolo-faithful feature semantics in the one
+validated component, and lets a single panCollapse run serve any strand policy (or a velocyto-style
+consumer that *uses* strand rather than filtering on it).
+
+**Implementation:** `BamWriter::write_record` gains a `gd` parameter and appends a `GD:Z:` tag; the
+emission block builds `gd` in the same sorted-gene-set loop that builds `gx`, from a `gene -> (any
+target forward)` map. `apply_count_mode` and the D056 `--strand` RAD-side filter are untouched
+(`--strand` still filters the RAD if a caller wants; the recommended path is `--strand both` +
+counter-side filtering). Purely additive: `score` mode and the RAD are byte-identical.
+
+**Verification:** all 58 CTests pass (the `bam`/`strand`-label tag-verify oracle tolerates the added
+tag). Downstream, `count_cr.py`'s strand filter is gated on the `GD` tag being present, so a STARsolo
+genome BAM (no `GD`) is never filtered and count_cr's counts are unchanged: Gene bit-identical to
+STARsolo (0 diff), GeneFull / GeneFull_Ex50pAS to 100.000% (r=1.0) modulo a pre-existing 2-UMI/~922k
+MultiGeneUMI_CR multimapper-tie residual that predates and is independent of this change. On the vg
+arm, `--strand both`
+reproduces the pre-0.4.4 numbers exactly (Ex50pAS 1,078,434; gene 740,205), and `--strand forward`
+collapses the antisense over-count -- PTPRT 26,432 → 157, per-gene Pearson 0.966 → 0.995, shared-space
+UMI delta +12.4% → +1.55%.
+
+**Rationale:** the same "panCollapse provides information, the counter applies policy" split D054/D058
+established: strand is an objective per-read fact best computed where the graph alignment is (only
+panCollapse has it), but a feature *policy* is best applied where the validated STARsolo-faithful logic
+lives (the counter). Welding the two inside `apply_count_mode` is exactly what produced the
+antisense-intronic gap; separating classify (upstream) from filter (downstream) removes that class of
+bug and makes strand a counter knob.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

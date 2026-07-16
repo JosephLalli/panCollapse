@@ -737,7 +737,7 @@ public:
     void write_record(const std::string& qname, int32_t gene_tid, const std::string& seq,
                       const std::string& qual, const std::string& cb, const std::string& ub,
                       const std::string& gx, const std::string& gn, const std::string& xt,
-                      bool has_xt) {
+                      bool has_xt, const std::string& gd) {
         const size_t l_seq = seq.size();
         const uint32_t cigar = (static_cast<uint32_t>(l_seq) << BAM_CIGAR_SHIFT) | BAM_CMATCH;
         const bool have_qual = !qual.empty() && qual.size() == l_seq;
@@ -753,6 +753,10 @@ public:
         append_tag("UR", ub);
         append_tag("GX", gx);
         append_tag("GN", gn);
+        // GD: per-gene orientation, one 'F' (sense/forward) or 'R' (antisense/reverse) per GX gene,
+        // ';'-separated and parallel to GX. panCollapse emits BOTH orientations (run --strand both)
+        // and records the orientation here so a downstream counter owns the sense/antisense policy.
+        append_tag("GD", gd);
         if (has_xt) {
             append_tag("XT", xt);
         }
@@ -1178,15 +1182,21 @@ int run_convert(int argc, char** argv) {
             // the RAD dropped): collapse to the sorted unique gene set. std::set gives the
             // deterministic order for GX and for the primary (first) gene contig.
             std::set<std::string> genes;
+            std::map<std::string, bool> gene_forward;  // gene -> sense iff any of its targets is forward
             for (const pathtally::RadTarget& target : targets) {
-                genes.insert(t2g.transcript_gene.at(target.transcript));
+                const std::string& gene = t2g.transcript_gene.at(target.transcript);
+                genes.insert(gene);
+                bool& f = gene_forward[gene];
+                f = f || target.forward;
             }
-            std::string gx;
+            std::string gx, gd;  // gd: 'F'/'R' per gene, parallel to gx (the sorted unique gene set)
             for (const std::string& gene : genes) {
                 if (!gx.empty()) {
                     gx += ';';
+                    gd += ';';
                 }
                 gx += gene;
+                gd += gene_forward[gene] ? 'F' : 'R';
             }
             const std::string& primary_gene = *genes.begin();
             const bool has_xt =
@@ -1195,7 +1205,7 @@ int run_convert(int argc, char** argv) {
             bam_writer->write_record(current_group.molecule.original_name,
                                      t2g.gene_ids.at(primary_gene), read.sequence(), read.quality(),
                                      current_group.molecule.barcode, current_group.molecule.umi, gx,
-                                     /*gn=*/gx, /*xt=*/primary_gene, has_xt);
+                                     /*gn=*/gx, /*xt=*/primary_gene, has_xt, /*gd=*/gd);
         }
         // hits stays empty for a ledger multi-gene read (RAD skipped even when the BAM rescues
         // it), so the RAD emitted-target histogram reflects only actual RAD records.

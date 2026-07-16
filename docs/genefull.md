@@ -92,6 +92,14 @@ dropped and counted in `multigene_dropped_groups` (CellRanger's default; `Rescue
 distribution are not implemented). Reads kept for exactly one gene are emitted to the RAD/BAM as
 usual. The default `--count-mode score` is the D048 count and is unchanged.
 
+> **Strand and `GeneFull_Ex50pAS`.** The "drop 100%-exonic antisense" step in the table is only
+> panCollapse's in-mode *fragment* of Ex50pAS. STARsolo's `GeneFull_Ex50pAS` excludes ALL antisense
+> body overlap (`intronicAS` too), not just 100%-exonic antisense — keeping antisense *intronic* reads
+> inflates large (−)-strand genes on a genomic pangenome (e.g. PTPRT ×734 vs STARsolo). Since v0.4.4
+> (D059) panCollapse does the rest by *emitting* each read's per-gene orientation (the `GD` tag) rather
+> than filtering on it, and the counter applies the full sense-strand policy — see
+> [Strandedness](#strandedness).
+
 ## Multi-gene BAM rescue (`--bam-multigene all`)
 
 `Unique` is only HALF of CellRanger/STARsolo's actual multi-gene handling. STARsolo layers a
@@ -113,12 +121,26 @@ no effect in `--count-mode score` (there is no Unique drop there to rescue from 
 
 ## Strandedness
 
-By default GeneFull counts a read for a gene regardless of the read's orientation. For a
-sense-stranded library, add `--strand forward` to keep only reads that align to the gene in the
-same (sense) orientation and drop antisense reads before counting — the orientation is the
-majority of aligned bases (the RAD `dirs`), and dropped reads are counted in
-`strand_filtered_groups`. This approximates STARsolo `GeneFull_Ex50pAS`'s antisense exclusion.
-`--strand reverse` keeps only antisense; `--strand both` (default) filters nothing.
+By default GeneFull counts a read for a gene regardless of the read's orientation. The read's
+per-gene orientation (sense/forward vs antisense/reverse — the majority of aligned bases, matching
+the RAD `dirs`) is classified by panCollapse and **emitted**, so which orientation to count is a
+*counter* choice rather than baked into the collapse:
+
+- **Recommended (D059):** run panCollapse strand-agnostic (`--strand both`, the default) so both
+  orientations reach the BAM, each tagged with its per-gene orientation in `GD` (see
+  [BAM export](bam-export.md)). The counter then applies the policy: `count_cr.py --strand forward`
+  keeps sense reads and drops **all** antisense — the full `GeneFull_Ex50pAS` antisense exclusion
+  (`intronicAS` included), not the 100%-exonic-only approximation of the in-mode rule. `--strand
+  reverse`/`both` select the other policies from the same BAM, no re-run.
+- **RAD-side (D056):** `--strand forward`/`reverse` still make panCollapse filter targets by
+  orientation before writing the RAD (dropped reads counted in `strand_filtered_groups`), for a
+  RAD/alevin-fry consumer that cannot read `GD`. `--strand both` (default) filters nothing.
+
+Strand is an objective per-read fact, but which orientation to *count* is a feature policy; emitting
+`GD` keeps panCollapse's gene summary complete and puts the STARsolo-faithful policy in the one
+validated counter (D059). On a chr20 pangenome benchmark this is what removes the antisense
+over-count of large (−)-strand genes: PTPRT 26,432 → 157 UMIs (STARsolo 36), and per-gene Pearson
+0.966 → 0.995 for `GeneFull_Ex50pAS`.
 
 ## Prerequisite: the graph must retain intron sequence
 

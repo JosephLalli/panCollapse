@@ -27,8 +27,9 @@ gene are skipped, as they are in the RAD). Each record is:
 
 - **Mapped** (FLAG 0), placed at position 1 of a **synthetic per-gene contig** — one `@SQ` per
   gene, named by the gene id, with a nominal length. The contig is the read's *primary* gene =
-  the first gene in its sorted gene set. Position and strand are nominal; the true target
-  orientation stays in the RAD `dirs`.
+  the first gene in its sorted gene set. The FLAG strand is nominal (every record is written
+  forward); the true per-gene target orientation is carried explicitly in the `GD` tag (and in the
+  RAD `dirs`), so a downstream counter — not panCollapse — owns the sense/antisense policy.
 - QNAME = the original read name (the prefix before the raw CB/UMI in the GAMP name).
 - SEQ/QUAL = the read's sequence/quality from the GAMP; CIGAR = `<length>M`.
 
@@ -40,6 +41,7 @@ gene are skipped, as they are in the RAD). Each record is:
 | `UB` / `UR` | UMI (raw). Likewise `UB` == `UR`. |
 | `GX` | the **full set** of compatible gene ids, sorted and `;`-separated. Never collapsed to one gene — emitting the complete set is what keeps the export lossless. |
 | `GN` | gene names paired with `GX`. panCollapse's t2g carries only gene ids, so `GN` == `GX`. |
+| `GD` | per-gene **target orientation**, one char per `GX` gene, `;`-separated and positionally parallel to `GX`: `F` = sense/forward (read aligns in the gene's path orientation), `R` = antisense/reverse. panCollapse runs strand-agnostic (default `--strand both`) and records the orientation here rather than filtering on it, so a downstream counter applies the sense/antisense policy (e.g. `count_cr.py --strand forward` = STARsolo sense-strand counting). A gene is `F` if any of the read's targets for it is forward. This is what lets strand be a *counter* choice while keeping panCollapse's per-read gene summary complete. |
 | `XT` | a **single** resolved gene for `umi_tools --gene-tag=XT`. Present (= the one gene) when the read is compatible with exactly one gene; **omitted** when compatible with more than one gene, so a `--per-gene` counter skips it (matching CellRanger `soloMultiMappers Unique`). `--bam-multigene first` instead writes `XT` = the first gene; `all` also omits `XT` (like the default) but ONLY has an effect in a ledger `--count-mode`, where it additionally stops the read from being dropped before it reaches the BAM at all (see below). `GX`/`GN` always carry the full set regardless. |
 
 The gene ids in `GX`/`XT` are exactly the t2g/`tx2gene.tsv` gene ids the RAD uses, so a
