@@ -737,7 +737,7 @@ public:
     void write_record(const std::string& qname, int32_t gene_tid, const std::string& seq,
                       const std::string& qual, const std::string& cb, const std::string& ub,
                       const std::string& gx, const std::string& gn, const std::string& xt,
-                      bool has_xt, const std::string& gd) {
+                      bool has_xt, const std::string& gd, const std::string& gl = "") {
         const size_t l_seq = seq.size();
         const uint32_t cigar = (static_cast<uint32_t>(l_seq) << BAM_CIGAR_SHIFT) | BAM_CMATCH;
         const bool have_qual = !qual.empty() && qual.size() == l_seq;
@@ -757,6 +757,13 @@ public:
         // ';'-separated and parallel to GX. panCollapse emits BOTH orientations (run --strand both)
         // and records the orientation here so a downstream counter owns the sense/antisense policy.
         append_tag("GD", gd);
+        // GL: per-gene ledger, ';'-separated and parallel to GX -- "exonic:intronic:concordant"
+        // (aligned bases on the gene's exons, on its intronic body, and 1/0 for per-transcript
+        // concordance). Lets a downstream counter own the count mode (Gene vs GeneFull vs the exon
+        // tie-breaks). Absent on the Score-mode BAM, so a GL-less BAM counts by XT/GX as before.
+        if (!gl.empty()) {
+            append_tag("GL", gl);
+        }
         if (has_xt) {
             append_tag("XT", xt);
         }
@@ -845,8 +852,17 @@ int run_convert(int argc, char** argv) {
     std::unordered_map<int64_t, std::vector<std::pair<const std::string*, bool>>> node_hst_cache;
     pathtally::PathLookup lookup;
     std::unordered_map<uint64_t, std::pair<uint32_t, bool>> path_gene_layer;  // path -> (gene, is_exon)
-    std::unordered_map<int64_t, std::vector<std::tuple<uint32_t, bool, bool>>> node_ledger_cache;
-    std::function<void(int64_t, const std::function<void(uint32_t, bool, bool)>&)> ledger_lookup;
+    // Per-node ledger cache. gene_entries drives the per-gene exon/intron/orientation ledger (exon
+    // wins per gene). exon_paths keeps each exon-layer path (== one transcript) crossing the node,
+    // un-collapsed, so a read can be tested for per-transcript concordance -- whether the whole read
+    // is contained in a single transcript -- which is what Gene mode needs, as opposed to the per-gene
+    // exon UNION the ledger alone gives.
+    struct NodeLedger {
+        std::vector<std::tuple<uint32_t, bool, bool>> gene_entries;  // (gene_idx, is_exon, is_reverse)
+        std::vector<std::pair<uint64_t, uint32_t>> exon_paths;       // (exon path handle, gene_idx)
+    };
+    std::unordered_map<int64_t, NodeLedger> node_ledger_cache;
+    std::function<const NodeLedger&(int64_t)> ledger_lookup;
 
     if (options.count_mode == pathtally::CountMode::Score) {
         graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
@@ -904,7 +920,7 @@ int run_convert(int argc, char** argv) {
                 path_gene_layer[handlegraph::as_integer(path)] = {t2g.target_ids.at(b->second), false};
             }
         });
-        ledger_lookup = [&](int64_t node_id, const std::function<void(uint32_t, bool, bool)>& emit) {
+        ledger_lookup = [&](int64_t node_id) -> const NodeLedger& {
             auto cached = node_ledger_cache.find(node_id);
             if (cached == node_ledger_cache.end()) {
                 if (!graph.has_node(node_id)) {
@@ -913,28 +929,31 @@ int run_convert(int argc, char** argv) {
                         " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
                 // gene -> (is_exon, gene_is_reverse); a node on both a gene's exon and body paths
-                // is exonic (exon wins).
+                // is exonic for the per-gene ledger (exon wins). Separately keep each exon-layer path
+                // (one transcript) crossing the node, un-collapsed, for per-transcript concordance.
                 std::map<uint32_t, std::pair<bool, bool>> per_gene;
+                NodeLedger nl;
                 const handlegraph::handle_t handle = graph.get_handle(node_id, false);
                 graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
-                    const auto it = path_gene_layer.find(
-                        handlegraph::as_integer(graph.get_path_handle_of_step(step)));
+                    const uint64_t path_handle =
+                        handlegraph::as_integer(graph.get_path_handle_of_step(step));
+                    const auto it = path_gene_layer.find(path_handle);
                     if (it != path_gene_layer.end()) {
                         auto& entry = per_gene[it->second.first];
                         entry.first = entry.first || it->second.second;
                         entry.second = graph.get_is_reverse(graph.get_handle_of_step(step));
+                        if (it->second.second) {  // an exon-layer path is a single transcript
+                            nl.exon_paths.emplace_back(path_handle, it->second.first);
+                        }
                     }
                     return true;
                 });
-                std::vector<std::tuple<uint32_t, bool, bool>> entries;
                 for (const auto& [gene_idx, flags] : per_gene) {
-                    entries.emplace_back(gene_idx, flags.first, flags.second);
+                    nl.gene_entries.emplace_back(gene_idx, flags.first, flags.second);
                 }
-                cached = node_ledger_cache.emplace(node_id, std::move(entries)).first;
+                cached = node_ledger_cache.emplace(node_id, std::move(nl)).first;
             }
-            for (const auto& [gene_idx, is_exon, is_reverse] : cached->second) {
-                emit(gene_idx, is_exon, is_reverse);
-            }
+            return cached->second;
         };
     }
 
@@ -1018,6 +1037,7 @@ int run_convert(int argc, char** argv) {
     // Reused across every group so the per-group tally does not reallocate its table.
     pathtally::TallyMap tally_workspace;
     std::map<std::string, pathtally::GeneLedger> gene_ledger;  // reused across groups (ledger modes)
+    std::set<uint32_t> concordant_genes;  // genes the read is per-transcript concordant with (Gene mode)
 
     auto start_group = [&](const vg::MultipathAlignment& alignment) {
         if (completed_names.count(alignment.name()) != 0) {
@@ -1081,9 +1101,17 @@ int run_convert(int argc, char** argv) {
             // Ledger modes: per gene, tally the read's exonic and intronic aligned bases (and
             // orientation) over its aligned nodes, then keep the genes the mode rule accepts.
             gene_ledger.clear();
+            concordant_genes.clear();
             int64_t read_length = 0;
             for (const vg::MultipathAlignment& record : current_group.records) {
                 read_length = std::max(read_length, static_cast<int64_t>(record.sequence().size()));
+                // Per-transcript base tally for THIS record: the read is concordant with (fully
+                // contained in) an exon-layer transcript iff every aligned base of the record lands on
+                // that transcript's path. A gene is Gene-mode countable iff the read is concordant with
+                // at least one of its transcripts -- the per-transcript test that avoids the per-gene
+                // exon union (a read stitched exonic across several isoforms is concordant with none).
+                std::map<uint64_t, int64_t> record_transcript_bases;
+                int64_t record_total = 0;
                 for (int s = 0; s < record.subpath_size(); ++s) {
                     const vg::Path& path = record.subpath(s).path();
                     for (int i = 0; i < path.mapping_size(); ++i) {
@@ -1093,24 +1121,74 @@ int run_convert(int argc, char** argv) {
                             continue;
                         }
                         const bool read_is_reverse = mapping.position().is_reverse();
-                        ledger_lookup(mapping.position().node_id(),
-                                      [&](uint32_t gene_idx, bool is_exon, bool gene_is_reverse) {
-                                          pathtally::GeneLedger& gl =
-                                              gene_ledger[t2g.target_names[gene_idx]];
-                                          if (is_exon) {
-                                              gl.exonic_bases += aligned;
-                                          } else {
-                                              gl.intronic_bases += aligned;
-                                          }
-                                          if (read_is_reverse == gene_is_reverse) {
-                                              gl.forward_bases += aligned;
-                                          } else {
-                                              gl.reverse_bases += aligned;
-                                          }
-                                      });
+                        record_total += aligned;
+                        const NodeLedger& nl = ledger_lookup(mapping.position().node_id());
+                        for (const auto& [gene_idx, is_exon, gene_is_reverse] : nl.gene_entries) {
+                            pathtally::GeneLedger& gl = gene_ledger[t2g.target_names[gene_idx]];
+                            if (is_exon) {
+                                gl.exonic_bases += aligned;
+                            } else {
+                                gl.intronic_bases += aligned;
+                            }
+                            if (read_is_reverse == gene_is_reverse) {
+                                gl.forward_bases += aligned;
+                            } else {
+                                gl.reverse_bases += aligned;
+                            }
+                        }
+                        for (const auto& [path_handle, gene_idx] : nl.exon_paths) {
+                            record_transcript_bases[path_handle] += aligned;
+                        }
+                    }
+                }
+                for (const auto& [path_handle, bases] : record_transcript_bases) {
+                    if (bases == record_total) {
+                        concordant_genes.insert(path_gene_layer.at(path_handle).first);
                     }
                 }
             }
+
+            // Emit the mode-agnostic full ledger into the BAM: every gene the read overlaps in body,
+            // with its exonic/intronic aligned bases (GL), per-gene concordance flag (GL), and
+            // orientation (GD). The count mode (Gene vs GeneFull vs the exon tie-breaks) and the
+            // sense/antisense policy are applied downstream by count_cr -- panCollapse classifies, the
+            // counter filters. Independent of the RAD Unique/strand drops below, so a read Gene mode
+            // would drop still reaches the BAM for GeneFull counting.
+            if (bam_writer) {
+                std::string gx, gd, gl_tag, primary_gene;
+                int32_t primary_tid = -1;
+                size_t n_genes = 0;
+                for (const auto& [gene, l] : gene_ledger) {
+                    if (l.exonic_bases + l.intronic_bases <= 0) {
+                        continue;
+                    }
+                    const bool forward = l.forward_bases >= l.reverse_bases;
+                    const bool concordant = concordant_genes.count(t2g.target_ids.at(gene)) > 0;
+                    if (n_genes > 0) {
+                        gx += ';';
+                        gd += ';';
+                        gl_tag += ';';
+                    }
+                    gx += gene;
+                    gd += forward ? 'F' : 'R';
+                    gl_tag += std::to_string(l.exonic_bases) + ':' +
+                              std::to_string(l.intronic_bases) + ':' + (concordant ? '1' : '0');
+                    if (n_genes == 0) {
+                        primary_gene = gene;
+                        primary_tid = t2g.gene_ids.at(gene);
+                    }
+                    ++n_genes;
+                }
+                if (n_genes > 0) {
+                    const vg::MultipathAlignment& read = current_group.records.front();
+                    bam_writer->write_record(current_group.molecule.original_name, primary_tid,
+                                             read.sequence(), read.quality(),
+                                             current_group.molecule.barcode, current_group.molecule.umi,
+                                             gx, /*gn=*/gx, /*xt=*/primary_gene,
+                                             /*has_xt=*/n_genes == 1, /*gd=*/gd, /*gl=*/gl_tag);
+                }
+            }
+
             for (const auto& [gene, forward] :
                  pathtally::apply_count_mode(options.count_mode, gene_ledger, read_length)) {
                 targets.push_back({gene, forward});
@@ -1177,10 +1255,11 @@ int run_convert(int argc, char** argv) {
             }
             rad_writer.write_record(current_group.molecule, hits);
         }
-        if (bam_writer) {
-            // Same targets as the RAD record (or, for a bam_rescues_multigene read, the targets
-            // the RAD dropped): collapse to the sorted unique gene set. std::set gives the
-            // deterministic order for GX and for the primary (first) gene contig.
+        if (bam_writer && options.count_mode == pathtally::CountMode::Score) {
+            // Score mode keeps the transcript-target BAM: collapse the read's transcript targets to
+            // the sorted unique gene set. (Ledger modes emit their mode-agnostic full-ledger BAM
+            // above, before the RAD Unique/strand drops.) std::set gives the deterministic order for
+            // GX and for the primary (first) gene contig.
             std::set<std::string> genes;
             std::map<std::string, bool> gene_forward;  // gene -> sense iff any of its targets is forward
             for (const pathtally::RadTarget& target : targets) {
