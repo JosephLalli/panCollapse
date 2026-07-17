@@ -757,10 +757,10 @@ public:
         // ';'-separated and parallel to GX. panCollapse emits BOTH orientations (run --strand both)
         // and records the orientation here so a downstream counter owns the sense/antisense policy.
         append_tag("GD", gd);
-        // GL: per-gene ledger, ';'-separated and parallel to GX -- "exonic:intronic:concordant"
-        // (aligned bases on the gene's exons, on its intronic body, and 1/0 for per-transcript
-        // concordance). Lets a downstream counter own the count mode (Gene vs GeneFull vs the exon
-        // tie-breaks). Absent on the Score-mode BAM, so a GL-less BAM counts by XT/GX as before.
+        // GL: per-gene ledger, ';'-separated and parallel to GX -- "spliced:unspliced" 1/0 flags
+        // (whether an exon isoform, or the gene body, ties the read's top alignment score). Lets a
+        // downstream counter own the count mode (Gene vs GeneFull vs the exon tie-breaks). Absent on
+        // the Score-mode BAM, so a GL-less BAM counts by XT/GX as before.
         if (!gl.empty()) {
             append_tag("GL", gl);
         }
@@ -852,14 +852,15 @@ int run_convert(int argc, char** argv) {
     std::unordered_map<int64_t, std::vector<std::pair<const std::string*, bool>>> node_hst_cache;
     pathtally::PathLookup lookup;
     std::unordered_map<uint64_t, std::pair<uint32_t, bool>> path_gene_layer;  // path -> (gene, is_exon)
-    // Per-node ledger cache. gene_entries drives the per-gene exon/intron/orientation ledger (exon
-    // wins per gene). exon_paths keeps each exon-layer path (== one transcript) crossing the node,
-    // un-collapsed, so a read can be tested for per-transcript concordance -- whether the whole read
-    // is contained in a single transcript -- which is what Gene mode needs, as opposed to the per-gene
-    // exon UNION the ledger alone gives.
+    // Per-node ledger cache. gene_entries carries per-gene orientation (one entry per gene per node).
+    // all_paths keeps every reference path crossing the node -- both exon-layer transcripts and gene-
+    // body paths, un-collapsed -- so a read can be scored per reference and its top-tied compatible set
+    // taken. A gene is spliced-compatible iff one of its exon transcripts ties for the read's top
+    // score (the read is fully explained by that isoform) and unspliced-compatible iff its body path
+    // does; the count mode is a downstream collapse of that set.
     struct NodeLedger {
-        std::vector<std::tuple<uint32_t, bool, bool>> gene_entries;  // (gene_idx, is_exon, is_reverse)
-        std::vector<std::pair<uint64_t, uint32_t>> exon_paths;       // (exon path handle, gene_idx)
+        std::vector<std::tuple<uint32_t, bool, bool>> gene_entries;   // (gene_idx, is_exon, is_reverse)
+        std::vector<std::tuple<uint64_t, uint32_t, bool>> all_paths;  // (path handle, gene_idx, is_exon)
     };
     std::unordered_map<int64_t, NodeLedger> node_ledger_cache;
     std::function<const NodeLedger&(int64_t)> ledger_lookup;
@@ -928,9 +929,9 @@ int run_convert(int argc, char** argv) {
                         "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
                         " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
-                // gene -> (is_exon, gene_is_reverse); a node on both a gene's exon and body paths
-                // is exonic for the per-gene ledger (exon wins). Separately keep each exon-layer path
-                // (one transcript) crossing the node, un-collapsed, for per-transcript concordance.
+                // gene -> (is_exon, gene_is_reverse) collapsed per gene for orientation; a node on both
+                // a gene's exon and body paths counts as exon here (exon wins). all_paths (below) keeps
+                // the per-path granularity the top-tied scoring needs.
                 std::map<uint32_t, std::pair<bool, bool>> per_gene;
                 NodeLedger nl;
                 const handlegraph::handle_t handle = graph.get_handle(node_id, false);
@@ -942,9 +943,9 @@ int run_convert(int argc, char** argv) {
                         auto& entry = per_gene[it->second.first];
                         entry.first = entry.first || it->second.second;
                         entry.second = graph.get_is_reverse(graph.get_handle_of_step(step));
-                        if (it->second.second) {  // an exon-layer path is a single transcript
-                            nl.exon_paths.emplace_back(path_handle, it->second.first);
-                        }
+                        // Every reference path crossing the node (exon transcript or gene body),
+                        // un-collapsed, is a scoreable reference for the top-tied compatible set.
+                        nl.all_paths.emplace_back(path_handle, it->second.first, it->second.second);
                     }
                     return true;
                 });
@@ -1036,8 +1037,6 @@ int run_convert(int argc, char** argv) {
     Group current_group;
     // Reused across every group so the per-group tally does not reallocate its table.
     pathtally::TallyMap tally_workspace;
-    std::map<std::string, pathtally::GeneLedger> gene_ledger;  // reused across groups (ledger modes)
-    std::set<uint32_t> concordant_genes;  // genes the read is per-transcript concordant with (Gene mode)
 
     auto start_group = [&](const vg::MultipathAlignment& alignment) {
         if (completed_names.count(alignment.name()) != 0) {
@@ -1098,20 +1097,17 @@ int run_convert(int argc, char** argv) {
             pathtally::tally_read_group_into(tally_workspace, record_ptrs, lookup, node_scorer);
             targets = pathtally::select_targets(tally_workspace);
         } else {
-            // Ledger modes: per gene, tally the read's exonic and intronic aligned bases (and
-            // orientation) over its aligned nodes, then keep the genes the mode rule accepts.
-            gene_ledger.clear();
-            concordant_genes.clear();
-            int64_t read_length = 0;
+            // Ledger modes: score every reference path (exon-layer transcripts and gene-body paths) the
+            // read touches by its aligned bases, take the references tied at the single top score as the
+            // read's compatible set, and collapse them to per-gene spliced/unspliced status. The gene
+            // body covers a read's intronic bases where an exon transcript does not, so an exon-intron
+            // spanning read scores highest for the body (unspliced only), a fully-exonic read ties its
+            // isoform with the body (spliced), and a read stitched exonic across several isoforms scores
+            // highest for the gene body, not any single isoform (correctly not spliced). The count mode
+            // and strand policy are applied downstream -- panCollapse scores, the counter collapses.
+            std::unordered_map<uint64_t, int64_t> path_bases;            // reference path -> aligned bases
+            std::map<uint32_t, std::pair<int64_t, int64_t>> gene_orient;  // gene -> (forward, reverse) bases
             for (const vg::MultipathAlignment& record : current_group.records) {
-                read_length = std::max(read_length, static_cast<int64_t>(record.sequence().size()));
-                // Per-transcript base tally for THIS record: the read is concordant with (fully
-                // contained in) an exon-layer transcript iff every aligned base of the record lands on
-                // that transcript's path. A gene is Gene-mode countable iff the read is concordant with
-                // at least one of its transcripts -- the per-transcript test that avoids the per-gene
-                // exon union (a read stitched exonic across several isoforms is concordant with none).
-                std::map<uint64_t, int64_t> record_transcript_bases;
-                int64_t record_total = 0;
                 for (int s = 0; s < record.subpath_size(); ++s) {
                     const vg::Path& path = record.subpath(s).path();
                     for (int i = 0; i < path.mapping_size(); ++i) {
@@ -1121,77 +1117,87 @@ int run_convert(int argc, char** argv) {
                             continue;
                         }
                         const bool read_is_reverse = mapping.position().is_reverse();
-                        record_total += aligned;
                         const NodeLedger& nl = ledger_lookup(mapping.position().node_id());
                         for (const auto& [gene_idx, is_exon, gene_is_reverse] : nl.gene_entries) {
-                            pathtally::GeneLedger& gl = gene_ledger[t2g.target_names[gene_idx]];
-                            if (is_exon) {
-                                gl.exonic_bases += aligned;
-                            } else {
-                                gl.intronic_bases += aligned;
-                            }
+                            auto& orient = gene_orient[gene_idx];
                             if (read_is_reverse == gene_is_reverse) {
-                                gl.forward_bases += aligned;
+                                orient.first += aligned;
                             } else {
-                                gl.reverse_bases += aligned;
+                                orient.second += aligned;
                             }
                         }
-                        for (const auto& [path_handle, gene_idx] : nl.exon_paths) {
-                            record_transcript_bases[path_handle] += aligned;
+                        for (const auto& [path_handle, gene_idx, is_exon] : nl.all_paths) {
+                            path_bases[path_handle] += aligned;
                         }
-                    }
-                }
-                for (const auto& [path_handle, bases] : record_transcript_bases) {
-                    if (bases == record_total) {
-                        concordant_genes.insert(path_gene_layer.at(path_handle).first);
                     }
                 }
             }
 
-            // Emit the mode-agnostic full ledger into the BAM: every gene the read overlaps in body,
-            // with its exonic/intronic aligned bases (GL), per-gene concordance flag (GL), and
-            // orientation (GD). The count mode (Gene vs GeneFull vs the exon tie-breaks) and the
-            // sense/antisense policy are applied downstream by count_cr -- panCollapse classifies, the
-            // counter filters. Independent of the RAD Unique/strand drops below, so a read Gene mode
-            // would drop still reaches the BAM for GeneFull counting.
-            if (bam_writer) {
+            // Top-tied references -> per-gene (spliced-compatible, unspliced-compatible).
+            int64_t top = 0;
+            for (const auto& [path_handle, bases] : path_bases) {
+                top = std::max(top, bases);
+            }
+            std::map<uint32_t, std::pair<bool, bool>> gene_compat;  // gene -> (spliced, unspliced)
+            for (const auto& [path_handle, bases] : path_bases) {
+                if (bases != top) {
+                    continue;
+                }
+                const auto& layer = path_gene_layer.at(path_handle);
+                auto& compat = gene_compat[layer.first];
+                if (layer.second) {
+                    compat.first = true;   // an exon transcript ties top -> spliced-compatible
+                } else {
+                    compat.second = true;  // the gene body ties top -> unspliced-compatible
+                }
+            }
+
+            // Emit the mode-agnostic per-gene ledger into the BAM: GX = compatible genes (sorted), GL =
+            // "spliced:unspliced" 1/0 flags per gene (parallel to GX), GD = orientation. The count mode
+            // and sense/antisense policy are applied downstream by count_cr -- panCollapse classifies,
+            // the counter filters -- so one alignment serves every count mode. A single-gene read is
+            // always written (XT set). A multi-gene read follows --bam-multigene, mirroring the RAD
+            // Unique drop below: omit leaves it out of the BAM, first assigns it to the primary gene
+            // (XT set), all carries it with the full candidate set and no XT so count_cr's
+            // MultiGeneUMI_CR rescue can resolve the dominant gene.
+            if (bam_writer && !gene_compat.empty()) {
                 std::string gx, gd, gl_tag, primary_gene;
                 int32_t primary_tid = -1;
                 size_t n_genes = 0;
-                for (const auto& [gene, l] : gene_ledger) {
-                    if (l.exonic_bases + l.intronic_bases <= 0) {
-                        continue;
-                    }
-                    const bool forward = l.forward_bases >= l.reverse_bases;
-                    const bool concordant = concordant_genes.count(t2g.target_ids.at(gene)) > 0;
+                for (const auto& [gene_idx, compat] : gene_compat) {
+                    const std::string& gene = t2g.target_names[gene_idx];
+                    const auto& orient = gene_orient[gene_idx];
                     if (n_genes > 0) {
                         gx += ';';
                         gd += ';';
                         gl_tag += ';';
                     }
                     gx += gene;
-                    gd += forward ? 'F' : 'R';
-                    gl_tag += std::to_string(l.exonic_bases) + ':' +
-                              std::to_string(l.intronic_bases) + ':' + (concordant ? '1' : '0');
+                    gd += orient.first >= orient.second ? 'F' : 'R';
+                    gl_tag += std::string(compat.first ? "1" : "0") + ':' + (compat.second ? "1" : "0");
                     if (n_genes == 0) {
                         primary_gene = gene;
                         primary_tid = t2g.gene_ids.at(gene);
                     }
                     ++n_genes;
                 }
-                if (n_genes > 0) {
+                const bool multigene = n_genes > 1;
+                if (!multigene || options.bam_multigene != BamMultiGenePolicy::Omit) {
+                    const bool has_xt =
+                        !multigene || options.bam_multigene == BamMultiGenePolicy::First;
                     const vg::MultipathAlignment& read = current_group.records.front();
                     bam_writer->write_record(current_group.molecule.original_name, primary_tid,
                                              read.sequence(), read.quality(),
                                              current_group.molecule.barcode, current_group.molecule.umi,
-                                             gx, /*gn=*/gx, /*xt=*/primary_gene,
-                                             /*has_xt=*/n_genes == 1, /*gd=*/gd, /*gl=*/gl_tag);
+                                             gx, /*gn=*/gx, /*xt=*/primary_gene, /*has_xt=*/has_xt,
+                                             /*gd=*/gd, /*gl=*/gl_tag);
                 }
             }
 
-            for (const auto& [gene, forward] :
-                 pathtally::apply_count_mode(options.count_mode, gene_ledger, read_length)) {
-                targets.push_back({gene, forward});
+            // RAD/alevin-fry: the compatible genes are the read's equivalence class.
+            for (const auto& [gene_idx, compat] : gene_compat) {
+                const auto& orient = gene_orient[gene_idx];
+                targets.push_back({t2g.target_names[gene_idx], orient.first >= orient.second});
             }
         }
 
@@ -1224,23 +1230,17 @@ int run_convert(int argc, char** argv) {
         }
 
         // Ledger count modes are Unique (CellRanger default) for the RAD/alevin-fry path: a read
-        // compatible with more than one gene gets no RAD record. --bam-multigene all is a
-        // BAM-only exception to that drop (see the BamMultiGenePolicy::All comment): it still
-        // carries the read into the optional BAM, tagged with its full candidate-gene set and no
-        // XT, so a downstream UMI-level rescue can resolve the dominant gene the RAD/Unique rule
-        // discards. Without --bam-out (or under omit/first), a ledger multi-gene read is dropped
-        // from both outputs exactly as before.
+        // compatible with more than one gene gets no RAD record. The optional BAM already emitted the
+        // read above under --bam-multigene (all carries the multi-gene read with its full candidate set
+        // for count_cr's downstream MultiGeneUMI_CR rescue; omit/first do not), independent of this RAD
+        // drop, so one alignment serves both the Unique RAD and the mode-agnostic BAM.
         const bool ledger_multigene =
             options.count_mode != pathtally::CountMode::Score && targets.size() > 1;
-        const bool bam_rescues_multigene =
-            ledger_multigene && bam_writer && options.bam_multigene == BamMultiGenePolicy::All;
         if (ledger_multigene) {
             ++multigene_dropped_groups;
-            if (!bam_rescues_multigene) {
-                completed_names.insert(current_group.name);
-                have_group = false;
-                return;
-            }
+            completed_names.insert(current_group.name);
+            have_group = false;
+            return;
         }
 
         std::vector<TargetHit> hits;

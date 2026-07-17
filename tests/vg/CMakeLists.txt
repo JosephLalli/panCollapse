@@ -383,16 +383,21 @@ add_test(NAME genefull_full_calls_intron
 set_tests_properties(genefull_full_calls_intron PROPERTIES LABELS "vg;pathtally;genefull;bam"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
-# Ledger count modes (STARsolo/CellRanger Gene/GeneFull) on the both-annotated graph, reading the
-# exon (HST) t2g and the gene-body t2g together. --count-mode gene drops the intronic read;
-# genefull keeps it. (Rule semantics are unit-tested in pathtally_ledger_test.)
+# Ledger modes emit a mode-agnostic per-gene ledger: the count mode is applied downstream by
+# count_cr, so panCollapse emits every compatible gene into the RAD (Unique) and tags each read's
+# per-gene spliced:unspliced status in the BAM GL field. On the both-annotated graph (exon HST t2g +
+# gene-body t2g) the exonic read ties an exon isoform and the body (GL 1:1); the intronic read ties
+# the body only (GL 0:1) -- count_cr gene mode keeps the former and drops the latter. Both are
+# single-gene, so both reach the RAD here (2 emitted, 0 no-compat). (Rule semantics: pathtally_ledger_test.)
 add_test(NAME genefull_ledger_gene
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
     --count-mode gene --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
-    --out-dir '${GF_DIR}/ledger_gene' \
-    && grep -qP '^emitted_groups\\t1$' '${GF_DIR}/ledger_gene/summary.tsv' \
-    && grep -qP '^no_compatible_transcript_groups\\t1$' '${GF_DIR}/ledger_gene/summary.tsv'")
+    --out-dir '${GF_DIR}/ledger_gene' --bam-out '${GF_DIR}/ledger_gene/reads.bam' \
+    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/ledger_gene/summary.tsv' \
+    && grep -qP '^no_compatible_transcript_groups\\t0$' '${GF_DIR}/ledger_gene/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_gene/reads.bam' | grep exonread | grep -q 'GL:Z:1:1' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_gene/reads.bam' | grep intronread | grep -q 'GL:Z:0:1'")
 set_tests_properties(genefull_ledger_gene PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
@@ -413,20 +418,18 @@ add_test(NAME genefull_ledger_bare_t2g
 set_tests_properties(genefull_ledger_bare_t2g PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
-# Ex50pAS excludes a 100%-exonic ANTISENSE read: genefull keeps both a sense and an antisense
-# exon read, genefull_ex50pas drops the antisense one.
+# Sense/antisense policy is applied downstream by count_cr from the GD tag, not by panCollapse. A
+# 100%-exonic sense read is emitted with GD F and a 100%-exonic antisense read with GD R; both reach
+# the RAD/BAM (2 emitted) because panCollapse no longer drops antisense. count_cr --strand forward
+# (its default) is what excludes the antisense read; --strand both keeps it.
 add_test(NAME genefull_ledger_ex50pas_antisense
   COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${GF_FIX}/reads_antisense.gamp.json' > '${GF_DIR}/anti.gamp' \
     && '$<TARGET_FILE:panCollapse>' convert --gamp '${GF_DIR}/anti.gamp' --xg '${GF_DIR}/genefull.xg' \
-       --count-mode genefull --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
-       --out-dir '${GF_DIR}/anti_full' \
-    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/anti_full/summary.tsv' \
-    && '$<TARGET_FILE:panCollapse>' convert --gamp '${GF_DIR}/anti.gamp' --xg '${GF_DIR}/genefull.xg' \
        --count-mode genefull_ex50pas --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
        --out-dir '${GF_DIR}/anti_ex50' --bam-out '${GF_DIR}/anti_ex50/reads.bam' \
-    && grep -qP '^emitted_groups\\t1$' '${GF_DIR}/anti_ex50/summary.tsv' \
-    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep -q exonsense \
-    && ! '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep -q exonanti")
+    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/anti_ex50/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep exonsense | grep -q 'GD:Z:F' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep exonanti | grep -q 'GD:Z:R'")
 set_tests_properties(genefull_ledger_ex50pas_antisense PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED genefull_annotated)
 

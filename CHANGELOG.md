@@ -3,6 +3,34 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.4.5]
+
+### Changed
+
+- **The per-gene ledger BAM `GL` tag is now two boolean compatibility flags, `spliced:unspliced`,
+  replacing the `exonic:intronic:concordant` aligned-base counts.** Reads are scored per reference
+  path (exon-layer transcripts and gene-body paths) by aligned bases; the references tied at the
+  single top score form the compatible set. A gene is `spliced` iff one of its exon isoforms ties top
+  (the read is fully explained by that isoform) and `unspliced` iff its gene body ties top. This
+  replaces the base-count ledger and the per-gene exon UNION it relied on. `count_cr.py` reads the two
+  flags directly (`gene` = spliced, `genefull` = any compatible, the `genefull_*` variants prefer
+  spliced), so **v0.4.5 is required by the panSC `count_cr` ledger count modes** -- v0.4.3/v0.4.4 emit
+  the old 3-field `GL`, which the current `count_cr` cannot parse.
+- **The count mode is applied entirely downstream now, including on the RAD/alevin-fry path.** The RAD
+  equivalence class is the full compatible gene set (still Unique: a read compatible with more than one
+  gene is dropped from the RAD), no longer the `--count-mode`-filtered set, so one alignment serves
+  every count mode. This changes the alevin-fry/simpleaf counts for `--count-mode gene`: the RAD now
+  includes body-only (intronic) single-gene reads that the old `apply_count_mode` gene rule dropped.
+  The gene-vs-GeneFull distinction for that path now lives only in a downstream `count_cr` step.
+
+### Fixed
+
+- **The mode-agnostic ledger BAM again honours `--bam-multigene`.** The 0.4.4 mode-agnostic BAM change
+  had begun emitting every compatible read regardless of the policy; a single-gene read is once more
+  always written, while a multi-gene read follows `--bam-multigene`: `omit` drops it from the BAM (as
+  the RAD Unique rule drops it), `first` assigns it to the primary gene, `all` carries it with the full
+  candidate set and no `XT` for `count_cr`'s MultiGeneUMI_CR rescue.
+
 ## [0.4.4]
 
 ### Changed
