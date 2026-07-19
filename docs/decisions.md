@@ -1084,6 +1084,261 @@ the two annotation layers with no new index and no traversal enumeration, giving
 like-for-like comparison against STARsolo `Gene`/`GeneFull`/`GeneFull_Ex50pAS` while keeping the
 D048 count as the untouched default.
 
+### D058 — `--bam-multigene all`: carry ledger multi-gene reads into the BAM for a downstream UMI-level rescue
+
+**Decision source:** User (directed after a downstream consumer -- panSC, the sibling project that
+runs panCollapse through `count_cr.py` -- root-caused a ~4% gene-UMI undercount vs STARsolo
+(target-2 MHC GEX, 2,388,781 read pairs) to exactly this gap: panCollapse's ledger `Unique` rule
+correctly drops a read compatible with >1 gene, but never carries it anywhere a UMI-level rescue
+could see it, so STARsolo's `MultiGeneUMI_CR` rescue -- which panSC's `count_cr.py` already
+implements -- had nothing to rescue. The deficit was concentrated in classical-HLA/paralog loci
+(89.7% of |delta|; HLA-B alone -10,694 UMIs, Gene model); H2/H3/H4 (UMI dedup, mapping gap,
+gene-set mismatch) were each ruled out as contributing 0. See panSC's own `docs/decisions.md` entry
+`rna-crcount-multigene-rescue` for the full root-cause writeup this decision acts on).
+
+**Problem:** D057's ledger `gene`/`genefull_ex50pas`/`genefull_exonoverintron`/`genefull` modes
+correctly apply CellRanger's read-level `Unique` rule (a read kept for >1 gene is dropped,
+`multigene_dropped_groups`) but that is only HALF of CellRanger/STARsolo's actual algorithm.
+STARsolo layers a UMI-level rescue on top (`MultiGeneUMI_CR`): a UMI whose reads span >1 gene is
+still assigned to the gene where it has the most reads, discarding only on an exact tie. Because
+panCollapse hard-dropped the read before BAM emission, a downstream counter implementing that
+rescue (panSC's `count_cr.py`) never received the read to rescue -- the drop and the rescue must
+happen in different places (read-level drop is panCollapse's job pre-emission; UMI-level rescue
+needs to see every read for a UMI across cells first, which only the downstream counter can do),
+so closing the gap requires panCollapse to stop discarding the evidence, not to implement the
+rescue itself.
+
+**Decision:** Add `--bam-multigene all` alongside the existing `omit` (default) and `first`. It is
+active ONLY when a ledger `--count-mode` is set (in `score` mode there is no Unique drop to rescue
+from -- multi-target reads there are ordinary D048 multimapping evidence, already emitted to both
+RAD and BAM regardless of `--bam-multigene`) and ONLY when `--bam-out` is given (it is otherwise
+inert, matching how `omit`/`first` already behave without a BAM writer). Under `all`, a read the
+ledger Unique rule keeps for more than one gene is:
+- still counted in `multigene_dropped_groups` and still given NO `map.rad` record -- the RAD /
+  `emitted_target_histogram` / alevin-fry-facing contract is completely unchanged from D057; this
+  is a BAM-only change;
+- but IS written to the optional BAM (when `--bam-out` is set), carrying its full candidate-gene
+  set exactly as the existing `GX`/`GN` tags already do generically for any multi-gene read (no
+  change needed there) and no `XT` (so a `--per-gene --gene-tag=XT` counter still skips it, but a
+  counter reading `GX` can rescue it).
+
+**Implementation:** the read-level drop (`main.cpp`, formerly one unconditional early-return) is
+split into "drop from RAD" (unconditional for a ledger multi-gene read, as before) and "also skip
+BAM" (now conditional on `--bam-multigene all` AND a BAM writer being active). The BAM-emission
+block was already mode-agnostic (it builds `GX`/`GN`/`has_xt` from whatever `targets` it is given,
+regardless of `--count-mode`), so letting a ledger multi-gene read reach that block needed no
+changes to it beyond the existing `has_xt` computation, which already defaults to false for
+`genes.size() > 1` under any policy but `first`. `score` mode's code path is unaffected byte-for-byte:
+its multi-target reads were never subject to the D057 drop, so every new conditional degrades to
+the pre-D058 behavior for it.
+
+**Tie rule (verified against STARsolo source, not the docs, per the user's explicit request):**
+panCollapse does not implement the rescue itself -- that is the downstream counter's job (panSC's
+`count_cr.py`, which already had a correct `MultiGeneUMI_CR` implementation before this change; only
+its read-acceptance gate needed to stop skipping multi-gene reads). But the rule was still confirmed
+here because panCollapse's emission format (whether to carry the FULL gene set, and whether to omit
+or fabricate an `XT`) has to match what that rule needs to operate on. STARsolo 2.7.11b
+(`SoloFeature_collapseUMIall.cpp`, commit `b1edc1208d91a53bf40ebae8669f71d50b994851`, lines 203-238):
+a UMI (already 1MM_CR-corrected within a cell) is assigned to the gene with the STRICTLY highest
+read count; an exact tie for the max discards the UMI for every gene (not "keep first," not
+EM/Rescue distribution -- those are a separate mechanism gated by a different flag and do not apply
+here); a second guard re-checks each gene's PRE-correction raw read count for that UMI sequence and
+discards even a non-tied winner if another gene had a strictly higher raw count there. Also verified
+(`SoloReadFeature_record.cpp` `outputReadCB()`, the `reFe.geneMult` path): STARsolo's own upstream
+per-gene raw tally, for a single-alignment read overlapping more than one gene locus, logs one
+independent `(cell, gene, UMI, read)` entry per candidate gene -- i.e. the SAME physical read
+contributes a raw read to every gene it is compatible with, before the cross-gene resolution above
+picks the dominant one. This is the mechanism `--bam-multigene all`'s full `GX` set exists to make
+possible: the full candidate-gene set is exactly the input that upstream tally step needs.
+
+**Verification:** `pathtally_ledger_test` and the pure-rule unit tests are unaffected (the rule
+itself, `apply_count_mode`, was already correct and already returns every kept candidate gene for a
+multi-gene overlap -- see the existing `GeneFull: two bodies -> both` case -- the gap was entirely
+in the caller's post-rule drop). New hermetic CTests (label `multigene`) on the `genefull_smoke`
+fixture, extended with a second gene body overlapping the first gene's intron node so a read on
+that shared node is genuinely multi-gene under a ledger mode: `--bam-multigene omit` (default)
+still drops the read from BOTH RAD and BAM exactly as D057 (`multigene_dropped_groups` increments,
+no BAM record); `--bam-multigene all` drops it from RAD (`multigene_dropped_groups` still
+increments, `emitted_groups` unchanged) but the read now appears in the BAM tagged `GX` with both
+genes and no `XT`. Full suite 58/58.
+
+**Rationale:** This closes the gap without duplicating the rescue logic panSC's `count_cr.py`
+already implements and had independently verified against STARsolo source -- panCollapse's job is
+only to stop discarding the evidence a correct downstream rescue needs, which is exactly the
+"graph annotation carries the evidence, no custom logic duplicated downstream" pattern D055/D057
+already established for gene-body annotation. Making `all` an explicit opt-in (not the new default)
+keeps `omit`/`first` byte-identical to before, so no existing consumer's BAM output changes unless
+it asks for the new policy.
+
+### D059 — Emit per-gene orientation (`GD`) and move the sense/antisense policy to the counter
+
+**Decision source:** User (directed after the same downstream consumer -- panSC's `count_cr.py` --
+benchmarked the vg pangenome arm against STARsolo on whole chr20 and found the intron-inclusive
+`genefull_ex50pas` count inflated by antisense reads: large (−)-strand genes overlapping antisense
+transcription over-counted up to ~700x, e.g. PTPRT vg 26,432 vs STAR 36, the pattern universal across
+the top over-counted genes -- PAK5, KIF16B, RALGAPA2, ATP9A -- every one (−)-strand and swamped by
+forward/antisense reads that STARsolo strand-excludes. The user's directive: "the correct strand
+(forward, reverse, both) should be an argument for the counter (default forward)").
+
+**Problem:** D056's `--strand` filter and D057's `genefull_ex50pas` both apply a strand *policy* inside
+the collapse/feature stage. D057's Ex50pAS rule dropped only a read that was 100%-exonic AND antisense
+(`pathtally_ledger.hpp`: `if (intronic_bases == 0 && !forward) break;`), so antisense *intronic* reads
+passed. STARsolo's `GeneFull_Ex50pAS` instead excludes ALL antisense body overlap (`intronicAS`
+included). The gap is invisible on small genes (the MHC benchmark missed it -- HLA genes have little
+intron) but on a genomic pangenome a large gene's body path collects the uniquely-mapped antisense
+reads physically present across its introns. The strand fact was also discarded at the BAM boundary
+(every record written forward, no strand tag), so a downstream counter could not re-apply the policy
+even though it owns the rest of the STARsolo-faithful counting.
+
+**Decision:** panCollapse *classifies* orientation (it already computes `target.forward` per candidate)
+and *emits* it as a new `GD` BAM tag -- one `F`/`R` per `GX` gene, `;`-separated and parallel to `GX`
+(a gene is `F` if any of the read's targets for it is forward, matching how the D056 `--strand` filter
+collapses targets to genes) -- rather than filtering on it. The sense/antisense *policy* moves
+downstream to the counter (`count_cr.py --strand forward|reverse|both`, default `forward` = STARsolo
+sense-strand). panCollapse runs strand-agnostic (`--strand both`, the default) so both orientations
+reach the BAM with their `GD`. This keeps panCollapse's per-read gene summary complete and lossless
+(the `GX`-is-the-full-set principle, D054), concentrates STARsolo-faithful feature semantics in the one
+validated component, and lets a single panCollapse run serve any strand policy (or a velocyto-style
+consumer that *uses* strand rather than filtering on it).
+
+**Implementation:** `BamWriter::write_record` gains a `gd` parameter and appends a `GD:Z:` tag; the
+emission block builds `gd` in the same sorted-gene-set loop that builds `gx`, from a `gene -> (any
+target forward)` map. `apply_count_mode` and the D056 `--strand` RAD-side filter are untouched
+(`--strand` still filters the RAD if a caller wants; the recommended path is `--strand both` +
+counter-side filtering). Purely additive: `score` mode and the RAD are byte-identical.
+
+**Verification:** all 58 CTests pass (the `bam`/`strand`-label tag-verify oracle tolerates the added
+tag). Downstream, `count_cr.py`'s strand filter is gated on the `GD` tag being present, so a STARsolo
+genome BAM (no `GD`) is never filtered and count_cr's counts are unchanged: Gene bit-identical to
+STARsolo (0 diff), GeneFull / GeneFull_Ex50pAS to 100.000% (r=1.0) modulo a pre-existing 2-UMI/~922k
+MultiGeneUMI_CR multimapper-tie residual that predates and is independent of this change. On the vg
+arm, `--strand both`
+reproduces the pre-0.4.4 numbers exactly (Ex50pAS 1,078,434; gene 740,205), and `--strand forward`
+collapses the antisense over-count -- PTPRT 26,432 → 157, per-gene Pearson 0.966 → 0.995, shared-space
+UMI delta +12.4% → +1.55%.
+
+**Rationale:** the same "panCollapse provides information, the counter applies policy" split D054/D058
+established: strand is an objective per-read fact best computed where the graph alignment is (only
+panCollapse has it), but a feature *policy* is best applied where the validated STARsolo-faithful logic
+lives (the counter). Welding the two inside `apply_count_mode` is exactly what produced the
+antisense-intronic gap; separating classify (upstream) from filter (downstream) removes that class of
+bug and makes strand a counter knob.
+
+### D060 — Per-transcript intron-touch classification for the ledger spliced/unspliced flags
+
+**Decision source:** User (root-caused a Gene-mode over-count on an all-haplotype pangenome
+benchmark to D057/0.4.5's per-gene score-tie rule: a read sitting in a reference transcript's
+intron can still tie the read's top score via some *other* haplotype's or isoform's exon path, so
+the gene was wrongly flagged `spliced` even though no transcript actually explains the read
+exon-only).
+
+**Problem:** Since 0.4.5, a gene was `spliced` iff *any* of its exon-transcript paths tied the
+read's single top score, and `unspliced` iff its gene-body path tied top — two independent,
+per-gene facts about which *paths* tied, not about whether any specific transcript's own splicing
+is consistent with the read. On a pangenome with many haplotype/isoform transcript copies per gene,
+an intron-sitting read can tie top score against a transcript copy it does not actually lie inside
+the exons of, so the per-gene rule calls the gene `spliced` on a coincidental tie rather than on any
+transcript actually explaining the read exon-only.
+
+**Decision:** Classify **per transcript**, not per gene — and emit the classification per
+transcript, not as a per-gene summary. At graph load, for every gene, compute each of its exon
+transcripts' on-body exon node-id span (the `[first, last]` on-body node crossed by that
+transcript's own exon path). At read time, within each compatible gene (compatibility itself
+unchanged — still the genes whose body or an exon transcript ties the read's top score, D048), a
+transcript that *spans* the read (the read's gene-body node range falls inside the transcript's
+span) is `spliced` (`S`) if its own exon path also ties the top score (within `kIntronFlankBases`
+slop — the velocyto-MIN_FLANK/STARsolo-minOverlapMinusOne-style alignment-slop guard), or
+`unspliced` (`U`) otherwise. A new `TX` BAM tag carries the read's emitted compatible transcript ids
+(`;`-separated, sorted); `GX` (gene), `GD` (the gene's orientation), and `GL` (`S`/`U`) become one
+entry **per `TX` entry**, positionally parallel — not one summary per gene. `GX` therefore repeats a
+gene once per each of its compatible transcripts; that redundancy is what lets a downstream counter
+(`count_cr`) map transcript to gene and derive per-gene ambiguity without a side file. A gene with
+both an `S` and a `U` transcript among its compatible set is velocyto's "ambiguous" (spliced for one
+isoform, unspliced for another) — panCollapse emits each transcript's own call unlabeled and leaves
+gene grouping, ambiguity resolution, the count-mode rule, and the sense/antisense policy to the
+counter, continuing the D059 "panCollapse classifies, the counter decides" split.
+
+**Not implemented (documented):** `GD` still summarizes one majority orientation per *gene*
+(repeated across that gene's transcripts, not a separate sense/antisense call per transcript).
+Splice-junction evidence was not used for classification when this decision was first recorded;
+D061 closes that gap.
+
+**Rationale:** intron touch is a fact about a specific transcript's own splicing relative to the
+read; a same-score tie against an unrelated transcript copy is not. Testing it per transcript
+(spanning + exon-only, both against precomputed on-body spans) keeps the O(nodes)-per-read cost
+D057 established — the one added expense is the one-time load-time span precompute — while fixing
+the over-count without reopening D048's top-score-tie compatibility rule, which decides gene
+membership, not splicing state. Emitting the classification per transcript rather than collapsing
+it to a per-gene pair keeps panCollapse's own output lossless (the D054 "the counter decides"
+principle) — a gene's ambiguity is a fact about the *set* of its transcripts, which only the
+counter, not panCollapse, has reason to collapse.
+
+**Verification:** node-membership alone (this decision without D061's concordance gate) took the
+chr20 Gene-mode over-count from the pre-fix 0.4.5 baseline (+83.2% vs STARsolo) to −13.2% — a large
+improvement, but still biased low from the coincidental-tie cases D061 later closed. See D061's
+verification for the combined, fully re-validated numbers (−2.76%).
+
+### D061 — Splice-junction concordance gates the `S` (spliced) call
+
+**Decision source:** User (verified case at the TUBB1/ATP5F1E tail-to-tail overlap: a read's
+aligned bases sit contiguously on a TUBB1 haplotype isoform's exon path, tying the read's top score,
+but the node-skip it actually makes — nodes 3582591-3582626 via edge 3582590<->3582627 — is
+**ATP5F1E's** intron (0 TUBB1 owners, 27 ATP5F1E owners). D060's node-membership test called this
+`S` for TUBB1; STARsolo gives it `GX:Z:-`).
+
+**Problem:** D060's per-transcript `S` test is node-membership only: a transcript's exon path ties
+the read's top score. It never checks that the read's *own* splice junction is one of that
+transcript's introns. A read can land its bases on transcript A's exon while the splice it actually
+makes belongs to a *different*, overlapping transcript B's intron — most visibly at tail-to-tail
+gene overlaps on a pangenome with many haplotype/isoform copies — and D060 wrongly calls it `S` for
+A.
+
+**Decision:** Gate `S` (and, symmetrically, `U`) on splice-junction concordance, mirroring STAR's
+`classifyAlign` (a spliced read's donor/acceptor must equal one of the transcript's own introns),
+kept **strand-blind** exactly as STAR does — orientation stays entirely downstream in `count_cr`
+(the `GD` tag + `--strand`). At graph load, alongside `transcript_spans`, precompute a global
+undirected splice-edge map: for each exon-transcript path, a consecutive node pair that is NOT
+adjacent on the gene body (the transcript's path skips real body sequence there — an intron) keys
+an entry `(node_id, node_id) -> {owning transcript target ids}` (`SpliceEdgeMap`,
+`pathtally_ledger.hpp`). Per read, `collect_read_node_pairs` (`main.cpp`) collects every consecutive
+aligned node pair the read's own alignment crosses (within one subpath's mapping list, or across a
+`next`/`connection` link to another subpath — both scanned identically, as plain node-id adjacency,
+since in this graph a splice is an ordinary graph edge/node-skip, not a `vg::Connection` record).
+`splice_concordant_transcripts` intersects, over every crossed edge that is in the splice-edge map,
+that edge's owner set — the read's splice-concordant transcript set — or returns "unconstrained"
+(every transcript concordant) if the read crosses no splice edge at all, so a single-exon or
+exon-internal read classifies exactly as before this decision. `classify_ledger_group` then requires
+a transcript to be in that set to be called `S`; the **same** gate applies to `U` — a transcript
+that ties the exon score, or spans the read's gene-body range, but fails concordance is emitted as
+**neither** `S` nor `U` (absent from `TX`), not spuriously downgraded to `U`, because a spliced read
+is not also an unspliced (pre-mRNA) one, and letting a concordance-failed transcript fall through to
+`U` would spuriously make its gene ambiguous and drop a legitimately spliced read from `Gene` mode.
+For the TUBB1/ATP5F1E case: ATP5F1E is `S` (it owns the junction) with `GD=R` (antisense) → dropped
+downstream by `--strand forward`; TUBB1 is not `S` (does not own the junction) → no `Gene` credit for
+either gene, matching STAR's `GX:Z:-`.
+
+**Not implemented (documented):** concordance is computed from raw node-pair adjacency, not from
+`vg::Connection` records — in this graph a splice is an ordinary graph edge/node-skip, so
+`Connection` records are not a reliable source of every crossed junction. `GD` still summarizes one
+majority orientation per gene; a per-transcript sense/antisense report remains unimplemented (D060).
+
+**Rationale:** node-membership is a fact about where a read's *bases* land; concordance is a fact
+about where its *splice* lands. On a pangenome with many overlapping/tail-to-tail gene pairs and
+haplotype copies, the two diverge often enough to matter — the coincidental-tie cases D060 alone
+left uncorrected. Testing concordance as an undirected node-pair-ownership intersection keeps the
+per-read cost proportional to the read's own splice count (typically zero or a handful), not to
+graph size, and requires only a one-time load-time precompute alongside the existing
+`transcript_spans` pass.
+
+**Verification:** `tests/vg/fixtures/splice_concordance_smoke/` exercises the TUBB1/ATP5F1E case;
+`tests/vg/fixtures/genefull_isoform_smoke/` checks the ordinary cross-isoform case (a read's splice
+IS the isoform's own intron) still classifies `S` as before. Full chr20, 2,000,000-read benchmark
+against STARsolo (forward strand, all four ledger modes): `Gene` 294,116 vs STARsolo 302,475
+(−2.76%, per-gene Pearson 0.967, per-cell 0.986) — down from D060-alone's −13.2% and the pre-D060
+0.4.5 baseline's +83.2%; `GeneFull` −3.33% (r 0.999); `GeneFull_ExonOverIntron` −2.02% (r 0.998);
+`GeneFull_Ex50pAS` +0.67% (r 0.998). Every ledger mode is now within a few percent of STARsolo on a
+whole chromosome, closing the large-gene/tail-to-tail over-count D060 alone left open.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

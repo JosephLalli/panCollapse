@@ -50,7 +50,7 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
                     [--strand both|forward|reverse]
                     [--count-mode score|gene|genefull|genefull_exonoverintron|genefull_ex50pas
                      --body-t2g body.t2g]
-                    [--bam-out reads.bam] [--bam-multigene omit|first]
+                    [--bam-out reads.bam] [--bam-multigene omit|first|all]
 ```
 
 ### Inputs
@@ -81,7 +81,9 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
 - `--bam-out <path>` — also write a BAM for a CellRanger-style counting stack (UMI-tools +
   DropletUtils `emptyDropsCellRanger`). Opt-in; the RAD is byte-identical with or without it.
   See [`docs/bam-export.md`](docs/bam-export.md).
-- `--bam-multigene omit|first` — `XT` tag policy for multi-gene reads (default `omit`).
+- `--bam-multigene omit|first|all` — `XT` tag policy for multi-gene reads (default `omit`). `all` is
+  a ledger-`--count-mode`-only rescue path that carries a multi-gene read into the BAM instead of
+  dropping it, for a downstream UMI-level rescue; see [`docs/bam-export.md`](docs/bam-export.md).
 
 ### GeneFull / STARsolo-style counting
 
@@ -91,13 +93,14 @@ writes `genefull.t2g.tsv`. There are two ways to use it:
 
 - **Coarse, no flag:** run the default count with your HST t2g for a spliced count, or with the
   gene-body t2g for a GeneFull-ish count. Same graph, the t2g selects the layer.
-- **`--count-mode` for exact STARsolo/CellRanger rules:** `gene` (exonic, ≥50% of the read on
-  exons), `genefull` (any body overlap), `genefull_exonoverintron` / `genefull_ex50pas` (the
-  CellRanger v7 default, which prefers >50%-exon genes and drops 100%-exonic antisense reads).
-  These read **both** layers at once — `--t2g` is the exon layer, `--body-t2g` the gene-body
-  layer — and count reads by per-gene exonic/intronic aligned bases with CellRanger's `Unique`
-  multimapper rule (a read compatible with >1 gene is dropped, counted in
-  `multigene_dropped_groups`). See [`docs/genefull.md`](docs/genefull.md).
+- **`--count-mode` for exact STARsolo/CellRanger rules:** `gene` (STARsolo `Gene`), `genefull`
+  (STARsolo `GeneFull`), `genefull_exonoverintron` / `genefull_ex50pas` (the CellRanger v7
+  default, which also drops purely-exonic antisense reads). These read **both** layers at once —
+  `--t2g` is the exon layer, `--body-t2g` the gene-body layer — so panCollapse can classify each
+  compatible **transcript** as spliced- or unspliced-compatible by intron touch (the `TX`/`GL`
+  tags); a downstream counter groups transcripts by gene, derives ambiguity, and applies the mode
+  rule and CellRanger's `Unique` multimapper rule (a read compatible with >1 gene is dropped,
+  counted in `multigene_dropped_groups`). See [`docs/genefull.md`](docs/genefull.md).
 
 ### Outputs (in `--out-dir`)
 

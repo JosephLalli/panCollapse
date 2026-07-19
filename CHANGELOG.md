@@ -3,6 +3,139 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.5.0]
+
+### Changed
+
+- **The ledger spliced/unspliced classification is now per transcript, by intron touch, replacing
+  the per-gene score-tie rule -- and panCollapse now emits it per transcript too, not as a per-gene
+  summary.** A new `TX` BAM tag carries the read's compatible transcript ids (`;`-separated,
+  sorted); `GX`/`GD`/`GL` become one entry **per `TX` entry** (positionally parallel), not one per
+  gene, so a gene with more than one compatible transcript repeats in `GX`. `GL` is now a single
+  `S`/`U` call per transcript, replacing the 2-field per-gene `spliced:unspliced` flag pair
+  (0.4.5). Gene compatibility itself is unchanged (still the genes whose body or an exon transcript
+  ties the read's single top score). Within each compatible gene, panCollapse now classifies
+  **every candidate transcript**: at graph load it precomputes each exon transcript's on-body exon
+  node-id span, and at read time a transcript "spans" the read if the read's gene-body node range
+  falls inside that span. It is `S` iff its own exon path also ties the top score; `U` iff it spans
+  the read, its gene's body ties the top score, and it is not already `S`. This fixes a Gene-mode
+  over-count on the all-haplotype pangenome under the old rule: a read sitting in a reference
+  transcript's intron could tie the read's top score via some *other* haplotype's or isoform's
+  unrelated exon path, and the old per-gene rule ("spliced iff any exon isoform ties top") called
+  the gene spliced on that coincidental tie regardless of whether any transcript actually explained
+  the read exon-only.
+- **Splice-junction concordance now gates the `S` call.** Node-membership alone (a transcript's
+  exon path ties the read's top score) was too loose: a read can land its aligned bases on
+  transcript A's exon while the splice (node-skip) it actually makes is a *different*, overlapping
+  transcript B's intron -- a graph-sharing coincidence at, e.g., a tail-to-tail gene overlap. A
+  transcript is now `S` only if it additionally owns *every* splice edge the read's own alignment
+  crosses -- STAR's `classifyAlign` concordance rule, kept strand-blind exactly as STAR does
+  (orientation is applied later by `count_cr` via `GD`). The same gate applies to `U`: a transcript
+  that ties the exon score or spans the read's body range but fails concordance is emitted as
+  **neither** `S` nor `U` -- because a spliced read is not also an unspliced one, and without this
+  gate a concordance-failed transcript would fall through to `U` and spuriously make its gene
+  ambiguous.
+- **A gene with both an `S` and a `U` transcript among its compatible set is velocyto's
+  "ambiguous"** (the read is spliced for one isoform, unspliced for another). panCollapse does not
+  label it as such -- it emits each transcript's own call as-is and leaves gene grouping,
+  ambiguity, the count-mode rule, and the sense/antisense policy to the downstream counter
+  (`count_cr`: `gene` mode counts spliced-only, excluding both ambiguous and unspliced;
+  `genefull`/`genefull_exonoverintron`/`genefull_ex50pas` count any compatible gene, preferring
+  purely-spliced where the mode's tie-break applies).
+
+### Not implemented (documented)
+
+- A read's compatible transcripts are still summarized as one majority orientation per gene (the
+  `GD` tag); reporting per-transcript sense/antisense sets separately is planned but not
+  implemented.
+
+See `docs/decisions.md` D060 and D061 for the full mechanism, rationale, and chr20 validation
+numbers.
+
+## [0.4.5]
+
+### Changed
+
+- **The per-gene ledger BAM `GL` tag is now two boolean compatibility flags, `spliced:unspliced`,
+  replacing the `exonic:intronic:concordant` aligned-base counts.** Reads are scored per reference
+  path (exon-layer transcripts and gene-body paths) by aligned bases; the references tied at the
+  single top score form the compatible set. A gene is `spliced` iff one of its exon isoforms ties top
+  (the read is fully explained by that isoform) and `unspliced` iff its gene body ties top. This
+  replaces the base-count ledger and the per-gene exon UNION it relied on. `count_cr.py` reads the two
+  flags directly (`gene` = spliced, `genefull` = any compatible, the `genefull_*` variants prefer
+  spliced), so **v0.4.5 is required by the panSC `count_cr` ledger count modes** -- v0.4.3/v0.4.4 emit
+  the old 3-field `GL`, which the current `count_cr` cannot parse.
+- **The count mode is applied entirely downstream now, including on the RAD/alevin-fry path.** The RAD
+  equivalence class is the full compatible gene set (still Unique: a read compatible with more than one
+  gene is dropped from the RAD), no longer the `--count-mode`-filtered set, so one alignment serves
+  every count mode. This changes the alevin-fry/simpleaf counts for `--count-mode gene`: the RAD now
+  includes body-only (intronic) single-gene reads that the old `apply_count_mode` gene rule dropped.
+  The gene-vs-GeneFull distinction for that path now lives only in a downstream `count_cr` step.
+
+### Fixed
+
+- **The mode-agnostic ledger BAM again honours `--bam-multigene`.** The 0.4.4 mode-agnostic BAM change
+  had begun emitting every compatible read regardless of the policy; a single-gene read is once more
+  always written, while a multi-gene read follows `--bam-multigene`: `omit` drops it from the BAM (as
+  the RAD Unique rule drops it), `first` assigns it to the primary gene, `all` carries it with the full
+  candidate set and no `XT` for `count_cr`'s MultiGeneUMI_CR rescue.
+
+## [0.4.4]
+
+### Changed
+
+- **Per-gene target orientation moved out of the collapse stage into a new `GD` BAM tag (D059).**
+  panCollapse now *emits* each read's per-gene orientation instead of only being able to *filter* on it,
+  so a downstream counter owns the sense/antisense policy. This fixes a strand gap in the ledger
+  `genefull_ex50pas`/`genefull` count modes: they kept antisense **intronic** reads that STARsolo's
+  `GeneFull_Ex50pAS` excludes (`intronicAS`), inflating large (−)-strand genes that overlap antisense
+  transcription. On a chr20 pangenome GEX benchmark, `count_cr.py --strand forward` (STARsolo sense-
+  strand default) now reproduces STARsolo: PTPRT 26,432 → 157 UMI (STAR 36), per-gene Pearson
+  0.966 → 0.995, shared-space UMI delta +12.4% → +1.55%. `--strand both` reproduces the pre-0.4.4
+  numbers exactly (Ex50pAS 1,078,434; gene 740,205), so the change is behavior-preserving with strand
+  the only new lever.
+
+### Added
+
+- **`GD` BAM tag** (`docs/bam-export.md`): per-gene target orientation, one `F` (sense/forward) / `R`
+  (antisense/reverse) per `GX` gene, `;`-separated and positionally parallel to `GX`. Additive — the
+  RAD path, the existing `--strand` RAD-side filter (D056), and `--count-mode score` are unchanged, and
+  all 58 tests pass. A STARsolo genome BAM carries no `GD`, so a `GD`-gated counter is a no-op there and
+  its counts are unchanged: Gene stays bit-identical to STARsolo (0 UMI diff) and GeneFull /
+  GeneFull_Ex50pAS match to 100.000% (a pre-existing 2-UMI/~922k residual from a MultiGeneUMI_CR
+  multimapper-tie edge, unrelated to this change). See `docs/decisions.md` D059.
+
+## [0.4.3]
+
+### Added
+
+- **`--bam-multigene all`** (D058). For the ledger `--count-mode` modes (`gene`, `genefull`,
+  `genefull_exonoverintron`, `genefull_ex50pas`) ONLY, a read compatible with more than one gene is
+  still dropped from `map.rad` exactly as before (`multigene_dropped_groups`), but under `all` it is
+  now also written to the optional `--bam-out` BAM, tagged with its full candidate-gene set (`GX`)
+  and no `XT`. Previously such a read was hard-dropped from BOTH outputs, so a downstream UMI-level
+  rescue (STARsolo/CellRanger `MultiGeneUMI_CR`: assign the UMI to its dominant gene, discard on an
+  exact tie) never saw it. `--count-mode score` and `--bam-multigene omit`/`first` are byte-identical
+  to v0.4.2 -- this is purely additive. See `docs/decisions.md` D058 for the full mechanism and the
+  STARsolo-source tie-rule verification.
+
+## [0.4.2]
+
+Infrastructure release. No change to the binary, its inputs, or its output: the RAD,
+`tx2gene.tsv`, `summary.tsv`, and optional BAM are byte-identical to v0.4.1 on the same
+inputs (the bundled binary still reports `panCollapse 0.4.1`). Only the runtime image
+changed.
+
+### Changed
+
+- **Runtime image installs `procps`.** The Nextflow docker executor invokes `ps` inside the
+  container to collect per-task resource metrics; the v0.4.1 image (`debian:bookworm-slim`,
+  which omits it) made Nextflow abort the task with "Command 'ps' required by nextflow to
+  collect task metrics cannot be found". The image now adds the `procps` package
+  (`/bin/ps`) in its own layer. `ps` is unrelated to the bundled binary, which runs through
+  its own dynamic loader independent of the base image. Published as
+  `josephlalli/pancollapse:v0.4.2`.
+
 ## [0.4.0]
 
 ### Added

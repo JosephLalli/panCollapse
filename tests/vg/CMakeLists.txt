@@ -383,16 +383,26 @@ add_test(NAME genefull_full_calls_intron
 set_tests_properties(genefull_full_calls_intron PROPERTIES LABELS "vg;pathtally;genefull;bam"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
-# Ledger count modes (STARsolo/CellRanger Gene/GeneFull) on the both-annotated graph, reading the
-# exon (HST) t2g and the gene-body t2g together. --count-mode gene drops the intronic read;
-# genefull keeps it. (Rule semantics are unit-tested in pathtally_ledger_test.)
+# Ledger modes emit a per-TRANSCRIPT ledger, never a gene-level summary: the count mode and gene
+# grouping/ambiguity are applied downstream by count_cr, so panCollapse tags each read's compatible
+# transcripts with TX (transcript ids), GX/GD (gene, orientation -- parallel to TX, one entry per
+# emitted transcript), and GL (S=spliced/exon-only, U=unspliced/intron-touching). On the
+# both-annotated graph (exon HST t2g + gene-body t2g) the single-isoform gene's only transcript
+# (NM_1.1) explains the exonic read exon-only (TX:Z:NM_1.1 GL:Z:S) and spans-but-does-not-explain the
+# intronic read (TX:Z:NM_1.1 GL:Z:U) -- count_cr gene mode keeps the former (spliced-only) and drops
+# the latter. Both are single-gene, so both reach the RAD here (2 emitted, 0 no-compat). (Rule
+# semantics: pathtally_ledger_test.)
 add_test(NAME genefull_ledger_gene
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
     --count-mode gene --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
-    --out-dir '${GF_DIR}/ledger_gene' \
-    && grep -qP '^emitted_groups\\t1$' '${GF_DIR}/ledger_gene/summary.tsv' \
-    && grep -qP '^no_compatible_transcript_groups\\t1$' '${GF_DIR}/ledger_gene/summary.tsv'")
+    --out-dir '${GF_DIR}/ledger_gene' --bam-out '${GF_DIR}/ledger_gene/reads.bam' \
+    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/ledger_gene/summary.tsv' \
+    && grep -qP '^no_compatible_transcript_groups\\t0$' '${GF_DIR}/ledger_gene/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_gene/reads.bam' | grep exonread | grep -q 'TX:Z:NM_1.1' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_gene/reads.bam' | grep exonread | grep -q 'GL:Z:S' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_gene/reads.bam' | grep intronread | grep -q 'TX:Z:NM_1.1' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_gene/reads.bam' | grep intronread | grep -q 'GL:Z:U'")
 set_tests_properties(genefull_ledger_gene PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
@@ -413,19 +423,215 @@ add_test(NAME genefull_ledger_bare_t2g
 set_tests_properties(genefull_ledger_bare_t2g PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
-# Ex50pAS excludes a 100%-exonic ANTISENSE read: genefull keeps both a sense and an antisense
-# exon read, genefull_ex50pas drops the antisense one.
+# Sense/antisense policy is applied downstream by count_cr from the GD tag, not by panCollapse. A
+# 100%-exonic sense read is emitted with GD F and a 100%-exonic antisense read with GD R; both reach
+# the RAD/BAM (2 emitted) because panCollapse no longer drops antisense. count_cr --strand forward
+# (its default) is what excludes the antisense read; --strand both keeps it.
 add_test(NAME genefull_ledger_ex50pas_antisense
   COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${GF_FIX}/reads_antisense.gamp.json' > '${GF_DIR}/anti.gamp' \
     && '$<TARGET_FILE:panCollapse>' convert --gamp '${GF_DIR}/anti.gamp' --xg '${GF_DIR}/genefull.xg' \
-       --count-mode genefull --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
-       --out-dir '${GF_DIR}/anti_full' \
-    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/anti_full/summary.tsv' \
-    && '$<TARGET_FILE:panCollapse>' convert --gamp '${GF_DIR}/anti.gamp' --xg '${GF_DIR}/genefull.xg' \
        --count-mode genefull_ex50pas --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
        --out-dir '${GF_DIR}/anti_ex50' --bam-out '${GF_DIR}/anti_ex50/reads.bam' \
-    && grep -qP '^emitted_groups\\t1$' '${GF_DIR}/anti_ex50/summary.tsv' \
-    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep -q exonsense \
-    && ! '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep -q exonanti")
+    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/anti_ex50/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep exonsense | grep -q 'GD:Z:F' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep exonanti | grep -q 'GD:Z:R'")
 set_tests_properties(genefull_ledger_ex50pas_antisense PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED genefull_annotated)
+
+# D060 cross-isoform fixture: GENE1 has TWO exon isoforms over the SAME 3-node body -- NM_1.1 (exons
+# 1,3, skips node 2) and NM_1.2 (exons 1,2,3, a retained-intron isoform that keeps node 2 as exon).
+# genefull_smoke's GENE1 has only one isoform, so it cannot exercise a transcript spanning the read
+# without explaining it exon-only; this fixture can. exonread (nodes 1,3, never touching node 2) ties
+# the exon-path SCORE for both isoforms equally, but D061 splice concordance separates them: the
+# read's own alignment skips node 2 (edge 1<->3), which is NM_1.1's own intron (NM_1.1 owns that
+# edge) but not one of NM_1.2's own splice edges (NM_1.2's path never skips anything, so it owns no
+# edge at all) -- NM_1.1 stays spliced, NM_1.2 fails concordance and falls back to unspliced via the
+# (D061-untouched) span/body test, which still brackets it. ambigread (node 2 only) makes no splice
+# of its own (concordance is vacuous/unconstrained for it, so D061 does not change this one) and ties
+# top via NM_1.2's own exon path (spliced), while NM_1.1's precomputed span still brackets it and
+# NM_1.1's own exon path does not explain it (unspliced) -- the SAME gene ends up with a spliced AND
+# an unspliced transcript, which count_cr derives as ambiguous.
+set(ISO_DIR "${CMAKE_CURRENT_BINARY_DIR}/genefull_isoform_work")
+set(ISO_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/genefull_isoform_smoke")
+
+add_test(NAME genefull_isoform_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${ISO_DIR}")
+set_tests_properties(genefull_isoform_setup PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_SETUP genefull_isoform_dir)
+
+add_test(NAME genefull_isoform_gamp
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${ISO_FIX}/reads.gamp.json' > '${ISO_DIR}/reads.gamp'")
+set_tests_properties(genefull_isoform_gamp PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED genefull_isoform_dir FIXTURES_SETUP genefull_isoform_reads)
+
+add_test(NAME genefull_isoform_annotate
+  COMMAND /bin/sh -c "'${CMAKE_SOURCE_DIR}/scripts/make-gene-annotation.sh' \
+    -x '${ISO_FIX}/graph.gfa' -n '${ISO_FIX}/annotation.gtf' -o '${ISO_DIR}/genefull' --vg '${PT_VG}'")
+set_tests_properties(genefull_isoform_annotate PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED genefull_isoform_dir FIXTURES_SETUP genefull_isoform_annotated)
+
+# D061 regression guard: a read that never touches the differentiating node (2) ties the exon-path
+# SCORE for both isoforms equally, but only NM_1.1 owns the read's actual splice (edge 1<->3, its own
+# intron). NM_1.1 stays spliced; NM_1.2 is DROPPED (absent) by the concordance gate -- a spliced read
+# is not an unspliced read, so NM_1.2 is neither S nor U and GENE1 is NOT made ambiguous. (Pre-D061
+# node-membership called both S; a naive gate that only tightened S would have demoted NM_1.2 to U,
+# wrongly making the gene ambiguous and dropping this legitimately spliced read from Gene.)
+add_test(NAME genefull_ledger_isoform_control
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${ISO_DIR}/reads.gamp' --xg '${ISO_DIR}/genefull.xg' \
+    --count-mode genefull --t2g '${ISO_FIX}/t2g.tsv' --body-t2g '${ISO_DIR}/genefull.t2g.tsv' \
+    --out-dir '${ISO_DIR}/ledger' --bam-out '${ISO_DIR}/ledger/reads.bam' \
+    && grep -qP '^emitted_groups\\t2$' '${ISO_DIR}/ledger/summary.tsv' \
+    && grep -qP '^multigene_dropped_groups\\t0$' '${ISO_DIR}/ledger/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep -w exonread | grep -qP 'TX:Z:NM_1.1(\\t|\$)' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep -w exonread | grep -qP 'GL:Z:S(\\t|\$)'")
+set_tests_properties(genefull_ledger_isoform_control PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED "genefull_isoform_annotated;genefull_isoform_reads")
+
+# The cross-isoform case: NM_1.1 unspliced, NM_1.2 spliced, same gene -- one RAD record (single
+# gene, not dropped as multi-gene despite 2 emitted transcripts), and count_cr (gene mode) would
+# exclude GENE1 here as ambiguous while genefull keeps it. ambigread crosses no splice edge of its
+# own (a single-node touch), so D061 concordance is unconstrained here and this case is unaffected.
+add_test(NAME genefull_ledger_cross_isoform_ambiguous
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${ISO_DIR}/reads.gamp' --xg '${ISO_DIR}/genefull.xg' \
+    --count-mode genefull --t2g '${ISO_FIX}/t2g.tsv' --body-t2g '${ISO_DIR}/genefull.t2g.tsv' \
+    --out-dir '${ISO_DIR}/ledger' --bam-out '${ISO_DIR}/ledger/reads.bam' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep ambigread | grep -q 'TX:Z:NM_1.1;NM_1.2' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep ambigread | grep -q 'GX:Z:GENE1;GENE1' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep ambigread | grep -q 'GL:Z:U;S' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep ambigread | grep -q 'XT:Z:GENE1'")
+set_tests_properties(genefull_ledger_cross_isoform_ambiguous PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED "genefull_isoform_annotated;genefull_isoform_reads")
+
+# D058: --bam-multigene all. A dedicated fixture with TWO overlapping genes -- GENE1 (exons 1,3;
+# intron/body node 2) and GENE2 (body = node 2 exactly, wholly inside GENE1's intron) -- so a read
+# on the shared node 2 (multigeneread) is genuinely compatible with both gene bodies under a ledger
+# mode; exonread (nodes 1,3) stays GENE1-only, a control proving single-gene reads are untouched.
+set(MG_DIR "${CMAKE_CURRENT_BINARY_DIR}/multigene_bam_work")
+set(MG_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/multigene_bam_smoke")
+
+add_test(NAME multigene_bam_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${MG_DIR}")
+set_tests_properties(multigene_bam_setup PROPERTIES LABELS "vg;pathtally;genefull;multigene"
+  FIXTURES_SETUP multigene_bam_dir)
+
+add_test(NAME multigene_bam_gamp
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${MG_FIX}/reads.gamp.json' > '${MG_DIR}/reads.gamp'")
+set_tests_properties(multigene_bam_gamp PROPERTIES LABELS "vg;pathtally;genefull;multigene"
+  FIXTURES_REQUIRED multigene_bam_dir FIXTURES_SETUP multigene_bam_reads)
+
+add_test(NAME multigene_bam_annotate
+  COMMAND /bin/sh -c "'${CMAKE_SOURCE_DIR}/scripts/make-gene-annotation.sh' \
+    -x '${MG_FIX}/graph.gfa' -n '${MG_FIX}/annotation.gtf' -o '${MG_DIR}/genefull' --vg '${PT_VG}'")
+set_tests_properties(multigene_bam_annotate PROPERTIES LABELS "vg;pathtally;genefull;multigene"
+  FIXTURES_REQUIRED multigene_bam_dir FIXTURES_SETUP multigene_bam_annotated)
+
+# --bam-multigene omit (default): multigeneread is dropped from BOTH RAD and BAM, exactly as
+# before D058 -- this is the regression guard that the new flag did not change the old default.
+add_test(NAME multigene_bam_omit_drops_both
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
+    --count-mode genefull --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
+    --out-dir '${MG_DIR}/omit' --bam-out '${MG_DIR}/omit/reads.bam' --bam-multigene omit \
+    && grep -qP '^emitted_groups\\t1$' '${MG_DIR}/omit/summary.tsv' \
+    && grep -qP '^multigene_dropped_groups\\t1$' '${MG_DIR}/omit/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' quickcheck '${MG_DIR}/omit/reads.bam' \
+    && [ \"$('${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/omit/reads.bam' | wc -l)\" = 1 ] \
+    && ! '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/omit/reads.bam' | grep -q multigeneread")
+set_tests_properties(multigene_bam_omit_drops_both PROPERTIES LABELS "vg;pathtally;genefull;multigene"
+  FIXTURES_REQUIRED "multigene_bam_annotated;multigene_bam_reads")
+
+# --bam-multigene all: the multi-gene read now FLOWS THROUGH to the BAM (proving it is not
+# hard-dropped) carrying its full candidate-gene set (GX, no XT) for a downstream UMI-level rescue,
+# while the RAD stays completely unchanged (same multigene_dropped_groups=1, same emitted_groups=1,
+# byte-identical map.rad to a fresh --bam-multigene omit run) -- the ledger Unique/RAD contract from
+# D057 is untouched, only the optional BAM gains the record. exonread (single-gene) is unaffected
+# either way. Self-contained (runs its own omit comparison run rather than depending on another
+# test's output directory, so it has no ordering dependency beyond the shared annotated fixture).
+add_test(NAME multigene_bam_all_rescues_bam_only
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
+    --count-mode genefull --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
+    --out-dir '${MG_DIR}/all_cmp_omit' --bam-multigene omit \
+    && '$<TARGET_FILE:panCollapse>' convert \
+       --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
+       --count-mode genefull --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
+       --out-dir '${MG_DIR}/all' --bam-out '${MG_DIR}/all/reads.bam' --bam-multigene all \
+    && grep -qP '^emitted_groups\\t1$' '${MG_DIR}/all/summary.tsv' \
+    && grep -qP '^multigene_dropped_groups\\t1$' '${MG_DIR}/all/summary.tsv' \
+    && cmp '${MG_DIR}/all_cmp_omit/map.rad' '${MG_DIR}/all/map.rad' \
+    && '${PANCOLLAPSE_SAMTOOLS}' quickcheck '${MG_DIR}/all/reads.bam' \
+    && [ \"$('${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/all/reads.bam' | wc -l)\" = 2 ] \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/all/reads.bam' | grep multigeneread | grep -q 'GX:Z:GENE1;GENE2' \
+    && ! ('${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/all/reads.bam' | grep multigeneread | grep -q 'XT:Z') \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/all/reads.bam' | grep -w exonread | grep -q 'XT:Z:GENE1'")
+set_tests_properties(multigene_bam_all_rescues_bam_only PROPERTIES LABELS "vg;pathtally;genefull;multigene;bam"
+  FIXTURES_REQUIRED "multigene_bam_annotated;multigene_bam_reads")
+
+# score mode has no ledger drop to rescue from: --bam-multigene all is a true no-op there (RAD and
+# BAM records identical to omit; only the recorded @PG command line differs, which this test does
+# not compare). Confirms D058 does not touch the D048 default path.
+add_test(NAME multigene_bam_all_noop_in_score_mode
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' --t2g '${MG_FIX}/t2g.tsv' \
+    --out-dir '${MG_DIR}/score_omit' --bam-out '${MG_DIR}/score_omit/reads.bam' --bam-multigene omit \
+    && '$<TARGET_FILE:panCollapse>' convert \
+       --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' --t2g '${MG_FIX}/t2g.tsv' \
+       --out-dir '${MG_DIR}/score_all' --bam-out '${MG_DIR}/score_all/reads.bam' --bam-multigene all \
+    && cmp '${MG_DIR}/score_omit/map.rad' '${MG_DIR}/score_all/map.rad' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/score_omit/reads.bam' > '${MG_DIR}/score_omit_records.txt' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/score_all/reads.bam' > '${MG_DIR}/score_all_records.txt' \
+    && cmp '${MG_DIR}/score_omit_records.txt' '${MG_DIR}/score_all_records.txt'")
+set_tests_properties(multigene_bam_all_noop_in_score_mode PROPERTIES LABELS "vg;pathtally;genefull;multigene;bam"
+  FIXTURES_REQUIRED "multigene_bam_annotated;multigene_bam_reads")
+
+# D061: transcript A's exon vs transcript B's intron, on DIFFERENT genes -- the exact shape of the
+# real bug (a TUBB1 haplotype isoform tied a read's top score by node-membership alone, while the
+# read's actual splice was ATP5F1E's intron; TUBB1 owned none of it and STAR correctly calls GX:Z:-).
+# GENE3/NM_3.1 (transcript A) is a single exon spanning all three nodes (1,2,3) contiguously, and --
+# crucially -- is absent from annotation.gtf, so it has NO gene-body layer at all (mirroring a gene
+# the ledger can only ever explain through its own exon path). GENE4/NM_4.1 (transcript B) IS
+# annotated (1-30, exons 1-10 and 21-30), so vg rna embeds its gene body over nodes 1,2,3 -- node 2 is
+# GENE4's own intron, so NM_4.1's exon path (1,3) owns the edge 1<->3. crossgeneread touches only
+# nodes 1 and 3 (skips node 2 in its own alignment, same shape as genefull_isoform_smoke's exonread):
+# NM_3.1's exon-path score ties NM_4.1's (both cross the same two nodes), so pre-D061 node-membership
+# would call BOTH spliced. D061 concordance denies NM_3.1: it does not own the 1<->3 edge (its own
+# path never skips node 2), so it fails the gate -- and, having no body layer to fall back to
+# unspliced, is dropped entirely rather than merely demoted (matching the real TUBB1 finding: the
+# non-owning transcript gets no Gene credit at all). NM_4.1 owns the edge and stays spliced. Net: one
+# emitted transcript (NM_4.1 = S), a single-gene call, not a two-gene multigene drop.
+set(SC_DIR "${CMAKE_CURRENT_BINARY_DIR}/splice_concordance_work")
+set(SC_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/splice_concordance_smoke")
+
+add_test(NAME splice_concordance_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${SC_DIR}")
+set_tests_properties(splice_concordance_setup PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_SETUP splice_concordance_dir)
+
+add_test(NAME splice_concordance_gamp
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${SC_FIX}/reads.gamp.json' > '${SC_DIR}/reads.gamp'")
+set_tests_properties(splice_concordance_gamp PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED splice_concordance_dir FIXTURES_SETUP splice_concordance_reads)
+
+add_test(NAME splice_concordance_annotate
+  COMMAND /bin/sh -c "'${CMAKE_SOURCE_DIR}/scripts/make-gene-annotation.sh' \
+    -x '${SC_FIX}/graph.gfa' -n '${SC_FIX}/annotation.gtf' -o '${SC_DIR}/genefull' --vg '${PT_VG}'")
+set_tests_properties(splice_concordance_annotate PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED splice_concordance_dir FIXTURES_SETUP splice_concordance_annotated)
+
+# Only NM_4.1 (the true owner of the read's splice edge) is emitted, as S; NM_3.1 (ties the exon
+# score but does not own that edge, and has no body layer to fall back to unspliced) is entirely
+# absent -- not merely demoted to U. Single gene, single transcript, no multigene drop: this is the
+# "assert A is NOT S" case from the splice-concordance spec.
+add_test(NAME genefull_ledger_splice_concordance_cross_gene
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${SC_DIR}/reads.gamp' --xg '${SC_DIR}/genefull.xg' \
+    --count-mode genefull --t2g '${SC_FIX}/t2g.tsv' --body-t2g '${SC_DIR}/genefull.t2g.tsv' \
+    --out-dir '${SC_DIR}/ledger' --bam-out '${SC_DIR}/ledger/reads.bam' \
+    && grep -qP '^emitted_groups\\t1$' '${SC_DIR}/ledger/summary.tsv' \
+    && grep -qP '^multigene_dropped_groups\\t0$' '${SC_DIR}/ledger/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${SC_DIR}/ledger/reads.bam' | grep crossgeneread | grep -q 'TX:Z:NM_4.1' \
+    && ! ('${PANCOLLAPSE_SAMTOOLS}' view '${SC_DIR}/ledger/reads.bam' | grep crossgeneread | grep -q 'NM_3.1') \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${SC_DIR}/ledger/reads.bam' | grep crossgeneread | grep -q 'GL:Z:S' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${SC_DIR}/ledger/reads.bam' | grep crossgeneread | grep -q 'GX:Z:GENE4' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${SC_DIR}/ledger/reads.bam' | grep crossgeneread | grep -q 'XT:Z:GENE4'")
+set_tests_properties(genefull_ledger_splice_concordance_cross_gene PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED "splice_concordance_annotated;splice_concordance_reads")

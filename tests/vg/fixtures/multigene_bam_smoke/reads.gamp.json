@@ -1,0 +1,2 @@
+{"name":"exonread_AAACCCAAGTTTGGGA_AAAAAAAAAAAA","sequence":"ACGTACGTACAAAACCCCGG","start":[0],"subpath":[{"score":20,"path":{"mapping":[{"position":{"node_id":"1"},"edit":[{"from_length":10,"to_length":10}]},{"position":{"node_id":"3"},"edit":[{"from_length":10,"to_length":10}]}]}}]}
+{"name":"multigeneread_AAACCCAAGTTTGGGC_AAAAAAAAAAAA","sequence":"TTTTGGGGCC","start":[0],"subpath":[{"score":10,"path":{"mapping":[{"position":{"node_id":"2"},"edit":[{"from_length":10,"to_length":10}]}]}}]}
