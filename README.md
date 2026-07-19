@@ -93,13 +93,14 @@ writes `genefull.t2g.tsv`. There are two ways to use it:
 
 - **Coarse, no flag:** run the default count with your HST t2g for a spliced count, or with the
   gene-body t2g for a GeneFull-ish count. Same graph, the t2g selects the layer.
-- **`--count-mode` for exact STARsolo/CellRanger rules:** `gene` (exonic, ≥50% of the read on
-  exons), `genefull` (any body overlap), `genefull_exonoverintron` / `genefull_ex50pas` (the
-  CellRanger v7 default, which prefers >50%-exon genes and drops 100%-exonic antisense reads).
-  These read **both** layers at once — `--t2g` is the exon layer, `--body-t2g` the gene-body
-  layer — and count reads by per-gene exonic/intronic aligned bases with CellRanger's `Unique`
-  multimapper rule (a read compatible with >1 gene is dropped, counted in
-  `multigene_dropped_groups`). See [`docs/genefull.md`](docs/genefull.md).
+- **`--count-mode` for exact STARsolo/CellRanger rules:** `gene` (STARsolo `Gene`), `genefull`
+  (STARsolo `GeneFull`), `genefull_exonoverintron` / `genefull_ex50pas` (the CellRanger v7
+  default, which also drops purely-exonic antisense reads). These read **both** layers at once —
+  `--t2g` is the exon layer, `--body-t2g` the gene-body layer — so panCollapse can classify each
+  compatible **transcript** as spliced- or unspliced-compatible by intron touch (the `TX`/`GL`
+  tags); a downstream counter groups transcripts by gene, derives ambiguity, and applies the mode
+  rule and CellRanger's `Unique` multimapper rule (a read compatible with >1 gene is dropped,
+  counted in `multigene_dropped_groups`). See [`docs/genefull.md`](docs/genefull.md).
 
 ### Outputs (in `--out-dir`)
 

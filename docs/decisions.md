@@ -1224,6 +1224,121 @@ lives (the counter). Welding the two inside `apply_count_mode` is exactly what p
 antisense-intronic gap; separating classify (upstream) from filter (downstream) removes that class of
 bug and makes strand a counter knob.
 
+### D060 — Per-transcript intron-touch classification for the ledger spliced/unspliced flags
+
+**Decision source:** User (root-caused a Gene-mode over-count on an all-haplotype pangenome
+benchmark to D057/0.4.5's per-gene score-tie rule: a read sitting in a reference transcript's
+intron can still tie the read's top score via some *other* haplotype's or isoform's exon path, so
+the gene was wrongly flagged `spliced` even though no transcript actually explains the read
+exon-only).
+
+**Problem:** Since 0.4.5, a gene was `spliced` iff *any* of its exon-transcript paths tied the
+read's single top score, and `unspliced` iff its gene-body path tied top — two independent,
+per-gene facts about which *paths* tied, not about whether any specific transcript's own splicing
+is consistent with the read. On a pangenome with many haplotype/isoform transcript copies per gene,
+an intron-sitting read can tie top score against a transcript copy it does not actually lie inside
+the exons of, so the per-gene rule calls the gene `spliced` on a coincidental tie rather than on any
+transcript actually explaining the read exon-only.
+
+**Decision:** Classify **per transcript**, not per gene — and emit the classification per
+transcript, not as a per-gene summary. At graph load, for every gene, compute each of its exon
+transcripts' on-body exon node-id span (the `[first, last]` on-body node crossed by that
+transcript's own exon path). At read time, within each compatible gene (compatibility itself
+unchanged — still the genes whose body or an exon transcript ties the read's top score, D048), a
+transcript that *spans* the read (the read's gene-body node range falls inside the transcript's
+span) is `spliced` (`S`) if its own exon path also ties the top score (within `kIntronFlankBases`
+slop — the velocyto-MIN_FLANK/STARsolo-minOverlapMinusOne-style alignment-slop guard), or
+`unspliced` (`U`) otherwise. A new `TX` BAM tag carries the read's emitted compatible transcript ids
+(`;`-separated, sorted); `GX` (gene), `GD` (the gene's orientation), and `GL` (`S`/`U`) become one
+entry **per `TX` entry**, positionally parallel — not one summary per gene. `GX` therefore repeats a
+gene once per each of its compatible transcripts; that redundancy is what lets a downstream counter
+(`count_cr`) map transcript to gene and derive per-gene ambiguity without a side file. A gene with
+both an `S` and a `U` transcript among its compatible set is velocyto's "ambiguous" (spliced for one
+isoform, unspliced for another) — panCollapse emits each transcript's own call unlabeled and leaves
+gene grouping, ambiguity resolution, the count-mode rule, and the sense/antisense policy to the
+counter, continuing the D059 "panCollapse classifies, the counter decides" split.
+
+**Not implemented (documented):** `GD` still summarizes one majority orientation per *gene*
+(repeated across that gene's transcripts, not a separate sense/antisense call per transcript).
+Splice-junction evidence was not used for classification when this decision was first recorded;
+D061 closes that gap.
+
+**Rationale:** intron touch is a fact about a specific transcript's own splicing relative to the
+read; a same-score tie against an unrelated transcript copy is not. Testing it per transcript
+(spanning + exon-only, both against precomputed on-body spans) keeps the O(nodes)-per-read cost
+D057 established — the one added expense is the one-time load-time span precompute — while fixing
+the over-count without reopening D048's top-score-tie compatibility rule, which decides gene
+membership, not splicing state. Emitting the classification per transcript rather than collapsing
+it to a per-gene pair keeps panCollapse's own output lossless (the D054 "the counter decides"
+principle) — a gene's ambiguity is a fact about the *set* of its transcripts, which only the
+counter, not panCollapse, has reason to collapse.
+
+**Verification:** node-membership alone (this decision without D061's concordance gate) took the
+chr20 Gene-mode over-count from the pre-fix 0.4.5 baseline (+83.2% vs STARsolo) to −13.2% — a large
+improvement, but still biased low from the coincidental-tie cases D061 later closed. See D061's
+verification for the combined, fully re-validated numbers (−2.76%).
+
+### D061 — Splice-junction concordance gates the `S` (spliced) call
+
+**Decision source:** User (verified case at the TUBB1/ATP5F1E tail-to-tail overlap: a read's
+aligned bases sit contiguously on a TUBB1 haplotype isoform's exon path, tying the read's top score,
+but the node-skip it actually makes — nodes 3582591-3582626 via edge 3582590<->3582627 — is
+**ATP5F1E's** intron (0 TUBB1 owners, 27 ATP5F1E owners). D060's node-membership test called this
+`S` for TUBB1; STARsolo gives it `GX:Z:-`).
+
+**Problem:** D060's per-transcript `S` test is node-membership only: a transcript's exon path ties
+the read's top score. It never checks that the read's *own* splice junction is one of that
+transcript's introns. A read can land its bases on transcript A's exon while the splice it actually
+makes belongs to a *different*, overlapping transcript B's intron — most visibly at tail-to-tail
+gene overlaps on a pangenome with many haplotype/isoform copies — and D060 wrongly calls it `S` for
+A.
+
+**Decision:** Gate `S` (and, symmetrically, `U`) on splice-junction concordance, mirroring STAR's
+`classifyAlign` (a spliced read's donor/acceptor must equal one of the transcript's own introns),
+kept **strand-blind** exactly as STAR does — orientation stays entirely downstream in `count_cr`
+(the `GD` tag + `--strand`). At graph load, alongside `transcript_spans`, precompute a global
+undirected splice-edge map: for each exon-transcript path, a consecutive node pair that is NOT
+adjacent on the gene body (the transcript's path skips real body sequence there — an intron) keys
+an entry `(node_id, node_id) -> {owning transcript target ids}` (`SpliceEdgeMap`,
+`pathtally_ledger.hpp`). Per read, `collect_read_node_pairs` (`main.cpp`) collects every consecutive
+aligned node pair the read's own alignment crosses (within one subpath's mapping list, or across a
+`next`/`connection` link to another subpath — both scanned identically, as plain node-id adjacency,
+since in this graph a splice is an ordinary graph edge/node-skip, not a `vg::Connection` record).
+`splice_concordant_transcripts` intersects, over every crossed edge that is in the splice-edge map,
+that edge's owner set — the read's splice-concordant transcript set — or returns "unconstrained"
+(every transcript concordant) if the read crosses no splice edge at all, so a single-exon or
+exon-internal read classifies exactly as before this decision. `classify_ledger_group` then requires
+a transcript to be in that set to be called `S`; the **same** gate applies to `U` — a transcript
+that ties the exon score, or spans the read's gene-body range, but fails concordance is emitted as
+**neither** `S` nor `U` (absent from `TX`), not spuriously downgraded to `U`, because a spliced read
+is not also an unspliced (pre-mRNA) one, and letting a concordance-failed transcript fall through to
+`U` would spuriously make its gene ambiguous and drop a legitimately spliced read from `Gene` mode.
+For the TUBB1/ATP5F1E case: ATP5F1E is `S` (it owns the junction) with `GD=R` (antisense) → dropped
+downstream by `--strand forward`; TUBB1 is not `S` (does not own the junction) → no `Gene` credit for
+either gene, matching STAR's `GX:Z:-`.
+
+**Not implemented (documented):** concordance is computed from raw node-pair adjacency, not from
+`vg::Connection` records — in this graph a splice is an ordinary graph edge/node-skip, so
+`Connection` records are not a reliable source of every crossed junction. `GD` still summarizes one
+majority orientation per gene; a per-transcript sense/antisense report remains unimplemented (D060).
+
+**Rationale:** node-membership is a fact about where a read's *bases* land; concordance is a fact
+about where its *splice* lands. On a pangenome with many overlapping/tail-to-tail gene pairs and
+haplotype copies, the two diverge often enough to matter — the coincidental-tie cases D060 alone
+left uncorrected. Testing concordance as an undirected node-pair-ownership intersection keeps the
+per-read cost proportional to the read's own splice count (typically zero or a handful), not to
+graph size, and requires only a one-time load-time precompute alongside the existing
+`transcript_spans` pass.
+
+**Verification:** `tests/vg/fixtures/splice_concordance_smoke/` exercises the TUBB1/ATP5F1E case;
+`tests/vg/fixtures/genefull_isoform_smoke/` checks the ordinary cross-isoform case (a read's splice
+IS the isoform's own intron) still classifies `S` as before. Full chr20, 2,000,000-read benchmark
+against STARsolo (forward strand, all four ledger modes): `Gene` 294,116 vs STARsolo 302,475
+(−2.76%, per-gene Pearson 0.967, per-cell 0.986) — down from D060-alone's −13.2% and the pre-D060
+0.4.5 baseline's +83.2%; `GeneFull` −3.33% (r 0.999); `GeneFull_ExonOverIntron` −2.02% (r 0.998);
+`GeneFull_Ex50pAS` +0.67% (r 0.998). Every ledger mode is now within a few percent of STARsolo on a
+whole chromosome, closing the large-gene/tail-to-tail over-count D060 alone left open.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

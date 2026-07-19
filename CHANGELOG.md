@@ -3,6 +3,55 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.5.0]
+
+### Changed
+
+- **The ledger spliced/unspliced classification is now per transcript, by intron touch, replacing
+  the per-gene score-tie rule -- and panCollapse now emits it per transcript too, not as a per-gene
+  summary.** A new `TX` BAM tag carries the read's compatible transcript ids (`;`-separated,
+  sorted); `GX`/`GD`/`GL` become one entry **per `TX` entry** (positionally parallel), not one per
+  gene, so a gene with more than one compatible transcript repeats in `GX`. `GL` is now a single
+  `S`/`U` call per transcript, replacing the 2-field per-gene `spliced:unspliced` flag pair
+  (0.4.5). Gene compatibility itself is unchanged (still the genes whose body or an exon transcript
+  ties the read's single top score). Within each compatible gene, panCollapse now classifies
+  **every candidate transcript**: at graph load it precomputes each exon transcript's on-body exon
+  node-id span, and at read time a transcript "spans" the read if the read's gene-body node range
+  falls inside that span. It is `S` iff its own exon path also ties the top score; `U` iff it spans
+  the read, its gene's body ties the top score, and it is not already `S`. This fixes a Gene-mode
+  over-count on the all-haplotype pangenome under the old rule: a read sitting in a reference
+  transcript's intron could tie the read's top score via some *other* haplotype's or isoform's
+  unrelated exon path, and the old per-gene rule ("spliced iff any exon isoform ties top") called
+  the gene spliced on that coincidental tie regardless of whether any transcript actually explained
+  the read exon-only.
+- **Splice-junction concordance now gates the `S` call.** Node-membership alone (a transcript's
+  exon path ties the read's top score) was too loose: a read can land its aligned bases on
+  transcript A's exon while the splice (node-skip) it actually makes is a *different*, overlapping
+  transcript B's intron -- a graph-sharing coincidence at, e.g., a tail-to-tail gene overlap. A
+  transcript is now `S` only if it additionally owns *every* splice edge the read's own alignment
+  crosses -- STAR's `classifyAlign` concordance rule, kept strand-blind exactly as STAR does
+  (orientation is applied later by `count_cr` via `GD`). The same gate applies to `U`: a transcript
+  that ties the exon score or spans the read's body range but fails concordance is emitted as
+  **neither** `S` nor `U` -- because a spliced read is not also an unspliced one, and without this
+  gate a concordance-failed transcript would fall through to `U` and spuriously make its gene
+  ambiguous.
+- **A gene with both an `S` and a `U` transcript among its compatible set is velocyto's
+  "ambiguous"** (the read is spliced for one isoform, unspliced for another). panCollapse does not
+  label it as such -- it emits each transcript's own call as-is and leaves gene grouping,
+  ambiguity, the count-mode rule, and the sense/antisense policy to the downstream counter
+  (`count_cr`: `gene` mode counts spliced-only, excluding both ambiguous and unspliced;
+  `genefull`/`genefull_exonoverintron`/`genefull_ex50pas` count any compatible gene, preferring
+  purely-spliced where the mode's tie-break applies).
+
+### Not implemented (documented)
+
+- A read's compatible transcripts are still summarized as one majority orientation per gene (the
+  `GD` tag); reporting per-transcript sense/antisense sets separately is planned but not
+  implemented.
+
+See `docs/decisions.md` D060 and D061 for the full mechanism, rationale, and chr20 validation
+numbers.
+
 ## [0.4.5]
 
 ### Changed

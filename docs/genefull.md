@@ -71,30 +71,55 @@ gene (the top-score-plus-ties rule, applied to gene-body paths just as to transc
 
 ## Exact STARsolo/CellRanger rules (`--count-mode`)
 
-The t2g-selects-the-layer approach above is coarse (it counts by the D048 top-score rule).
-`--count-mode` reproduces STARsolo/CellRanger's exact `soloFeatures` semantics by counting
-per-gene **exonic vs intronic aligned bases**. It reads **both** layers at once — `--t2g` is the
-exon (HST) layer, `--body-t2g` the gene-body layer — so each aligned node is classified exonic
-(on an HST of the gene) or intronic (in the gene body but not an exon).
+The t2g-selects-the-layer approach above is coarse (it counts by the D048 top-score rule). A ledger
+`--count-mode` (`gene`, `genefull`, `genefull_exonoverintron`, `genefull_ex50pas`) reads **both**
+layers at once — `--t2g` is the exon (HST) layer, `--body-t2g` the gene-body layer — and makes
+panCollapse emit a per-**transcript** **`spliced`/`unspliced` classification** (the optional BAM's
+`TX`/`GL` tags; see [BAM export](bam-export.md)) that a downstream counter groups by gene and
+collapses into STARsolo/CellRanger's exact `soloFeatures` semantics (D060/D061).
 
-For each read it accumulates, per gene, the aligned match bases on exon nodes vs intron nodes
-(deletions over introns, i.e. spliced reads, contribute no intronic bases), then applies:
+Gene compatibility itself is still D048's top-score tie (the genes whose body or an exon transcript
+ties the read's single top score). Within each compatible gene, panCollapse classifies **every
+candidate transcript**, never the gene as a whole: a transcript "spans" the read if the read's
+gene-body node range falls inside that transcript's own on-body exon span (precomputed once per
+gene at graph load). It is **spliced (`S`)** if its own exon path also ties the read's top score
+**and** (D061) it owns every splice edge (node-skip) the read's alignment crosses — a strand-blind
+concordance check mirroring STAR's `classifyAlign`, which catches a read that lands its aligned
+bases on one transcript's exon while the splice it actually makes belongs to a different,
+overlapping transcript's intron. It is **unspliced (`U`)** if it spans the read, its gene's body
+ties the top score, and it is likewise splice-concordant. A transcript that ties the exon score but
+fails concordance is **neither** `S` nor `U` — absent from the emitted set entirely, because a
+spliced read is not also an unspliced one; without this gate a concordance-failed transcript would
+fall through to `U` and spuriously make its gene ambiguous. Every classified transcript is emitted
+(`TX`) with its gene (`GX`), the gene's orientation (`GD`), and its call (`GL`), one entry per
+transcript, positionally parallel. A gene with **both** an `S` and a `U` transcript among its
+compatible set is velocyto's "ambiguous" (spliced for one isoform, unspliced for another) —
+panCollapse never computes that; a downstream counter groups `TX` by `GX`, derives ambiguity, and
+applies the count-mode rule.
 
-| `--count-mode` | keeps a gene when the read is… | STARsolo |
+**panCollapse's own RAD/BAM output does not depend on which ledger `--count-mode` value is
+passed** — `gene`/`genefull`/`genefull_exonoverintron`/`genefull_ex50pas` all drive the identical
+`TX`/`GX`/`GD`/`GL` classification above (only `--count-mode score` differs, skipping the ledger
+machinery entirely). The value selects which STARsolo/CellRanger rule a *downstream counter*
+applies to those flags:
+
+| `--count-mode` | a downstream counter keeps a gene when… | STARsolo |
 |---|---|---|
-| `gene` | ≥50% of the read on the gene's **exons** | `Gene` |
-| `genefull` | overlapping the gene **body** at all (exon or intron) | `GeneFull` |
-| `genefull_exonoverintron` | as `genefull`, but among overlapped genes prefer 100%-exon ones | `GeneFull_ExonOverIntron` |
-| `genefull_ex50pas` | as `genefull`, prefer >50%-exon genes, and **drop 100%-exonic antisense** reads | `GeneFull_Ex50pAS` (CellRanger v7 default) |
+| `gene` | `spliced` and not `unspliced` (a gene flagged both — "ambiguous" — is excluded) | `Gene` |
+| `genefull` | `spliced` or `unspliced` (any compatible gene) | `GeneFull` |
+| `genefull_exonoverintron` | as `genefull`, but prefer purely-`spliced` genes over intron-touching ones when a read has both among its candidates | `GeneFull_ExonOverIntron` |
+| `genefull_ex50pas` | as `genefull_exonoverintron`, and also drop a purely-`spliced` gene that is **antisense** | `GeneFull_Ex50pAS` (CellRanger v7 default) |
 
-All modes then apply the **Unique** multimapper rule: a read kept for more than one gene is
-dropped and counted in `multigene_dropped_groups` (CellRanger's default; `Rescue`/`EM`
-distribution are not implemented). Reads kept for exactly one gene are emitted to the RAD/BAM as
-usual. The default `--count-mode score` is the D048 count and is unchanged.
+`count_cr.py` (panSC) is the reference implementation of this table. All ledger modes still apply
+the **Unique** multimapper rule at the RAD/`map.rad` level: a read compatible with more than one
+gene is dropped from the RAD and counted in `multigene_dropped_groups` regardless of
+`--count-mode` (CellRanger's default; `Rescue`/`EM` distribution are not implemented) —
+`--bam-multigene all` carries it to the optional BAM anyway for a downstream UMI-level rescue (see
+below). The default `--count-mode score` is the D048 count and is unchanged.
 
-> **Strand and `GeneFull_Ex50pAS`.** The "drop 100%-exonic antisense" step in the table is only
+> **Strand and `GeneFull_Ex50pAS`.** The "drop purely-exonic antisense" step in the table is only
 > panCollapse's in-mode *fragment* of Ex50pAS. STARsolo's `GeneFull_Ex50pAS` excludes ALL antisense
-> body overlap (`intronicAS` too), not just 100%-exonic antisense — keeping antisense *intronic* reads
+> body overlap (`intronicAS` too), not just purely-exonic antisense — keeping antisense *intronic* reads
 > inflates large (−)-strand genes on a genomic pangenome (e.g. PTPRT ×734 vs STARsolo). Since v0.4.4
 > (D059) panCollapse does the rest by *emitting* each read's per-gene orientation (the `GD` tag) rather
 > than filtering on it, and the counter applies the full sense-strand policy — see

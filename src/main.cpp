@@ -20,6 +20,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <unordered_map>
 #include <stdexcept>
@@ -38,6 +39,12 @@ constexpr uint8_t kRadU32 = 3;
 constexpr uint8_t kRadU64 = 4;
 constexpr uint32_t kRadForwardMask = 0x80000000U;
 constexpr uint32_t kRadTargetIdMask = 0x7fffffffU;
+
+// Alignment-slop guard for the ledger spliced/unspliced/ambiguous classification (velocyto MIN_FLANK,
+// STARsolo minOverlapMinusOne). A transcript still counts as explaining a read exon-only if the read's
+// aligned bases fall within this many of the read's top score; a read counts as touching a gene's
+// constitutive intron only past this many body-only bases. Tunable on the d46 debug fixture.
+constexpr int64_t kIntronFlankBases = 5;
 
 enum class MoleculeIdentityFailurePolicy { Skip, Fail };
 
@@ -338,31 +345,6 @@ std::map<std::string, std::string> read_path_gene(const std::filesystem::path& f
         throw std::runtime_error("t2g has no data rows: " + filename.string());
     }
     return path_gene;
-}
-
-// Build the gene dictionary (RAD targets = genes, identity tx2gene) for the ledger count modes,
-// from the union of genes across the exon and gene-body layers.
-T2gData build_gene_dict(const std::map<std::string, std::string>& exon_path_gene,
-                        const std::map<std::string, std::string>& body_path_gene) {
-    T2gData data;
-    std::set<std::string> genes;
-    for (const auto& [path, gene] : exon_path_gene) {
-        genes.insert(gene);
-    }
-    for (const auto& [path, gene] : body_path_gene) {
-        genes.insert(gene);
-    }
-    if (genes.size() > kRadTargetIdMask) {
-        throw std::runtime_error("gene dictionary exceeds 31-bit target IDs");
-    }
-    for (const std::string& gene : genes) {
-        data.target_ids[gene] = static_cast<uint32_t>(data.target_names.size());
-        data.target_names.push_back(gene);
-        data.transcript_gene[gene] = gene;
-        data.gene_ids[gene] = static_cast<int32_t>(data.gene_names.size());
-        data.gene_names.push_back(gene);
-    }
-    return data;
 }
 
 bool is_supported_molecule_base(char base) {
@@ -733,11 +715,13 @@ public:
     }
 
     // One nominal record: mapped (flag 0), placed at position 1 of the primary gene's contig,
-    // carrying 10x tags. xt is written only when has_xt is true.
+    // carrying 10x tags. xt is written only when has_xt is true; tx/gl are written only when
+    // non-empty (score mode passes neither, so its BAM is unchanged: no TX, no GL).
     void write_record(const std::string& qname, int32_t gene_tid, const std::string& seq,
                       const std::string& qual, const std::string& cb, const std::string& ub,
                       const std::string& gx, const std::string& gn, const std::string& xt,
-                      bool has_xt, const std::string& gd, const std::string& gl = "") {
+                      bool has_xt, const std::string& gd, const std::string& gl = "",
+                      const std::string& tx = "") {
         const size_t l_seq = seq.size();
         const uint32_t cigar = (static_cast<uint32_t>(l_seq) << BAM_CIGAR_SHIFT) | BAM_CMATCH;
         const bool have_qual = !qual.empty() && qual.size() == l_seq;
@@ -753,14 +737,28 @@ public:
         append_tag("UR", ub);
         append_tag("GX", gx);
         append_tag("GN", gn);
-        // GD: per-gene orientation, one 'F' (sense/forward) or 'R' (antisense/reverse) per GX gene,
-        // ';'-separated and parallel to GX. panCollapse emits BOTH orientations (run --strand both)
-        // and records the orientation here so a downstream counter owns the sense/antisense policy.
+        // GD: orientation, ';'-separated. Score mode: one 'F'/'R' per GX gene. Ledger modes: one
+        // 'F'/'R' per TX transcript (parallel to TX/GX/GL), the transcript's GENE's majority
+        // orientation (a gene's transcripts are co-stranded, so every transcript of a gene repeats
+        // the same value). panCollapse emits BOTH orientations (run --strand both) and records the
+        // orientation here so a downstream counter owns the sense/antisense policy.
         append_tag("GD", gd);
-        // GL: per-gene ledger, ';'-separated and parallel to GX -- "spliced:unspliced" 1/0 flags
-        // (whether an exon isoform, or the gene body, ties the read's top alignment score). Lets a
-        // downstream counter own the count mode (Gene vs GeneFull vs the exon tie-breaks). Absent on
-        // the Score-mode BAM, so a GL-less BAM counts by XT/GX as before.
+        // TX: ledger modes only -- the read's emitted compatible transcript ids, ';'-separated,
+        // sorted by transcript id. GX/GD/GL below are then one entry PER TX ENTRY, not per gene (GX
+        // repeats a gene once for each of its emitted isoforms -- that redundancy is what lets a
+        // downstream counter map transcript->gene and derive per-gene ambiguity without a side
+        // file). Absent on the Score-mode BAM, where GX/GD stay per-gene as before.
+        if (!tx.empty()) {
+            append_tag("TX", tx);
+        }
+        // GL: ledger modes only, ';'-separated and parallel to TX/GX/GD -- one 'S' (spliced: the
+        // read is exon-only on this transcript, i.e. explained without touching any of its introns)
+        // or 'U' (unspliced: the transcript's genomic span brackets the read but its exon path does
+        // not explain it -- the read sits in one of its introns) per emitted transcript. A GENE
+        // flagged both S (via one transcript) and U (via another) is velocyto's 'ambiguous' --
+        // panCollapse never computes that; a downstream counter groups TX by GX and derives it, then
+        // applies the count-mode rule (Gene = spliced-only, GeneFull = any) and the sense/antisense
+        // policy. Absent on the Score-mode BAM, so a GL-less BAM counts by XT/GX as before.
         if (!gl.empty()) {
             append_tag("GL", gl);
         }
@@ -810,6 +808,48 @@ void write_text_file(const std::filesystem::path& filename, const std::string& c
     out << contents;
 }
 
+// D061 (splice-junction concordance): every consecutive aligned node pair a read group's own
+// alignments make -- within one subpath's mapping list, or across a subpath next/connection link to
+// another subpath -- is a candidate splice edge, checked by the caller against the global
+// SpliceEdgeMap (pathtally::splice_concordant_transcripts). `next` links are already contiguous in
+// the graph (MultipathAlignment's own contract); `connection` links are not necessarily so -- but
+// both are scanned the SAME way, as plain node-id adjacency, since in this graph a splice is an
+// ordinary graph edge/node-skip, not something inferred from which link type carried it. A subpath
+// with zero mappings (never expected in practice, but not guaranteed by the proto) contributes no
+// first/last node and is simply skipped.
+std::vector<std::pair<int64_t, int64_t>> collect_read_node_pairs(
+    const std::vector<vg::MultipathAlignment>& records) {
+    std::vector<std::pair<int64_t, int64_t>> pairs;
+    for (const vg::MultipathAlignment& record : records) {
+        for (int s = 0; s < record.subpath_size(); ++s) {
+            const vg::Subpath& subpath = record.subpath(s);
+            const vg::Path& path = subpath.path();
+            const int n = path.mapping_size();
+            for (int i = 0; i + 1 < n; ++i) {
+                pairs.emplace_back(path.mapping(i).position().node_id(),
+                                   path.mapping(i + 1).position().node_id());
+            }
+            if (n == 0) {
+                continue;  // no last node -- any next/connection out of this subpath contributes nothing
+            }
+            const int64_t last = path.mapping(n - 1).position().node_id();
+            auto pair_with_first_node_of = [&](int next_index) {
+                const vg::Path& next_path = record.subpath(next_index).path();
+                if (next_path.mapping_size() > 0) {
+                    pairs.emplace_back(last, next_path.mapping(0).position().node_id());
+                }
+            };
+            for (const uint32_t next_index : subpath.next()) {
+                pair_with_first_node_of(static_cast<int>(next_index));
+            }
+            for (const vg::Connection& connection : subpath.connection()) {
+                pair_with_first_node_of(static_cast<int>(connection.next()));
+            }
+        }
+    }
+    return pairs;
+}
+
 struct Group {
     std::string name;
     MoleculeId molecule;
@@ -823,19 +863,17 @@ struct Group {
 
 int run_convert(int argc, char** argv) {
     const Options options = parse_options(argc, argv);
-    // Gene-calling source. Score mode (default, D048) reads the HST t2g and attributes each node
-    // to the HST paths crossing it. The ledger count modes read two path->gene t2gs -- the exon
-    // (HST) layer (--t2g) and the gene-body layer (--body-t2g) -- and per node classify each gene
-    // it touches as exon or intron.
-    T2gData t2g;
-    std::map<std::string, std::string> exon_path_gene;
+    // Gene-calling source. Both score mode (D048) and the ledger count modes (D060) read the exon
+    // (HST) layer the same way -- read_t2g collapses each embedded HST path's haplotype copies
+    // (transcript_id_of) to a canonical transcript id, giving the RAD target dictionary
+    // (transcripts) and the transcript->gene map. The ledger modes additionally read the gene-body
+    // layer (--body-t2g) as a raw path->gene map -- a gene body is not itself a transcript, so it
+    // is not collapsed the same way -- used for the gene-body score and the transcript_spans
+    // precompute below.
+    T2gData t2g = read_t2g(options.t2g);
     std::map<std::string, std::string> body_path_gene;
-    if (options.count_mode == pathtally::CountMode::Score) {
-        t2g = read_t2g(options.t2g);
-    } else {
-        exon_path_gene = read_path_gene(options.t2g);
+    if (options.count_mode != pathtally::CountMode::Score) {
         body_path_gene = read_path_gene(options.body_t2g);
-        t2g = build_gene_dict(exon_path_gene, body_path_gene);
     }
 
     xg::XG graph;
@@ -845,25 +883,61 @@ int run_convert(int argc, char** argv) {
     }
     graph.deserialize(xg_in);
 
-    // Score-mode HST lookup (node -> HST names, cached per node) and ledger-mode lookup
-    // (node -> (gene index, is_exon, gene_is_reverse), cached per node). Only the one for the
-    // active mode is built. Both do the node-id-space validation on first touch.
+    // Score-mode HST lookup (node -> HST names, cached per node). Ledger-mode lookup is below.
+    // Only the one for the active mode is built. Both do the node-id-space validation on first
+    // touch.
     std::unordered_map<uint64_t, std::string> hst_path_name;
     std::unordered_map<int64_t, std::vector<std::pair<const std::string*, bool>>> node_hst_cache;
     pathtally::PathLookup lookup;
-    std::unordered_map<uint64_t, std::pair<uint32_t, bool>> path_gene_layer;  // path -> (gene, is_exon)
-    // Per-node ledger cache. gene_entries carries per-gene orientation (one entry per gene per node).
-    // all_paths keeps every reference path crossing the node -- both exon-layer transcripts and gene-
-    // body paths, un-collapsed -- so a read can be scored per reference and its top-tied compatible set
-    // taken. A gene is spliced-compatible iff one of its exon transcripts ties for the read's top
-    // score (the read is fully explained by that isoform) and unspliced-compatible iff its body path
-    // does; the count mode is a downstream collapse of that set.
+
+    // Ledger-mode state (D060: per-transcript intron-touch classification). ledger_path_info covers
+    // every reference path relevant to a ledger count mode -- both exon-layer transcripts and
+    // gene-body paths -- keyed by path handle, so the per-node cache below classifies a node's
+    // crossing paths in O(1). exon_name_transcript / body_name_gene are the SAME classification
+    // keyed by raw path NAME instead: after tally_read_group_into tallies a read's touched
+    // references by name (exactly as score mode does), these collapse that tally down to
+    // exon_score (per transcript) and body_score (per gene) -- see the ledger branch of flush_group.
+    struct PathInfo {
+        std::string name;       // raw graph path name, fed to the score tally's PathLookup
+        uint32_t gene_idx = 0;   // gene index (t2g.gene_ids space)
+        bool is_exon = false;    // exon-transcript path (true) vs gene-body path (false)
+    };
+    std::unordered_map<uint64_t, PathInfo> ledger_path_info;
+    std::unordered_map<std::string, uint32_t> exon_name_transcript;  // exon path name -> transcript target id
+    std::unordered_map<std::string, uint32_t> body_name_gene;         // body path name -> gene idx
+    // Per-transcript spans for the spliced/unspliced classification, built once at load. For each
+    // gene, each exon transcript contributes (first_on_body_exon_node_id, last_on_body_exon_node_id,
+    // transcript_target_id). At read time a transcript "spans" the read iff its [lo,hi] node-id
+    // interval brackets the read's gene-body node-id range; the gene body's nodes run in ascending
+    // id order within the gene's contiguous id band, so a node-id interval is the span. See
+    // pathtally_ledger.hpp (classify_ledger_group) for how this feeds the classification.
+    std::unordered_map<uint32_t, std::vector<pathtally::TranscriptSpan>> transcript_spans;
+    // D061 (splice-junction concordance): global undirected splice-edge (min,max on-body node id) ->
+    // owning transcript target ids, built in the SAME precompute pass as transcript_spans below (it
+    // reuses that loop's per-gene body_nodes). A read's own crossed splice edges (collect_read_node_pairs
+    // below, checked via pathtally::splice_concordant_transcripts) gate the S call in
+    // classify_ledger_group: a transcript explains a read's splice exon-only only if it owns every
+    // edge the read's own alignment skips over -- not merely because its exon path also happens to
+    // cross the same two nodes (the old, too-loose node-membership test). See pathtally_ledger.hpp.
+    pathtally::SpliceEdgeMap splice_edges;
+    // Per-node ledger cache. ref_paths feeds the score tally (tally_read_group_into, reused verbatim
+    // from score mode): every reference path crossing the node, exon or gene-body, un-collapsed, so
+    // a read's per-reference score here is exactly what score mode would compute for that
+    // reference. orient is (gene_idx, path_is_reverse) collapsed per gene at this node (a node on
+    // both a gene's exon and body paths keeps whichever is visited last, as before) -- used for the
+    // gene's majority-orientation GD tag, from EVERY touched node (exon or body), so even a
+    // purely-intronic read gets an orientation. body_genes is the deduped gene-index list whose BODY
+    // path crosses this node, used only to grow that gene's touched node-id range: a gene's body may
+    // be embedded as multiple haplotype copies (H1/R1) crossing the same node, and this must count
+    // once per gene, not once per copy.
     struct NodeLedger {
-        std::vector<std::tuple<uint32_t, bool, bool>> gene_entries;   // (gene_idx, is_exon, is_reverse)
-        std::vector<std::tuple<uint64_t, uint32_t, bool>> all_paths;  // (path handle, gene_idx, is_exon)
+        std::vector<std::pair<const std::string*, bool>> ref_paths;
+        std::vector<std::pair<uint32_t, bool>> orient;
+        std::vector<uint32_t> body_genes;
     };
     std::unordered_map<int64_t, NodeLedger> node_ledger_cache;
-    std::function<const NodeLedger&(int64_t)> ledger_lookup;
+    std::function<const NodeLedger&(int64_t)> node_ledger_of;
+    pathtally::PathLookup ledger_lookup;
 
     if (options.count_mode == pathtally::CountMode::Score) {
         graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
@@ -898,30 +972,120 @@ int run_convert(int argc, char** argv) {
             }
         };
     } else {
+        // Gene -> its exon-transcript and gene-body path handles, collected to build transcript_spans.
+        std::unordered_map<uint32_t, std::vector<handlegraph::path_handle_t>> gene_exon_paths;
+        std::unordered_map<uint32_t, std::vector<handlegraph::path_handle_t>> gene_body_paths;
+        // t2g.gene_ids (built by read_t2g from the EXON layer only) may not cover every gene the
+        // gene-body layer names -- a gene with body coverage but no annotated exon transcript at all
+        // still needs a valid index here (it contributes no transcript output -- classify_ledger_group
+        // silently excludes a gene absent from transcript_spans -- but must not abort the whole load).
+        // Get-or-create rather than .at(), so such a gene is assigned an index on first sight.
+        auto gene_index_for = [&](const std::string& gene) -> uint32_t {
+            const auto it = t2g.gene_ids.find(gene);
+            if (it != t2g.gene_ids.end()) {
+                return static_cast<uint32_t>(it->second);
+            }
+            const int32_t idx = static_cast<int32_t>(t2g.gene_names.size());
+            t2g.gene_ids.emplace(gene, idx);
+            t2g.gene_names.push_back(gene);
+            return static_cast<uint32_t>(idx);
+        };
         graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
             const std::string name = graph.get_path_name(path);
-            // Accept either a raw path-name-keyed t2g or a suffix-stripped (bare transcript/gene)
-            // t2g: look up the full embedded path name first, then fall back to the copy-suffix-
-            // stripped id (trailing _R<n>/_H<n> removed) so a standard tx<TAB>gene file works
-            // unchanged. The full name wins if both are present, preserving exact path-keyed behavior.
-            const std::string base = pathtally::transcript_id_of(name);
-            auto e = exon_path_gene.find(name);
-            if (e == exon_path_gene.end() && base != name) {
-                e = exon_path_gene.find(base);
-            }
-            if (e != exon_path_gene.end()) {
-                path_gene_layer[handlegraph::as_integer(path)] = {t2g.target_ids.at(e->second), true};
+            const std::string transcript = pathtally::transcript_id_of(name);
+            // Exon layer: the SAME transcript dictionary as score mode (t2g.transcript_gene), keyed
+            // by the canonical (haplotype-copy-collapsed) transcript id. transcript_gene is keyed by
+            // transcript_id_of(t2g file's column 1), so this matches whether the t2g file used the
+            // full embedded path name or the bare/suffix-stripped id (bare-t2g regression guard).
+            const auto tg = t2g.transcript_gene.find(transcript);
+            if (tg != t2g.transcript_gene.end()) {
+                const uint32_t gene_idx = gene_index_for(tg->second);
+                const uint32_t target_id = t2g.target_ids.at(transcript);
+                ledger_path_info.emplace(handlegraph::as_integer(path), PathInfo{name, gene_idx, true});
+                exon_name_transcript.emplace(name, target_id);
+                gene_exon_paths[gene_idx].push_back(path);
                 return;
             }
+            // Gene-body layer: a raw path->gene map -- a gene body is not a transcript, so it is not
+            // collapsed via transcript_id_of. Accept either the full embedded path name or the
+            // suffix-stripped bare gene id, the same fallback as the exon layer above.
             auto b = body_path_gene.find(name);
-            if (b == body_path_gene.end() && base != name) {
-                b = body_path_gene.find(base);
+            if (b == body_path_gene.end() && transcript != name) {
+                b = body_path_gene.find(transcript);
             }
             if (b != body_path_gene.end()) {
-                path_gene_layer[handlegraph::as_integer(path)] = {t2g.target_ids.at(b->second), false};
+                const uint32_t gene_idx = gene_index_for(b->second);
+                ledger_path_info.emplace(handlegraph::as_integer(path), PathInfo{name, gene_idx, false});
+                body_name_gene.emplace(name, gene_idx);
+                gene_body_paths[gene_idx].push_back(path);
             }
         });
-        ledger_lookup = [&](int64_t node_id) -> const NodeLedger& {
+
+        // Per-transcript spans for the ledger classification. For each gene, gather its gene-body node
+        // set, then record every exon transcript's [first,last on-body exon node id] interval. A
+        // transcript's introns are the body nodes inside that interval its own exon path skips; rather
+        // than materialise those (memory: hundreds of introns x tens of thousands of transcripts), the
+        // read-time classification counts, per gene, transcripts that span the read vs transcripts
+        // whose own exon path explains it, and infers intron touch from the difference (see
+        // pathtally_ledger.hpp). Off-body exon nodes (divergent haplotype isoforms whose exons leave
+        // the deduped body backbone) are excluded from the span so it stays within the gene's id band.
+        // This is the one added load-time pass over the graph. D061 extends the SAME pass: while
+        // walking each exon path's node sequence, also record which consecutive pairs are that
+        // transcript's OWN splice (intron-skip) edges, into the global splice_edges ownership map.
+        for (const auto& [gene_idx, exon_paths] : gene_exon_paths) {
+            std::unordered_set<int64_t> body_nodes;
+            const auto body_it = gene_body_paths.find(gene_idx);
+            if (body_it != gene_body_paths.end()) {
+                for (const handlegraph::path_handle_t& body_path : body_it->second) {
+                    graph.for_each_step_in_path(body_path, [&](const handlegraph::step_handle_t& step) {
+                        body_nodes.insert(graph.get_id(graph.get_handle_of_step(step)));
+                    });
+                }
+            }
+            // Sorted once per gene so the D061 splice-edge check below ("is there a body node
+            // strictly between these two exon-path neighbours") is a binary search rather than an
+            // O(range) scan -- a gene's body can span thousands of nodes.
+            std::vector<int64_t> body_sorted(body_nodes.begin(), body_nodes.end());
+            std::sort(body_sorted.begin(), body_sorted.end());
+
+            auto& spans = transcript_spans[gene_idx];
+            spans.reserve(exon_paths.size());
+            for (const handlegraph::path_handle_t& exon_path : exon_paths) {
+                std::vector<int64_t> node_ids;
+                graph.for_each_step_in_path(exon_path, [&](const handlegraph::step_handle_t& step) {
+                    node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
+                });
+                const uint32_t target_id = exon_name_transcript.at(graph.get_path_name(exon_path));
+
+                int64_t lo = std::numeric_limits<int64_t>::max();
+                int64_t hi = std::numeric_limits<int64_t>::min();
+                for (const int64_t id : node_ids) {
+                    if (body_nodes.count(id) != 0) {
+                        lo = std::min(lo, id);
+                        hi = std::max(hi, id);
+                    }
+                }
+                if (lo <= hi) {
+                    spans.push_back({lo, hi, target_id});
+                }
+
+                // D061: a consecutive pair on this exon path is one of the transcript's own splice
+                // (intron-skip) edges iff the gene body has a node strictly between them -- the
+                // transcript's own path jumps past real gene-body sequence there. Record it, owned
+                // by this transcript, in the global map (an edge can be several transcripts' shared
+                // intron -- e.g. a constitutive junction -- so this only ever adds an owner).
+                for (size_t i = 0; i + 1 < node_ids.size(); ++i) {
+                    const int64_t edge_lo = std::min(node_ids[i], node_ids[i + 1]);
+                    const int64_t edge_hi = std::max(node_ids[i], node_ids[i + 1]);
+                    const auto between = std::upper_bound(body_sorted.begin(), body_sorted.end(), edge_lo);
+                    if (between != body_sorted.end() && *between < edge_hi) {
+                        splice_edges[{edge_lo, edge_hi}].insert(target_id);
+                    }
+                }
+            }
+        }
+
+        node_ledger_of = [&](int64_t node_id) -> const NodeLedger& {
             auto cached = node_ledger_cache.find(node_id);
             if (cached == node_ledger_cache.end()) {
                 if (!graph.has_node(node_id)) {
@@ -929,32 +1093,39 @@ int run_convert(int argc, char** argv) {
                         "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
                         " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
-                // gene -> (is_exon, gene_is_reverse) collapsed per gene for orientation; a node on both
-                // a gene's exon and body paths counts as exon here (exon wins). all_paths (below) keeps
-                // the per-path granularity the top-tied scoring needs.
-                std::map<uint32_t, std::pair<bool, bool>> per_gene;
                 NodeLedger nl;
+                std::map<uint32_t, bool> orient_here;  // gene_idx -> is_reverse, deduped per node
+                std::set<uint32_t> body_genes_here;
                 const handlegraph::handle_t handle = graph.get_handle(node_id, false);
                 graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
                     const uint64_t path_handle =
                         handlegraph::as_integer(graph.get_path_handle_of_step(step));
-                    const auto it = path_gene_layer.find(path_handle);
-                    if (it != path_gene_layer.end()) {
-                        auto& entry = per_gene[it->second.first];
-                        entry.first = entry.first || it->second.second;
-                        entry.second = graph.get_is_reverse(graph.get_handle_of_step(step));
-                        // Every reference path crossing the node (exon transcript or gene body),
-                        // un-collapsed, is a scoreable reference for the top-tied compatible set.
-                        nl.all_paths.emplace_back(path_handle, it->second.first, it->second.second);
+                    const auto it = ledger_path_info.find(path_handle);
+                    if (it == ledger_path_info.end()) {
+                        return true;
+                    }
+                    const bool path_is_reverse = graph.get_is_reverse(graph.get_handle_of_step(step));
+                    // Every reference path crossing the node (exon transcript or gene body),
+                    // un-collapsed, is a scoreable reference for tally_read_group_into.
+                    nl.ref_paths.emplace_back(&it->second.name, path_is_reverse);
+                    orient_here[it->second.gene_idx] = path_is_reverse;
+                    if (!it->second.is_exon) {
+                        body_genes_here.insert(it->second.gene_idx);
                     }
                     return true;
                 });
-                for (const auto& [gene_idx, flags] : per_gene) {
-                    nl.gene_entries.emplace_back(gene_idx, flags.first, flags.second);
+                for (const auto& [gene_idx, is_reverse] : orient_here) {
+                    nl.orient.emplace_back(gene_idx, is_reverse);
                 }
+                nl.body_genes.assign(body_genes_here.begin(), body_genes_here.end());
                 cached = node_ledger_cache.emplace(node_id, std::move(nl)).first;
             }
             return cached->second;
+        };
+        ledger_lookup = [&](int64_t node_id, const std::function<void(const std::string&, bool)>& emit) {
+            for (const auto& [name_ptr, path_is_reverse] : node_ledger_of(node_id).ref_paths) {
+                emit(*name_ptr, path_is_reverse);
+            }
         };
     }
 
@@ -1088,6 +1259,12 @@ int run_convert(int argc, char** argv) {
         }
 
         std::vector<pathtally::RadTarget> targets;
+        // Distinct genes among a ledger read's emitted transcripts (score mode leaves this empty --
+        // it has no Unique multi-GENE drop; a score-mode multi-target read is ordinary D048
+        // multimapping evidence). Populated inside the ledger branch below; read after it, for the
+        // Unique RAD drop, which is a multi-GENE rule, not a multi-transcript one (a gene with >=2
+        // emitted isoforms is still one gene).
+        std::set<std::string> ledger_genes;
         if (options.count_mode == pathtally::CountMode::Score) {
             std::vector<const vg::MultipathAlignment*> record_ptrs;
             record_ptrs.reserve(current_group.records.size());
@@ -1097,16 +1274,22 @@ int run_convert(int argc, char** argv) {
             pathtally::tally_read_group_into(tally_workspace, record_ptrs, lookup, node_scorer);
             targets = pathtally::select_targets(tally_workspace);
         } else {
-            // Ledger modes: score every reference path (exon-layer transcripts and gene-body paths) the
-            // read touches by its aligned bases, take the references tied at the single top score as the
-            // read's compatible set, and collapse them to per-gene spliced/unspliced status. The gene
-            // body covers a read's intronic bases where an exon transcript does not, so an exon-intron
-            // spanning read scores highest for the body (unspliced only), a fully-exonic read ties its
-            // isoform with the body (spliced), and a read stitched exonic across several isoforms scores
-            // highest for the gene body, not any single isoform (correctly not spliced). The count mode
-            // and strand policy are applied downstream -- panCollapse scores, the counter collapses.
-            std::unordered_map<uint64_t, int64_t> path_bases;            // reference path -> aligned bases
-            std::map<uint32_t, std::pair<int64_t, int64_t>> gene_orient;  // gene -> (forward, reverse) bases
+            // Ledger modes (D060): reuse the score-mode tally verbatim -- tally_read_group_into over
+            // a PathLookup covering BOTH exon-layer transcripts and gene-body paths (ledger_lookup) --
+            // to score every reference the read touches, then classify per transcript on top of it.
+            std::vector<const vg::MultipathAlignment*> record_ptrs;
+            record_ptrs.reserve(current_group.records.size());
+            for (const vg::MultipathAlignment& record : current_group.records) {
+                record_ptrs.push_back(&record);
+            }
+            pathtally::tally_read_group_into(tally_workspace, record_ptrs, ledger_lookup, node_scorer);
+
+            // A second, plain node visitation (score-independent) for what the score tally cannot
+            // give us: per-gene orientation (aligned bases, majority vote -- same rule as score
+            // mode's RadTarget.forward) and the read's touched gene-body node-id range per gene, used
+            // to test each transcript's precomputed span below.
+            std::map<uint32_t, std::pair<int64_t, int64_t>> gene_orient;  // gene idx -> (fwd, rev) bases
+            std::map<uint32_t, std::pair<int64_t, int64_t>> body_range;    // gene idx -> (lo, hi) touched
             for (const vg::MultipathAlignment& record : current_group.records) {
                 for (int s = 0; s < record.subpath_size(); ++s) {
                     const vg::Path& path = record.subpath(s).path();
@@ -1116,72 +1299,113 @@ int run_convert(int argc, char** argv) {
                         if (aligned == 0) {
                             continue;
                         }
+                        const int64_t node_id = mapping.position().node_id();
                         const bool read_is_reverse = mapping.position().is_reverse();
-                        const NodeLedger& nl = ledger_lookup(mapping.position().node_id());
-                        for (const auto& [gene_idx, is_exon, gene_is_reverse] : nl.gene_entries) {
+                        const NodeLedger& nl = node_ledger_of(node_id);
+                        for (const auto& [gene_idx, path_is_reverse] : nl.orient) {
                             auto& orient = gene_orient[gene_idx];
-                            if (read_is_reverse == gene_is_reverse) {
+                            if (read_is_reverse == path_is_reverse) {
                                 orient.first += aligned;
                             } else {
                                 orient.second += aligned;
                             }
                         }
-                        for (const auto& [path_handle, gene_idx, is_exon] : nl.all_paths) {
-                            path_bases[path_handle] += aligned;
+                        for (const uint32_t gene_idx : nl.body_genes) {
+                            auto [it, inserted] = body_range.try_emplace(
+                                gene_idx, std::numeric_limits<int64_t>::max(),
+                                std::numeric_limits<int64_t>::min());
+                            it->second.first = std::min(it->second.first, node_id);
+                            it->second.second = std::max(it->second.second, node_id);
                         }
                     }
                 }
             }
 
-            // Top-tied references -> per-gene (spliced-compatible, unspliced-compatible).
-            int64_t top = 0;
-            for (const auto& [path_handle, bases] : path_bases) {
-                top = std::max(top, bases);
-            }
-            std::map<uint32_t, std::pair<bool, bool>> gene_compat;  // gene -> (spliced, unspliced)
-            for (const auto& [path_handle, bases] : path_bases) {
-                if (bases != top) {
+            // Collapse the by-name score tally to exon_score (per transcript target id) and
+            // body_score (per gene idx), each the MAX score among that transcript's/gene's raw
+            // haplotype-copy paths -- not a sum, so a node shared by two haplotype copies of the
+            // same transcript or gene body is not double-counted (the best-explaining copy's own
+            // score already reflects every node on ITS path once).
+            std::map<uint32_t, int64_t> exon_score;
+            std::map<uint32_t, int64_t> body_score;
+            for (const auto& [name, tally] : tally_workspace) {
+                const auto ex = exon_name_transcript.find(name);
+                if (ex != exon_name_transcript.end()) {
+                    auto [it, inserted] = exon_score.try_emplace(ex->second, std::numeric_limits<int64_t>::min());
+                    it->second = std::max(it->second, tally.score);
                     continue;
                 }
-                const auto& layer = path_gene_layer.at(path_handle);
-                auto& compat = gene_compat[layer.first];
-                if (layer.second) {
-                    compat.first = true;   // an exon transcript ties top -> spliced-compatible
-                } else {
-                    compat.second = true;  // the gene body ties top -> unspliced-compatible
+                const auto bd = body_name_gene.find(name);
+                if (bd != body_name_gene.end()) {
+                    auto [it, inserted] = body_score.try_emplace(bd->second, std::numeric_limits<int64_t>::min());
+                    it->second = std::max(it->second, tally.score);
                 }
             }
 
-            // Emit the mode-agnostic per-gene ledger into the BAM: GX = compatible genes (sorted), GL =
-            // "spliced:unspliced" 1/0 flags per gene (parallel to GX), GD = orientation. The count mode
-            // and sense/antisense policy are applied downstream by count_cr -- panCollapse classifies,
-            // the counter filters -- so one alignment serves every count mode. A single-gene read is
-            // always written (XT set). A multi-gene read follows --bam-multigene, mirroring the RAD
-            // Unique drop below: omit leaves it out of the BAM, first assigns it to the primary gene
-            // (XT set), all carries it with the full candidate set and no XT so count_cr's
+            // D061: the read group's own splice-concordant transcript set -- nullopt (unconstrained)
+            // unless its alignments actually cross a splice edge (collect_read_node_pairs), in which
+            // case only a transcript owning EVERY crossed edge stays eligible for S below.
+            const std::optional<std::set<uint32_t>> splice_concordant =
+                pathtally::splice_concordant_transcripts(collect_read_node_pairs(current_group.records),
+                                                          splice_edges);
+
+            // classify_ledger_group (pathtally_ledger.hpp): spliced = a transcript whose own exon-path
+            // score ties the read's top (within kIntronFlankBases) AND is splice-concordant (D061);
+            // unspliced = a transcript that spans the read's touched gene-body range, for a gene whose
+            // body ties top, and is not already spliced. Emitted once per transcript, deduped.
+            const std::vector<pathtally::LedgerCall> calls =
+                pathtally::classify_ledger_group(exon_score, body_score, body_range, transcript_spans,
+                                                 kIntronFlankBases, splice_concordant);
+
+            // Per emitted transcript: its gene and the gene's majority orientation (a gene's
+            // transcripts are co-stranded, so every transcript of a gene carries the SAME GD).
+            // ledger_genes collects the distinct genes among the emitted transcripts, for the
+            // Unique multi-GENE (not multi-transcript) RAD drop below.
+            std::map<uint32_t, char> transcript_gd;  // transcript target id -> 'F'/'R'
+            for (const pathtally::LedgerCall& call : calls) {
+                const std::string& transcript = t2g.target_names[call.transcript_target_id];
+                const std::string& gene = t2g.transcript_gene.at(transcript);
+                ledger_genes.insert(gene);
+                const uint32_t gene_idx = static_cast<uint32_t>(t2g.gene_ids.at(gene));
+                const auto oit = gene_orient.find(gene_idx);
+                const bool forward = oit == gene_orient.end() || oit->second.first >= oit->second.second;
+                transcript_gd[call.transcript_target_id] = forward ? 'F' : 'R';
+            }
+
+            // Emit the per-transcript ledger into the BAM: TX = emitted transcript ids, GX/GD/GL one
+            // entry per TX entry (parallel) -- gene, orientation, spliced('S')/unspliced('U'). GX
+            // repeats a gene once per one of its emitted isoforms; that redundancy is what lets
+            // count_cr map transcript->gene and derive ambiguity without a side file. The count mode,
+            // ambiguity resolution, and strand policy all live in count_cr -- panCollapse classifies
+            // per transcript, the counter groups by gene and collapses. A single-gene read is always
+            // written (XT set). A multi-gene read follows --bam-multigene, mirroring the RAD Unique
+            // drop below: omit leaves it out of the BAM, first assigns it to the primary gene (XT
+            // set), all carries it with the full candidate set and no XT so count_cr's
             // MultiGeneUMI_CR rescue can resolve the dominant gene.
-            if (bam_writer && !gene_compat.empty()) {
-                std::string gx, gd, gl_tag, primary_gene;
+            if (bam_writer && !calls.empty()) {
+                std::string tx, gx, gd, gl, primary_gene;
                 int32_t primary_tid = -1;
-                size_t n_genes = 0;
-                for (const auto& [gene_idx, compat] : gene_compat) {
-                    const std::string& gene = t2g.target_names[gene_idx];
-                    const auto& orient = gene_orient[gene_idx];
-                    if (n_genes > 0) {
+                size_t n = 0;
+                for (const pathtally::LedgerCall& call : calls) {
+                    const std::string& transcript = t2g.target_names[call.transcript_target_id];
+                    const std::string& gene = t2g.transcript_gene.at(transcript);
+                    if (n > 0) {
+                        tx += ';';
                         gx += ';';
                         gd += ';';
-                        gl_tag += ';';
+                        gl += ';';
                     }
+                    tx += transcript;
                     gx += gene;
-                    gd += orient.first >= orient.second ? 'F' : 'R';
-                    gl_tag += std::string(compat.first ? "1" : "0") + ':' + (compat.second ? "1" : "0");
-                    if (n_genes == 0) {
+                    gd += transcript_gd.at(call.transcript_target_id);
+                    gl += call.spliced ? 'S' : 'U';
+                    if (n == 0) {
                         primary_gene = gene;
                         primary_tid = t2g.gene_ids.at(gene);
                     }
-                    ++n_genes;
+                    ++n;
                 }
-                const bool multigene = n_genes > 1;
+                const bool multigene = ledger_genes.size() > 1;
                 if (!multigene || options.bam_multigene != BamMultiGenePolicy::Omit) {
                     const bool has_xt =
                         !multigene || options.bam_multigene == BamMultiGenePolicy::First;
@@ -1190,14 +1414,14 @@ int run_convert(int argc, char** argv) {
                                              read.sequence(), read.quality(),
                                              current_group.molecule.barcode, current_group.molecule.umi,
                                              gx, /*gn=*/gx, /*xt=*/primary_gene, /*has_xt=*/has_xt,
-                                             /*gd=*/gd, /*gl=*/gl_tag);
+                                             /*gd=*/gd, /*gl=*/gl, /*tx=*/tx);
                 }
             }
 
-            // RAD/alevin-fry: the compatible genes are the read's equivalence class.
-            for (const auto& [gene_idx, compat] : gene_compat) {
-                const auto& orient = gene_orient[gene_idx];
-                targets.push_back({t2g.target_names[gene_idx], orient.first >= orient.second});
+            // RAD/alevin-fry: the emitted transcripts are the read's equivalence class.
+            for (const pathtally::LedgerCall& call : calls) {
+                targets.push_back({t2g.target_names[call.transcript_target_id],
+                                   transcript_gd.at(call.transcript_target_id) == 'F'});
             }
         }
 
@@ -1230,12 +1454,14 @@ int run_convert(int argc, char** argv) {
         }
 
         // Ledger count modes are Unique (CellRanger default) for the RAD/alevin-fry path: a read
-        // compatible with more than one gene gets no RAD record. The optional BAM already emitted the
-        // read above under --bam-multigene (all carries the multi-gene read with its full candidate set
-        // for count_cr's downstream MultiGeneUMI_CR rescue; omit/first do not), independent of this RAD
-        // drop, so one alignment serves both the Unique RAD and the mode-agnostic BAM.
+        // compatible with more than one GENE gets no RAD record (a gene with >=2 emitted transcript
+        // isoforms -- e.g. the cross-isoform spliced+unspliced case -- is still one gene and is NOT
+        // dropped here). The optional BAM already emitted the read above under --bam-multigene (all
+        // carries the multi-gene read with its full candidate set for count_cr's downstream
+        // MultiGeneUMI_CR rescue; omit/first do not), independent of this RAD drop, so one alignment
+        // serves both the Unique RAD and the mode-agnostic BAM.
         const bool ledger_multigene =
-            options.count_mode != pathtally::CountMode::Score && targets.size() > 1;
+            options.count_mode != pathtally::CountMode::Score && ledger_genes.size() > 1;
         if (ledger_multigene) {
             ++multigene_dropped_groups;
             completed_names.insert(current_group.name);
