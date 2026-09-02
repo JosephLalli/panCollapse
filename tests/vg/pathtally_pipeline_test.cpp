@@ -124,6 +124,56 @@ void run() {
         check(transcript_ids(targets) == (std::vector<std::string>{"TXC", "TXD"}), "E: ties retained, sorted");
     }
 
+    // Case F: an explicit resolver may collapse arbitrary CAT path names. Raw-path winner
+    // selection MUST happen first: CAT_A_HAP1 and CAT_A_HAP2 both tie CAT_B_HAP1 at 20,
+    // so both canonical transcripts survive. Summing the two A paths before selecting the
+    // top score would manufacture score 40 for CANON_A and incorrectly drop CANON_B.
+    {
+        pathtally::TallyMap tallies;
+        tallies["CAT_A_HAP1"] = {20, 10, 0};
+        tallies["CAT_A_HAP2"] = {20, 0, 6};
+        tallies["CAT_B_HAP1"] = {20, 5, 0};
+        const std::map<std::string, std::string> aliases = {
+            {"CAT_A_HAP1", "CANON_A"}, {"CAT_A_HAP2", "CANON_A"}, {"CAT_B_HAP1", "CANON_B"}};
+        auto targets = pathtally::select_targets(
+            tallies, [&](const std::string& path) { return aliases.at(path); });
+        check(transcript_ids(targets) == (std::vector<std::string>{"CANON_A", "CANON_B"}),
+              "F: select raw ties before explicit alias collapse");
+        check(targets.size() == 2 && targets[0].forward && targets[1].forward,
+              "F: alias-collapse orientation majority");
+    }
+
+    // Case G: production identity is an explicit path -> Parent -> canonical MAX hierarchy.
+    // Tied paths within one Parent and tied Parents within one canonical are all retained, but
+    // their scores are never summed. A literal canonical suffix remains part of the identity.
+    {
+        pathtally::TallyMap tallies;
+        tallies["A_path_1"] = {20, 10, 0};
+        tallies["A_path_2"] = {20, 0, 6};
+        tallies["A_lower"] = {10, 100, 0};
+        tallies["B_path"] = {20, 0, 12};
+        tallies["same_sequence_other_identity"] = {20, 4, 0};
+        const std::map<std::string, pathtally::ResolvedPathIdentity> identity = {
+            {"A_path_1", {"PARENT_A", "CANON"}},
+            {"A_path_2", {"PARENT_A", "CANON"}},
+            {"A_lower", {"PARENT_A", "CANON"}},
+            {"B_path", {"PARENT_B", "CANON"}},
+            {"same_sequence_other_identity", {"literal_R1", "literal_R1"}},
+        };
+        auto targets = pathtally::select_identity_targets(
+            tallies, [&](const std::string& path) { return identity.at(path); });
+        check(transcript_ids(targets) ==
+                  (std::vector<std::string>{"CANON", "literal_R1"}),
+              "G: canonical ties retained and literal _R1 preserved");
+        check(targets[0].winning_paths ==
+                  (std::vector<std::string>{"A_path_1", "A_path_2", "B_path"}),
+              "G: all tied winning exact paths retained");
+        check(targets[0].winning_parents ==
+                  (std::vector<std::string>{"PARENT_A", "PARENT_B"}),
+              "G: all tied winning Parents retained");
+        check(!targets[0].forward, "G: orientation combines only tied winning evidence");
+    }
+
     std::printf("pathtally pipeline: PASS\n");
 }
 

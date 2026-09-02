@@ -23,6 +23,12 @@ target_link_libraries(pathtally_ledger_test PRIVATE panCollapse::warnings)
 add_test(NAME pathtally_ledger_test COMMAND pathtally_ledger_test)
 set_tests_properties(pathtally_ledger_test PROPERTIES LABELS "vg;pathtally;ledger")
 
+add_executable(path_identity_ledger_test path_identity_ledger_test.cpp)
+target_include_directories(path_identity_ledger_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(path_identity_ledger_test PRIVATE panCollapse::warnings)
+add_test(NAME path_identity_ledger_test COMMAND path_identity_ledger_test)
+set_tests_properties(path_identity_ledger_test PROPERTIES LABELS "vg;pathtally;identity-ledger")
+
 # Self-contained end-to-end smoke: a tiny hand-authored graph + multipath GAMP go
 # through panCollapse, and the independent oracle checks the RAD exactly.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -78,9 +84,17 @@ set_tests_properties(pathtally_smoke_paths PROPERTIES LABELS "vg;pathtally"
 add_test(NAME pathtally_smoke_convert
   COMMAND $<TARGET_FILE:panCollapse> convert
     --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
-    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/out")
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/out")
 set_tests_properties(pathtally_smoke_convert PROPERTIES LABELS "vg;pathtally"
   FIXTURES_REQUIRED pathtally_smoke_inputs FIXTURES_SETUP pathtally_smoke_out)
+
+add_test(NAME pathtally_legacy_requires_explicit_adapter
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
+    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/implicit_legacy_out")
+set_tests_properties(pathtally_legacy_requires_explicit_adapter PROPERTIES
+  LABELS "vg;pathtally;identity-ledger;legacy-adapter"
+  FIXTURES_REQUIRED pathtally_smoke_inputs WILL_FAIL TRUE)
 
 # Independent oracle: exact RAD match plus an expected emitted-record count (3).
 add_test(NAME pathtally_smoke_oracle
@@ -90,13 +104,54 @@ add_test(NAME pathtally_smoke_oracle
 set_tests_properties(pathtally_smoke_oracle PROPERTIES LABELS "vg;pathtally"
   FIXTURES_REQUIRED "pathtally_smoke_out;pathtally_smoke_inputs")
 
+# Optional t2g column 3 aliases arbitrary raw graph paths to canonical transcripts. The
+# read on node 2 ties both NM_1.1 raw copies and NM_2.2 at the raw-path top score; the
+# oracle verifies that collapse happens only after that tie selection, yielding both
+# CANON_A and CANON_B (never a doubled CANON_A score that drops CANON_B).
+add_test(NAME pathtally_alias_convert
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g_alias.tsv" --out-dir "${PT_SMOKE_DIR}/alias_out")
+set_tests_properties(pathtally_alias_convert PROPERTIES LABELS "vg;pathtally;t2g-alias"
+  FIXTURES_REQUIRED pathtally_smoke_inputs FIXTURES_SETUP pathtally_alias_out)
+
+add_test(NAME pathtally_alias_oracle
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/pathtally_oracle.py"
+    "${PT_FIX}/reads.gamp.json" "${PT_SMOKE_DIR}/paths.gfa" "${PT_FIX}/t2g_alias.tsv"
+    "${PT_SMOKE_DIR}/alias_out/map.rad" 3)
+set_tests_properties(pathtally_alias_oracle PROPERTIES LABELS "vg;pathtally;t2g-alias"
+  FIXTURES_REQUIRED "pathtally_alias_out;pathtally_smoke_inputs")
+
+add_test(NAME pathtally_alias_tx2gene
+  COMMAND /bin/sh -c "printf 'CANON_A\\tGENE1\\nCANON_B\\tGENE2\\n' > '${PT_SMOKE_DIR}/alias.expected.tsv' \
+    && cmp '${PT_SMOKE_DIR}/alias.expected.tsv' '${PT_SMOKE_DIR}/alias_out/tx2gene.tsv'")
+set_tests_properties(pathtally_alias_tx2gene PROPERTIES LABELS "vg;pathtally;t2g-alias"
+  FIXTURES_REQUIRED pathtally_alias_out)
+
+# Alias maps are functional mappings in both directions relevant to counting: one raw
+# graph path cannot name conflicting canonical transcripts, and one canonical transcript
+# cannot project to multiple genes.
+add_test(NAME pathtally_alias_path_conflict
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g_path_conflict.tsv" --out-dir "${PT_SMOKE_DIR}/alias_path_conflict")
+set_tests_properties(pathtally_alias_path_conflict PROPERTIES LABELS "vg;pathtally;t2g-alias"
+  FIXTURES_REQUIRED pathtally_smoke_inputs WILL_FAIL TRUE)
+
+add_test(NAME pathtally_alias_gene_conflict
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g_gene_conflict.tsv" --out-dir "${PT_SMOKE_DIR}/alias_gene_conflict")
+set_tests_properties(pathtally_alias_gene_conflict PROPERTIES LABELS "vg;pathtally;t2g-alias"
+  FIXTURES_REQUIRED pathtally_smoke_inputs WILL_FAIL TRUE)
+
 # Optional BAM output. Same convert pass emits reads.bam alongside map.rad; the RAD must be
 # byte-identical to the no-BAM smoke run, the BAM must be valid, and every record's tags and
 # GX gene set must match the independent oracle.
 add_test(NAME pathtally_bam_convert
   COMMAND $<TARGET_FILE:panCollapse> convert
     --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
-    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/out_bam"
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/out_bam"
     --bam-out "${PT_SMOKE_DIR}/out_bam/reads.bam")
 set_tests_properties(pathtally_bam_convert PROPERTIES LABELS "vg;pathtally;bam"
   FIXTURES_REQUIRED pathtally_smoke_inputs FIXTURES_SETUP pathtally_bam_out)
@@ -111,7 +166,8 @@ add_test(NAME pathtally_bam_header
     && grep -q '^@HD.*SO:unsorted' '${PT_SMOKE_DIR}/bam_header.txt' \
     && grep -q '^@SQ.*SN:GENE1' '${PT_SMOKE_DIR}/bam_header.txt' \
     && grep -q '^@SQ.*SN:GENE2' '${PT_SMOKE_DIR}/bam_header.txt' \
-    && grep -q '^@PG.*ID:panCollapse' '${PT_SMOKE_DIR}/bam_header.txt'")
+    && grep -q '^@PG.*ID:panCollapse' '${PT_SMOKE_DIR}/bam_header.txt' \
+    && ! grep -q 'panCollapse-evidence-schema:panCollapse-superset-v1' '${PT_SMOKE_DIR}/bam_header.txt'")
 set_tests_properties(pathtally_bam_header PROPERTIES LABELS "vg;pathtally;bam"
   FIXTURES_REQUIRED pathtally_bam_out)
 
@@ -134,7 +190,7 @@ set_tests_properties(pathtally_bam_parity PROPERTIES LABELS "vg;pathtally;bam"
 add_test(NAME pathtally_bam_count_convert
   COMMAND $<TARGET_FILE:panCollapse> convert
     --gamp "${PT_SMOKE_DIR}/reads_af.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
-    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/bam_count"
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/bam_count"
     --bam-out "${PT_SMOKE_DIR}/bam_count/reads.bam")
 set_tests_properties(pathtally_bam_count_convert PROPERTIES LABELS "vg;pathtally;bam"
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_af_inputs" FIXTURES_SETUP pathtally_bam_count_bam)
@@ -169,23 +225,29 @@ set_tests_properties(pathtally_bam_posindep_verify PROPERTIES LABELS "vg;pathtal
   FIXTURES_REQUIRED pathtally_bam_posindep_tsv)
 
 # Orientation filter: in the smoke fixture readfwd/readmulti are forward, readrev is reverse.
-# --strand keeps only the matching orientation and counts the drops in strand_filtered_groups.
+# --strand keeps only matching FEATURE records and counts the drops in strand_filtered_groups;
+# every valid group still has one BAM record, with filtered/no-compatible groups barcode-only.
 add_test(NAME pathtally_strand_forward
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
-    --gamp '${PT_SMOKE_DIR}/reads.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' --t2g '${PT_FIX}/t2g.tsv' \
+    --gamp '${PT_SMOKE_DIR}/reads.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' \
     --strand forward --out-dir '${PT_SMOKE_DIR}/strand_fwd' --bam-out '${PT_SMOKE_DIR}/strand_fwd/reads.bam' \
     && grep -qP '^emitted_groups\\t2$' '${PT_SMOKE_DIR}/strand_fwd/summary.tsv' \
     && grep -qP '^strand_filtered_groups\\t1$' '${PT_SMOKE_DIR}/strand_fwd/summary.tsv' \
-    && ! '${PANCOLLAPSE_SAMTOOLS}' view '${PT_SMOKE_DIR}/strand_fwd/reads.bam' | grep -q readrev")
+    && grep -qP '^bam_records\\t4$' '${PT_SMOKE_DIR}/strand_fwd/summary.tsv' \
+    && grep -qP '^barcode_only_bam_records\\t2$' '${PT_SMOKE_DIR}/strand_fwd/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${PT_SMOKE_DIR}/strand_fwd/reads.bam' \
+       | grep readrev | grep -q 'XB:Z:barcode_only'")
 set_tests_properties(pathtally_strand_forward PROPERTIES LABELS "vg;pathtally;strand"
   FIXTURES_REQUIRED pathtally_smoke_inputs)
 
 add_test(NAME pathtally_strand_reverse
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
-    --gamp '${PT_SMOKE_DIR}/reads.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' --t2g '${PT_FIX}/t2g.tsv' \
+    --gamp '${PT_SMOKE_DIR}/reads.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' \
     --strand reverse --out-dir '${PT_SMOKE_DIR}/strand_rev' --bam-out '${PT_SMOKE_DIR}/strand_rev/reads.bam' \
     && grep -qP '^emitted_groups\\t1$' '${PT_SMOKE_DIR}/strand_rev/summary.tsv' \
     && grep -qP '^strand_filtered_groups\\t2$' '${PT_SMOKE_DIR}/strand_rev/summary.tsv' \
+    && grep -qP '^bam_records\\t4$' '${PT_SMOKE_DIR}/strand_rev/summary.tsv' \
+    && grep -qP '^barcode_only_bam_records\\t3$' '${PT_SMOKE_DIR}/strand_rev/summary.tsv' \
     && '${PANCOLLAPSE_SAMTOOLS}' view '${PT_SMOKE_DIR}/strand_rev/reads.bam' | grep -q readrev")
 set_tests_properties(pathtally_strand_reverse PROPERTIES LABELS "vg;pathtally;strand"
   FIXTURES_REQUIRED pathtally_smoke_inputs)
@@ -195,7 +257,7 @@ set_tests_properties(pathtally_strand_reverse PROPERTIES LABELS "vg;pathtally;st
 add_test(NAME pathtally_smoke_convert_multichunk
   COMMAND $<TARGET_FILE:panCollapse> convert
     --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
-    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/out_mc")
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/out_mc")
 set_tests_properties(pathtally_smoke_convert_multichunk PROPERTIES LABELS "vg;pathtally"
   ENVIRONMENT "PANCOLLAPSE_MAX_CHUNK_BYTES=1"
   FIXTURES_REQUIRED pathtally_smoke_inputs FIXTURES_SETUP pathtally_smoke_mc_out)
@@ -217,7 +279,7 @@ set_tests_properties(pathtally_af_gamp PROPERTIES LABELS "vg;pathtally;interop"
 add_test(NAME pathtally_af_convert
   COMMAND $<TARGET_FILE:panCollapse> convert
     --gamp "${PT_SMOKE_DIR}/reads_af.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
-    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/af_out")
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/af_out")
 set_tests_properties(pathtally_af_convert PROPERTIES LABELS "vg;pathtally;interop"
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_af_inputs" FIXTURES_SETUP pathtally_af_rad)
 
@@ -266,7 +328,7 @@ set_tests_properties(pathtally_fid_qualadj PROPERTIES LABELS "vg;pathtally;fidel
 # Streaming stdin must produce a byte-identical RAD to the file-input smoke run.
 add_test(NAME pathtally_smoke_stdin
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert --gamp - \
-    --xg '${PT_SMOKE_DIR}/graph.xg' --t2g '${PT_FIX}/t2g.tsv' \
+    --xg '${PT_SMOKE_DIR}/graph.xg' --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' \
     --out-dir '${PT_SMOKE_DIR}/out_stdin' < '${PT_SMOKE_DIR}/reads.gamp' \
     && cmp '${PT_SMOKE_DIR}/out_stdin/map.rad' '${PT_SMOKE_DIR}/out/map.rad'")
 set_tests_properties(pathtally_smoke_stdin PROPERTIES LABELS "vg;pathtally"
@@ -282,7 +344,7 @@ set_tests_properties(pathtally_badmol_gamp PROPERTIES LABELS "vg;pathtally;molec
 add_test(NAME pathtally_badmol_skip
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
     --gamp '${PT_SMOKE_DIR}/reads_badmol.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' \
-    --t2g '${PT_FIX}/t2g.tsv' --out-dir '${PT_SMOKE_DIR}/badmol_out' \
+    --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' --out-dir '${PT_SMOKE_DIR}/badmol_out' \
     && grep -qP '^raw_molecule_malformed_groups\\t1$' '${PT_SMOKE_DIR}/badmol_out/summary.tsv' \
     && grep -qP '^raw_molecule_skipped_groups\\t1$' '${PT_SMOKE_DIR}/badmol_out/summary.tsv' \
     && grep -qP '^emitted_groups\\t0$' '${PT_SMOKE_DIR}/badmol_out/summary.tsv'")
@@ -292,7 +354,7 @@ set_tests_properties(pathtally_badmol_skip PROPERTIES LABELS "vg;pathtally;molec
 add_test(NAME pathtally_badmol_fail
   COMMAND $<TARGET_FILE:panCollapse> convert
     --gamp "${PT_SMOKE_DIR}/reads_badmol.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
-    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/badmol_fail_out"
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/badmol_fail_out"
     --molecule-identity-failures fail)
 set_tests_properties(pathtally_badmol_fail PROPERTIES LABELS "vg;pathtally;molecule"
   WILL_FAIL TRUE
@@ -307,7 +369,7 @@ set_tests_properties(pathtally_recur_gamp PROPERTIES LABELS "vg;pathtally;groupi
 add_test(NAME pathtally_recur_fail
   COMMAND $<TARGET_FILE:panCollapse> convert
     --gamp "${PT_SMOKE_DIR}/reads_recur.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
-    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/recur_out")
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/recur_out")
 set_tests_properties(pathtally_recur_fail PROPERTIES LABELS "vg;pathtally;grouping"
   WILL_FAIL TRUE
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_recur_inputs")
@@ -316,7 +378,7 @@ set_tests_properties(pathtally_recur_fail PROPERTIES LABELS "vg;pathtally;groupi
 add_test(NAME pathtally_recur_no_partial
   COMMAND /bin/sh -c "! '$<TARGET_FILE:panCollapse>' convert \
     --gamp '${PT_SMOKE_DIR}/reads_recur.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' \
-    --t2g '${PT_FIX}/t2g.tsv' --out-dir '${PT_SMOKE_DIR}/recur_no_partial_out' \
+    --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' --out-dir '${PT_SMOKE_DIR}/recur_no_partial_out' \
     && test ! -f '${PT_SMOKE_DIR}/recur_no_partial_out/map.rad'")
 set_tests_properties(pathtally_recur_no_partial PROPERTIES LABELS "vg;pathtally;grouping"
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_recur_inputs")
@@ -330,7 +392,7 @@ set_tests_properties(pathtally_badnode_gamp PROPERTIES LABELS "vg;pathtally;node
 add_test(NAME pathtally_badnode_fail
   COMMAND $<TARGET_FILE:panCollapse> convert
     --gamp "${PT_SMOKE_DIR}/reads_badnode.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
-    --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/badnode_out")
+    --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/badnode_out")
 set_tests_properties(pathtally_badnode_fail PROPERTIES LABELS "vg;pathtally;node-space"
   WILL_FAIL TRUE
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_badnode_inputs")
@@ -360,13 +422,24 @@ add_test(NAME genefull_annotate
 set_tests_properties(genefull_annotate PROPERTIES LABELS "vg;pathtally;genefull"
   FIXTURES_REQUIRED genefull_dir FIXTURES_SETUP genefull_annotated)
 
-# Spliced count: annotated graph + HST t2g. The intronic read is dropped (1 emitted, 1 no-compat).
+# Spliced count: annotated graph + HST t2g. The intronic read has no count feature (1 RAD emitted,
+# 1 no-compat), but its raw CB/UMI/CY/UY remains in the optional BAM as one unmapped
+# XB:Z:barcode_only record so downstream correction can use the all-read barcode prior.
 add_test(NAME genefull_spliced_drops_intron
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
-    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' --t2g '${GF_FIX}/t2g.tsv' \
-    --out-dir '${GF_DIR}/spliced' \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g.tsv' \
+    --out-dir '${GF_DIR}/spliced' --bam-out '${GF_DIR}/spliced/reads.bam' \
     && grep -qP '^emitted_groups\\t1$' '${GF_DIR}/spliced/summary.tsv' \
-    && grep -qP '^no_compatible_transcript_groups\\t1$' '${GF_DIR}/spliced/summary.tsv'")
+    && grep -qP '^no_compatible_transcript_groups\\t1$' '${GF_DIR}/spliced/summary.tsv' \
+    && grep -qP '^bam_records\\t2$' '${GF_DIR}/spliced/summary.tsv' \
+    && grep -qP '^barcode_only_bam_records\\t1$' '${GF_DIR}/spliced/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/spliced/reads.bam' \
+       | grep -w exonread | grep 'CY:Z:IIIIIIIIIIIIIIII' | grep -q 'UY:Z:JJJJJJJJJJJJ' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/spliced/reads.bam' \
+       | grep -w intronread | grep 'XB:Z:barcode_only' | grep 'CY:Z:::::::::::::::::' \
+       | grep -q 'UY:Z:KKKKKKKKKKKK' \
+    && ! ('${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/spliced/reads.bam' \
+       | grep -w intronread | grep -q 'GX:Z:')")
 set_tests_properties(genefull_spliced_drops_intron PROPERTIES LABELS "vg;pathtally;genefull"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
@@ -374,7 +447,7 @@ set_tests_properties(genefull_spliced_drops_intron PROPERTIES LABELS "vg;pathtal
 # called to its gene (2 emitted, 0 no-compat), carried in the BAM as GENE1. No mode flag.
 add_test(NAME genefull_full_calls_intron
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
-    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' --t2g '${GF_DIR}/genefull.t2g.tsv' \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' --legacy-adapter hst-v1 --t2g '${GF_DIR}/genefull.t2g.tsv' \
     --out-dir '${GF_DIR}/full' --bam-out '${GF_DIR}/full/reads.bam' \
     && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/full/summary.tsv' \
     && grep -qP '^no_compatible_transcript_groups\\t0$' '${GF_DIR}/full/summary.tsv' \
@@ -395,7 +468,7 @@ set_tests_properties(genefull_full_calls_intron PROPERTIES LABELS "vg;pathtally;
 add_test(NAME genefull_ledger_gene
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
-    --count-mode gene --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
+    --count-mode gene --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
     --out-dir '${GF_DIR}/ledger_gene' --bam-out '${GF_DIR}/ledger_gene/reads.bam' \
     && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/ledger_gene/summary.tsv' \
     && grep -qP '^no_compatible_transcript_groups\\t0$' '${GF_DIR}/ledger_gene/summary.tsv' \
@@ -409,7 +482,7 @@ set_tests_properties(genefull_ledger_gene PROPERTIES LABELS "vg;pathtally;genefu
 add_test(NAME genefull_ledger_genefull
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
-    --count-mode genefull --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
     --out-dir '${GF_DIR}/ledger_full' \
     && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/ledger_full/summary.tsv'")
 set_tests_properties(genefull_ledger_genefull PROPERTIES LABELS "vg;pathtally;genefull;ledger"
@@ -423,20 +496,406 @@ add_test(NAME genefull_ledger_bare_t2g
 set_tests_properties(genefull_ledger_bare_t2g PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
-# Sense/antisense policy is applied downstream by count_cr from the GD tag, not by panCollapse. A
-# 100%-exonic sense read is emitted with GD F and a 100%-exonic antisense read with GD R; both reach
-# the RAD/BAM (2 emitted) because panCollapse no longer drops antisense. count_cr --strand forward
-# (its default) is what excludes the antisense read; --strand both keeps it.
-add_test(NAME genefull_ledger_ex50pas_antisense
-  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${GF_FIX}/reads_antisense.gamp.json' > '${GF_DIR}/anti.gamp' \
-    && '$<TARGET_FILE:panCollapse>' convert --gamp '${GF_DIR}/anti.gamp' --xg '${GF_DIR}/genefull.xg' \
-       --count-mode genefull_ex50pas --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
-       --out-dir '${GF_DIR}/anti_ex50' --bam-out '${GF_DIR}/anti_ex50/reads.bam' \
-    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/anti_ex50/summary.tsv' \
-    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep exonsense | grep -q 'GD:Z:F' \
-    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/anti_ex50/reads.bam' | grep exonanti | grep -q 'GD:Z:R'")
-set_tests_properties(genefull_ledger_ex50pas_antisense PROPERTIES LABELS "vg;pathtally;genefull;ledger"
-  FIXTURES_REQUIRED genefull_annotated)
+# Ledger mode uses the same optional path aliases. Two raw exon paths for the same CAT
+# transcript collapse to one canonical target; their path scores are max-collapsed, not
+# summed, before transcript classification.
+add_test(NAME genefull_ledger_alias_t2g
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_alias.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
+    --out-dir '${GF_DIR}/ledger_alias' --bam-out '${GF_DIR}/ledger_alias/reads.bam' \
+    && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/ledger_alias/summary.tsv' \
+    && grep -qP '^emitted_target_count_histogram\\t1:2$' '${GF_DIR}/ledger_alias/summary.tsv' \
+    && grep -qP '^ENST_CANONICAL\\tGENE1$' '${GF_DIR}/ledger_alias/tx2gene.tsv' \
+    && test \"$('${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_alias/reads.bam' | grep -c 'TX:Z:ENST_CANONICAL')\" -eq 2")
+set_tests_properties(genefull_ledger_alias_t2g PROPERTIES LABELS "vg;pathtally;genefull;ledger;t2g-alias"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
+
+# Three-column aliases are exact raw graph-path mappings. Naming only a nonexistent raw path whose
+# canonical target happens to equal the suffix-stripped NM_1.1_H1 graph path must NOT enable the
+# legacy bare-t2g fallback. With no listed exon path there are no transcript spans/calls here.
+add_test(NAME genefull_ledger_alias_exact_only
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_alias_exact_only.tsv' \
+    --body-t2g '${GF_DIR}/genefull.t2g.tsv' --out-dir '${GF_DIR}/ledger_alias_exact_only' \
+    && grep -qP '^no_compatible_transcript_groups\\t2$' \
+       '${GF_DIR}/ledger_alias_exact_only/summary.tsv' \
+    && grep -qP '^emitted_groups\\t0$' '${GF_DIR}/ledger_alias_exact_only/summary.tsv'")
+set_tests_properties(genefull_ledger_alias_exact_only PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;t2g-alias"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
+
+# Adversarial MAX-vs-sum guard for ledger aliases. This read covers body nodes 1,2,3:
+# the body path scores 40, while each of the two identical raw exon paths scores 30.
+# MAX collapse therefore emits the canonical transcript as U. Summing the raw exon copies
+# would manufacture score 60 and incorrectly emit S instead.
+add_test(NAME genefull_alias_max_gamp
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${GF_FIX}/reads_alias_max.gamp.json' > '${GF_DIR}/alias_max.gamp'")
+set_tests_properties(genefull_alias_max_gamp PROPERTIES LABELS "vg;pathtally;genefull;ledger;t2g-alias"
+  FIXTURES_REQUIRED genefull_dir FIXTURES_SETUP genefull_alias_max_reads)
+
+add_test(NAME genefull_ledger_alias_max_not_sum
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/alias_max.gamp' --xg '${GF_DIR}/genefull.xg' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_alias.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
+    --out-dir '${GF_DIR}/ledger_alias_max' --bam-out '${GF_DIR}/ledger_alias_max/reads.bam' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_alias_max/reads.bam' \
+       | grep 'TX:Z:ENST_CANONICAL' | grep -q 'GL:Z:U'")
+set_tests_properties(genefull_ledger_alias_max_not_sum PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;t2g-alias"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_alias_max_reads")
+
+# D063 transcript-body t2g: both the vg-rna gene-body path and a second raw copy map to the
+# SAME canonical transcript. This file drives the transcript-specific classifier; the legacy
+# generated two-column file above continues to drive the untouched D060 tests.
+add_test(NAME genefull_transcript_body_t2g
+  COMMAND /bin/sh -c "awk -F'\\t' 'BEGIN { OFS=\"\\t\" } { print $1, $2, \"ENST_CANONICAL\" }' \
+      '${GF_DIR}/genefull.t2g.tsv' > '${GF_DIR}/transcript_body.t2g.tsv' \
+    && printf 'CAT_BODY_COPY\\tGENE1\\tENST_CANONICAL\\n' >> '${GF_DIR}/transcript_body.t2g.tsv'")
+set_tests_properties(genefull_transcript_body_t2g PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;transcript-body"
+  FIXTURES_REQUIRED genefull_annotated FIXTURES_SETUP genefull_transcript_body_t2g_ready)
+
+add_test(NAME genefull_ledger_transcript_body_calls
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_alias.tsv' \
+    --body-t2g '${GF_DIR}/transcript_body.t2g.tsv' --bam-multigene all \
+    --out-dir '${GF_DIR}/ledger_transcript_body' --bam-out '${GF_DIR}/ledger_transcript_body/reads.bam' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_transcript_body/reads.bam' \
+       | grep exonread | grep 'TX:Z:ENST_CANONICAL' | grep -q 'GL:Z:S' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_transcript_body/reads.bam' \
+       | grep intronread | grep 'TX:Z:ENST_CANONICAL' | grep -q 'GL:Z:U'")
+set_tests_properties(genefull_ledger_transcript_body_calls PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;transcript-body"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads;genefull_transcript_body_t2g_ready")
+
+# Production identity contract: exact headered ledger input, exact XG path/length binding,
+# path -> Parent -> canonical MAX, literal suffix identities, and lossless tied-winner BAM tags.
+add_test(NAME genefull_identity_score
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
+    --path-identity-ledger '${GF_FIX}/path_identity_ledger.tsv' --bam-multigene all \
+    --out-dir '${GF_DIR}/identity_score' --bam-out '${GF_DIR}/identity_score/reads.bam' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/identity_score/reads.bam' > '${GF_DIR}/identity_score/read.sam' \
+    && grep exonread '${GF_DIR}/identity_score/read.sam' | grep -Fq 'TX:Z:ENST_CANONICAL;literal_R1' \
+    && grep exonread '${GF_DIR}/identity_score/read.sam' | grep -Fq 'XP:Z:CAT_TX_COPY,NM_1.1_H1,TX_BODY_COPY2;TX_BODY_COPY1' \
+    && grep exonread '${GF_DIR}/identity_score/read.sam' | grep -Fq 'XU:Z:UP_REF,panSCup1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef;literal_R1' \
+    && grep exonread '${GF_DIR}/identity_score/read.sam' | grep -Pq '\tGX:Z:GENE1\t' \
+    && grep exonread '${GF_DIR}/identity_score/read.sam' | grep -Pq '\tGD:Z:F\t'")
+set_tests_properties(genefull_identity_score PROPERTIES
+  LABELS "vg;pathtally;identity-ledger;bam"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
+
+add_test(NAME genefull_identity_count
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
+    --path-identity-ledger '${GF_FIX}/path_identity_ledger.tsv' --count-mode genefull \
+    --bam-multigene all --out-dir '${GF_DIR}/identity_count' \
+    --bam-out '${GF_DIR}/identity_count/reads.bam' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/identity_count/reads.bam' > '${GF_DIR}/identity_count/read.sam' \
+    && grep exonread '${GF_DIR}/identity_count/read.sam' | grep -Fq 'TX:Z:ENST_CANONICAL;literal_R1' \
+    && grep exonread '${GF_DIR}/identity_count/read.sam' | grep -Fq 'XP:Z:CAT_TX_COPY,NM_1.1_H1,TX_BODY_COPY2;TX_BODY_COPY1' \
+    && grep exonread '${GF_DIR}/identity_count/read.sam' | grep -Fq 'XU:Z:UP_REF,panSCup1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef;literal_R1' \
+    && grep exonread '${GF_DIR}/identity_count/read.sam' | grep -Fq 'GX:Z:GENE1;GENE1' \
+    && grep intronread '${GF_DIR}/identity_count/read.sam' | grep -Fq 'XP:Z:CAT_BODY_COPY,GENE1_R1,REF_BODY;TX_FULL_EXON' \
+    && grep intronread '${GF_DIR}/identity_count/read.sam' | grep -Fq 'XU:Z:BODY_UP_REF,panSCbody1_fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210;BODY_LITERAL'")
+set_tests_properties(genefull_identity_count PROPERTIES
+  LABELS "vg;pathtally;identity-ledger;ledger;bam"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
+
+add_test(NAME genefull_identity_count_requires_complete_body_links
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
+    --path-identity-ledger "${GF_FIX}/path_identity_ledger_incomplete_body.tsv"
+    --count-mode genefull --bam-multigene all
+    --out-dir "${GF_DIR}/identity_incomplete_body"
+    --bam-out "${GF_DIR}/identity_incomplete_body/reads.bam")
+set_tests_properties(genefull_identity_count_requires_complete_body_links PROPERTIES
+  LABELS "vg;pathtally;identity-ledger;ledger;bam;ex50"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads" WILL_FAIL TRUE)
+
+add_test(NAME genefull_identity_missing_xg_path
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
+    --path-identity-ledger "${GF_FIX}/path_identity_ledger_missing_graph.tsv"
+    --out-dir "${GF_DIR}/identity_missing_path")
+set_tests_properties(genefull_identity_missing_xg_path PROPERTIES
+  LABELS "vg;pathtally;identity-ledger" FIXTURES_REQUIRED "genefull_annotated;genefull_reads"
+  WILL_FAIL TRUE)
+
+add_test(NAME genefull_identity_xg_length_mismatch
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
+    --path-identity-ledger "${GF_FIX}/path_identity_ledger_bad_length.tsv"
+    --out-dir "${GF_DIR}/identity_bad_length")
+set_tests_properties(genefull_identity_xg_length_mismatch PROPERTIES
+  LABELS "vg;pathtally;identity-ledger" FIXTURES_REQUIRED "genefull_annotated;genefull_reads"
+  WILL_FAIL TRUE)
+
+# The whole-body read gives each duplicate exon path score 30 and each duplicate transcript-body
+# path score 40. MAX collapse calls U; summing the exon copies would incorrectly call S.
+add_test(NAME genefull_ledger_transcript_body_max_not_sum
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/alias_max.gamp' --xg '${GF_DIR}/genefull.xg' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_alias.tsv' \
+    --body-t2g '${GF_DIR}/transcript_body.t2g.tsv' --bam-multigene all \
+    --out-dir '${GF_DIR}/ledger_transcript_body_max' \
+    --bam-out '${GF_DIR}/ledger_transcript_body_max/reads.bam' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/ledger_transcript_body_max/reads.bam' \
+       | grep 'TX:Z:ENST_CANONICAL' | grep -q 'GL:Z:U'")
+set_tests_properties(genefull_ledger_transcript_body_max_not_sum PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;transcript-body"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_alias_max_reads;genefull_transcript_body_t2g_ready")
+
+# Independent raw-BODY MAX-vs-sum guard. TX_FULL's exon path scores 40. Each of TX_BODY's two
+# raw body copies scores 30, so MAX keeps only TX_FULL:S; summing the copies would manufacture
+# 60 and incorrectly replace it with TX_BODY:U.
+add_test(NAME genefull_ledger_transcript_body_raw_body_max
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${GF_DIR}/alias_max.gamp' --xg '${GF_DIR}/genefull.xg' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_transcript_body_max.tsv' \
+    --body-t2g '${GF_FIX}/body_t2g_transcript_body_max.tsv' --bam-multigene all \
+    --out-dir '${GF_DIR}/transcript_body_raw_max' \
+    --bam-out '${GF_DIR}/transcript_body_raw_max/reads.bam' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${GF_DIR}/transcript_body_raw_max/reads.bam' \
+       > '${GF_DIR}/transcript_body_raw_max/read.sam' \
+    && grep -q 'TX:Z:TX_FULL' '${GF_DIR}/transcript_body_raw_max/read.sam' \
+    && grep -q 'GL:Z:S' '${GF_DIR}/transcript_body_raw_max/read.sam' \
+    && ! grep -q 'TX_BODY' '${GF_DIR}/transcript_body_raw_max/read.sam'")
+set_tests_properties(genefull_ledger_transcript_body_raw_body_max PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;transcript-body"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_alias_max_reads")
+
+add_test(NAME genefull_transcript_body_gene_conflict
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
+    --count-mode genefull --legacy-adapter hst-v1 --t2g "${GF_FIX}/t2g_alias.tsv"
+    --body-t2g "${GF_FIX}/body_t2g_gene_conflict.tsv"
+    --out-dir "${GF_DIR}/transcript_body_gene_conflict")
+set_tests_properties(genefull_transcript_body_gene_conflict PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;transcript-body"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads" WILL_FAIL TRUE)
+
+add_test(NAME genefull_transcript_body_missing_transcript
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
+    --count-mode genefull --legacy-adapter hst-v1 --t2g "${GF_FIX}/t2g_alias.tsv"
+    --body-t2g "${GF_FIX}/body_t2g_missing_transcript.tsv"
+    --out-dir "${GF_DIR}/transcript_body_missing_transcript")
+set_tests_properties(genefull_transcript_body_missing_transcript PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;transcript-body"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads" WILL_FAIL TRUE)
+
+add_test(NAME genefull_transcript_body_mixed_rows
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
+    --count-mode genefull --legacy-adapter hst-v1 --t2g "${GF_FIX}/t2g_alias.tsv"
+    --body-t2g "${GF_FIX}/body_t2g_mixed.tsv"
+    --out-dir "${GF_DIR}/transcript_body_mixed")
+set_tests_properties(genefull_transcript_body_mixed_rows PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;transcript-body"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads" WILL_FAIL TRUE)
+
+add_test(NAME genefull_transcript_body_path_collision
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
+    --count-mode genefull --legacy-adapter hst-v1 --t2g "${GF_FIX}/t2g_alias.tsv"
+    --body-t2g "${GF_FIX}/body_t2g_path_collision.tsv"
+    --out-dir "${GF_DIR}/transcript_body_path_collision")
+set_tests_properties(genefull_transcript_body_path_collision PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;transcript-body"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads" WILL_FAIL TRUE)
+
+# Exact Ex50pAS needs per-alignment base overlap and Parent-specific exon/body provenance. Historical
+# hst-v1 t2g/body-t2g inputs cannot supply that contract and must fail instead of emitting an
+# approximate GL ledger.
+add_test(NAME genefull_legacy_ex50pas_rejected
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
+    --count-mode genefull_ex50pas --legacy-adapter hst-v1
+    --t2g "${GF_FIX}/t2g.tsv" --body-t2g "${GF_DIR}/genefull.t2g.tsv"
+    --out-dir "${GF_DIR}/legacy_ex50" --bam-out "${GF_DIR}/legacy_ex50/reads.bam"
+    --bam-multigene all)
+set_tests_properties(genefull_legacy_ex50pas_rejected PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;legacy-adapter"
+  FIXTURES_REQUIRED "genefull_annotated;genefull_reads" WILL_FAIL TRUE)
+
+# Exact STARsolo 2.7.11b GeneFull_Ex50pAS tier evidence. The fixture keeps two distinct locus
+# Parents on one canonical transcript and covers E, P, exactly-50%-is-B, fully-exonic but
+# splice-discordant-is-P, reverse orientation, and branched MultipathAlignments whose alternatives
+# sit exactly five and six score points below top. The verifier checks the inclusive five-point
+# boundary, the six-point exclusion, all six parallel BAM arrays, and every XP/XU ledger resolution.
+set(EX50_DIR "${CMAKE_CURRENT_BINARY_DIR}/ex50_tier_work")
+set(EX50_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ex50_tier_smoke")
+
+add_test(NAME genefull_ex50pas_setup
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${EX50_DIR}")
+set_tests_properties(genefull_ex50pas_setup PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50"
+  FIXTURES_SETUP genefull_ex50pas_dir)
+
+add_test(NAME genefull_ex50pas_xg
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> convert -g '${EX50_FIX}/graph.gfa' -x > '${EX50_DIR}/graph.xg'")
+set_tests_properties(genefull_ex50pas_xg PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50"
+  FIXTURES_REQUIRED genefull_ex50pas_dir FIXTURES_SETUP genefull_ex50pas_inputs)
+
+add_test(NAME genefull_ex50pas_gamp
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> view -J -K -k '${EX50_FIX}/reads.gamp.json' > '${EX50_DIR}/reads.gamp'")
+set_tests_properties(genefull_ex50pas_gamp PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50"
+  FIXTURES_REQUIRED genefull_ex50pas_dir FIXTURES_SETUP genefull_ex50pas_inputs)
+
+add_test(NAME genefull_ex50pas_rad_baseline
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
+    --count-mode genefull --out-dir "${EX50_DIR}/baseline")
+set_tests_properties(genefull_ex50pas_rad_baseline PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50"
+  FIXTURES_REQUIRED genefull_ex50pas_inputs
+  FIXTURES_SETUP genefull_ex50pas_baseline)
+
+add_test(NAME genefull_ex50pas_exact
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
+    --count-mode genefull_ex50pas --bam-multigene all
+    --out-dir "${EX50_DIR}/exact" --bam-out "${EX50_DIR}/exact/reads.bam")
+set_tests_properties(genefull_ex50pas_exact PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;bam"
+  FIXTURES_REQUIRED genefull_ex50pas_inputs
+  FIXTURES_SETUP genefull_ex50pas_exact_out)
+
+# A reference-derived Parent allowlist is applied before both the top-score-minus-5 window and
+# E/P/B rank selection. BODY_PARENT_2 is lower-ranked than EXON_PARENT_1 for `concord`; retaining
+# only the body Parent must therefore reselect B/F rather than drop the already-projected E/F call.
+add_test(NAME genefull_ex50pas_strict_allowlisted_compact
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
+    --path-identity-ledger-sha256 c2b91c03743bc22f40a9cc1b55545e0332d7e02d47aa5bcd6a3f2dbe6c1efb32
+    --strict-allowlisted-parents "${EX50_FIX}/strict_allowlisted_parents.txt"
+    --strict-allowlisted-parents-sha256 8e4417ffa72d8dd300cc84eb212bd73e287fb39475916b4409edb53405153cee
+    --count-mode genefull_ex50pas --bam-multigene all
+    --compact-exact-count-bam forward --strand both
+    --out-dir "${EX50_DIR}/strict_allowlisted_compact"
+    --bam-out "${EX50_DIR}/strict_allowlisted_compact/reads.bam")
+set_tests_properties(genefull_ex50pas_strict_allowlisted_compact PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;bam;policy"
+  FIXTURES_REQUIRED genefull_ex50pas_inputs
+  FIXTURES_SETUP genefull_ex50pas_strict_allowlisted_compact_out)
+
+add_test(NAME genefull_ex50pas_strict_allowlisted_compact_verify
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/strict_allowlisted_compact_verify.py"
+    "${EX50_DIR}/strict_allowlisted_compact/reads.bam"
+    8e4417ffa72d8dd300cc84eb212bd73e287fb39475916b4409edb53405153cee)
+set_tests_properties(genefull_ex50pas_strict_allowlisted_compact_verify PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;bam;policy"
+  FIXTURES_REQUIRED genefull_ex50pas_strict_allowlisted_compact_out)
+
+# v0.8 keeps D068's inclusive five-point filter by default but exposes one explicit opt-out.
+# Disabled means no score pruning at all (the pre-D068 exact-evidence surface), not a zero-width
+# window. The top-minus-six within-DAG and cross-record alternatives must therefore reappear.
+add_test(NAME genefull_ex50pas_score_window_disabled
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
+    --count-mode genefull_ex50pas --bam-multigene all --no-ex50-score-window
+    --out-dir "${EX50_DIR}/score_window_disabled"
+    --bam-out "${EX50_DIR}/score_window_disabled/reads.bam")
+set_tests_properties(genefull_ex50pas_score_window_disabled PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;bam;policy"
+  FIXTURES_REQUIRED genefull_ex50pas_inputs
+  FIXTURES_SETUP genefull_ex50pas_score_window_disabled_out)
+
+add_test(NAME genefull_ex50pas_score_window_optout_requires_exact_bam
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
+    --no-ex50-score-window --out-dir "${EX50_DIR}/invalid_score_window_optout")
+set_tests_properties(genefull_ex50pas_score_window_optout_requires_exact_bam PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;policy"
+  FIXTURES_REQUIRED genefull_ex50pas_inputs WILL_FAIL TRUE)
+
+add_test(NAME genefull_ex50pas_debug
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
+    --count-mode genefull_ex50pas --bam-multigene all
+    --out-dir "${EX50_DIR}/debug" --bam-out "${EX50_DIR}/debug/reads.bam"
+    --debug-evidence-out "${EX50_DIR}/debug/evidence.tsv")
+set_tests_properties(genefull_ex50pas_debug PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;bam;debug"
+  FIXTURES_REQUIRED genefull_ex50pas_inputs
+  FIXTURES_SETUP genefull_ex50pas_debug_out)
+
+add_test(NAME genefull_ex50pas_requires_bam
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
+    --count-mode genefull_ex50pas --bam-multigene all
+    --out-dir "${EX50_DIR}/missing_bam")
+set_tests_properties(genefull_ex50pas_requires_bam PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50"
+  FIXTURES_REQUIRED genefull_ex50pas_inputs WILL_FAIL TRUE)
+
+add_test(NAME genefull_ex50pas_requires_all
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
+    --count-mode genefull_ex50pas
+    --out-dir "${EX50_DIR}/missing_all" --bam-out "${EX50_DIR}/missing_all/reads.bam")
+set_tests_properties(genefull_ex50pas_requires_all PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;bam"
+  FIXTURES_REQUIRED genefull_ex50pas_inputs WILL_FAIL TRUE)
+
+add_test(NAME genefull_ex50pas_bam_verify
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/ex50_tier_bam_verify.py"
+    "${EX50_DIR}/exact/reads.bam" "${EX50_FIX}/path_identity_ledger.tsv" window5)
+set_tests_properties(genefull_ex50pas_bam_verify PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;bam"
+  FIXTURES_REQUIRED genefull_ex50pas_exact_out)
+
+add_test(NAME genefull_ex50pas_score_window_disabled_verify
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/ex50_tier_bam_verify.py"
+    "${EX50_DIR}/score_window_disabled/reads.bam"
+    "${EX50_FIX}/path_identity_ledger.tsv" disabled)
+set_tests_properties(genefull_ex50pas_score_window_disabled_verify PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;bam;policy"
+  FIXTURES_REQUIRED genefull_ex50pas_score_window_disabled_out)
+
+add_test(NAME genefull_ex50pas_debug_verify
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/debug_evidence_verify.py"
+    "${EX50_DIR}/exact/reads.bam" "${EX50_DIR}/debug/reads.bam"
+    "${EX50_DIR}/debug/evidence.tsv")
+set_tests_properties(genefull_ex50pas_debug_verify PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;bam;debug"
+  FIXTURES_REQUIRED "genefull_ex50pas_exact_out;genefull_ex50pas_debug_out")
+
+add_test(NAME genefull_ex50pas_rad_unchanged
+  COMMAND ${CMAKE_COMMAND} -E compare_files
+    "${EX50_DIR}/baseline/map.rad" "${EX50_DIR}/exact/map.rad")
+set_tests_properties(genefull_ex50pas_rad_unchanged PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50"
+  FIXTURES_REQUIRED "genefull_ex50pas_baseline;genefull_ex50pas_exact_out")
+
+add_test(NAME genefull_ex50pas_score_window_toggle_rad_unchanged
+  COMMAND ${CMAKE_COMMAND} -E compare_files
+    "${EX50_DIR}/exact/map.rad" "${EX50_DIR}/score_window_disabled/map.rad")
+set_tests_properties(genefull_ex50pas_score_window_toggle_rad_unchanged PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;policy"
+  FIXTURES_REQUIRED
+    "genefull_ex50pas_exact_out;genefull_ex50pas_score_window_disabled_out")
+
+add_test(NAME genefull_ex50pas_debug_rad_unchanged
+  COMMAND ${CMAKE_COMMAND} -E compare_files
+    "${EX50_DIR}/exact/map.rad" "${EX50_DIR}/debug/map.rad")
+set_tests_properties(genefull_ex50pas_debug_rad_unchanged PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;debug"
+  FIXTURES_REQUIRED "genefull_ex50pas_exact_out;genefull_ex50pas_debug_out")
 
 # D060 cross-isoform fixture: GENE1 has TWO exon isoforms over the SAME 3-node body -- NM_1.1 (exons
 # 1,3, skips node 2) and NM_1.2 (exons 1,2,3, a retained-intron isoform that keeps node 2 as exon).
@@ -478,7 +937,7 @@ set_tests_properties(genefull_isoform_annotate PROPERTIES LABELS "vg;pathtally;g
 add_test(NAME genefull_ledger_isoform_control
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
     --gamp '${ISO_DIR}/reads.gamp' --xg '${ISO_DIR}/genefull.xg' \
-    --count-mode genefull --t2g '${ISO_FIX}/t2g.tsv' --body-t2g '${ISO_DIR}/genefull.t2g.tsv' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${ISO_FIX}/t2g.tsv' --body-t2g '${ISO_DIR}/genefull.t2g.tsv' \
     --out-dir '${ISO_DIR}/ledger' --bam-out '${ISO_DIR}/ledger/reads.bam' \
     && grep -qP '^emitted_groups\\t2$' '${ISO_DIR}/ledger/summary.tsv' \
     && grep -qP '^multigene_dropped_groups\\t0$' '${ISO_DIR}/ledger/summary.tsv' \
@@ -494,13 +953,42 @@ set_tests_properties(genefull_ledger_isoform_control PROPERTIES LABELS "vg;patht
 add_test(NAME genefull_ledger_cross_isoform_ambiguous
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
     --gamp '${ISO_DIR}/reads.gamp' --xg '${ISO_DIR}/genefull.xg' \
-    --count-mode genefull --t2g '${ISO_FIX}/t2g.tsv' --body-t2g '${ISO_DIR}/genefull.t2g.tsv' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${ISO_FIX}/t2g.tsv' --body-t2g '${ISO_DIR}/genefull.t2g.tsv' \
     --out-dir '${ISO_DIR}/ledger' --bam-out '${ISO_DIR}/ledger/reads.bam' \
     && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep ambigread | grep -q 'TX:Z:NM_1.1;NM_1.2' \
     && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep ambigread | grep -q 'GX:Z:GENE1;GENE1' \
     && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep ambigread | grep -q 'GL:Z:U;S' \
     && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep ambigread | grep -q 'XT:Z:GENE1'")
 set_tests_properties(genefull_ledger_cross_isoform_ambiguous PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  FIXTURES_REQUIRED "genefull_isoform_annotated;genefull_isoform_reads")
+
+# D063 splice ownership must compare each canonical transcript's exon paths with ITS OWN body
+# paths. All test exon paths traverse 1->3. NM_1.1's body is 1,2,3, so it owns that skip;
+# NM_1.2's body is 1,3, so it does not. NM_4.1 has only reverse exon/body paths and guards
+# per-transcript GD=R. NM_1.1 also has a tied reverse raw copy: its forward/reverse evidence ties,
+# so deterministic forward fallback gives GD=F rather than graph-path iteration order deciding.
+# NM_5.1's body is split across disconnected singleton 1 and 3 fragments: neither fragment contains
+# both exon-edge endpoints, but canonical membership makes their union own 1->3 because no body path
+# has adjacent 1,3. A pooled gene body
+# would incorrectly assign the edge to NM_1.2. The pure ledger test separately guards nonmonotonic,
+# reversed, and repeated-node geometry without changing fixture ids.
+add_test(NAME genefull_ledger_transcript_body_splice_ownership
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${ISO_DIR}/reads.gamp' --xg '${ISO_DIR}/genefull.xg' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${ISO_FIX}/t2g_transcript_geometry.tsv' \
+    --body-t2g '${ISO_FIX}/body_t2g_transcript_geometry.tsv' --bam-multigene all \
+    --out-dir '${ISO_DIR}/transcript_geometry' --bam-out '${ISO_DIR}/transcript_geometry/reads.bam' \
+    2> '${ISO_DIR}/transcript_geometry.stderr' \
+    && grep -q 'evaluated_target_edges=4 owned_target_edges=3 fragment_only_target_edges=1 adjacent_vetoed_target_edges=1' \
+       '${ISO_DIR}/transcript_geometry.stderr' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/transcript_geometry/reads.bam' \
+       | grep exonread > '${ISO_DIR}/transcript_geometry/exonread.sam' \
+    && grep -q 'TX:Z:NM_1.1;NM_4.1;NM_5.1' '${ISO_DIR}/transcript_geometry/exonread.sam' \
+    && grep -q 'GD:Z:F;R;F' '${ISO_DIR}/transcript_geometry/exonread.sam' \
+    && grep -q 'GL:Z:S;S;S' '${ISO_DIR}/transcript_geometry/exonread.sam' \
+    && ! grep -q 'NM_1.2' '${ISO_DIR}/transcript_geometry/exonread.sam'")
+set_tests_properties(genefull_ledger_transcript_body_splice_ownership PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;isoform;transcript-body"
   FIXTURES_REQUIRED "genefull_isoform_annotated;genefull_isoform_reads")
 
 # D058: --bam-multigene all. A dedicated fixture with TWO overlapping genes -- GENE1 (exons 1,3;
@@ -525,18 +1013,22 @@ add_test(NAME multigene_bam_annotate
 set_tests_properties(multigene_bam_annotate PROPERTIES LABELS "vg;pathtally;genefull;multigene"
   FIXTURES_REQUIRED multigene_bam_dir FIXTURES_SETUP multigene_bam_annotated)
 
-# --bam-multigene omit (default): multigeneread is dropped from BOTH RAD and BAM, exactly as
-# before D058 -- this is the regression guard that the new flag did not change the old default.
+# --bam-multigene omit (default): multigeneread is still absent from both RAD and BAM FEATURE
+# evidence, but is retained as a barcode-only record for the all-read correction prior.
 add_test(NAME multigene_bam_omit_drops_both
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
     --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
-    --count-mode genefull --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
     --out-dir '${MG_DIR}/omit' --bam-out '${MG_DIR}/omit/reads.bam' --bam-multigene omit \
     && grep -qP '^emitted_groups\\t1$' '${MG_DIR}/omit/summary.tsv' \
     && grep -qP '^multigene_dropped_groups\\t1$' '${MG_DIR}/omit/summary.tsv' \
+    && grep -qP '^barcode_only_bam_records\\t1$' '${MG_DIR}/omit/summary.tsv' \
     && '${PANCOLLAPSE_SAMTOOLS}' quickcheck '${MG_DIR}/omit/reads.bam' \
-    && [ \"$('${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/omit/reads.bam' | wc -l)\" = 1 ] \
-    && ! '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/omit/reads.bam' | grep -q multigeneread")
+    && [ \"$('${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/omit/reads.bam' | wc -l)\" = 2 ] \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/omit/reads.bam' \
+       | grep multigeneread | grep -q 'XB:Z:barcode_only' \
+    && ! ('${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/omit/reads.bam' \
+       | grep multigeneread | grep -q 'GX:Z:')")
 set_tests_properties(multigene_bam_omit_drops_both PROPERTIES LABELS "vg;pathtally;genefull;multigene"
   FIXTURES_REQUIRED "multigene_bam_annotated;multigene_bam_reads")
 
@@ -550,11 +1042,11 @@ set_tests_properties(multigene_bam_omit_drops_both PROPERTIES LABELS "vg;pathtal
 add_test(NAME multigene_bam_all_rescues_bam_only
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
     --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
-    --count-mode genefull --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
     --out-dir '${MG_DIR}/all_cmp_omit' --bam-multigene omit \
     && '$<TARGET_FILE:panCollapse>' convert \
        --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
-       --count-mode genefull --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
+       --count-mode genefull --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
        --out-dir '${MG_DIR}/all' --bam-out '${MG_DIR}/all/reads.bam' --bam-multigene all \
     && grep -qP '^emitted_groups\\t1$' '${MG_DIR}/all/summary.tsv' \
     && grep -qP '^multigene_dropped_groups\\t1$' '${MG_DIR}/all/summary.tsv' \
@@ -567,15 +1059,40 @@ add_test(NAME multigene_bam_all_rescues_bam_only
 set_tests_properties(multigene_bam_all_rescues_bam_only PROPERTIES LABELS "vg;pathtally;genefull;multigene;bam"
   FIXTURES_REQUIRED "multigene_bam_annotated;multigene_bam_reads")
 
+# D063 production path: convert the two generated gene-body rows into exact transcript-body rows,
+# then prove --bam-multigene all carries the complete per-TX ledger through while RAD still applies
+# Unique. count_cr receives NM_1.1:U and NM_2.1:S with no prematurely resolved XT gene.
+add_test(NAME multigene_bam_transcript_body_all
+  COMMAND /bin/sh -c "awk -F'\\t' 'BEGIN { OFS=\"\\t\" } \
+      { tx = (\$2 == \"GENE1\" ? \"NM_1.1\" : \"NM_2.1\"); print \$1, \$2, tx }' \
+      '${MG_DIR}/genefull.t2g.tsv' > '${MG_DIR}/transcript_body.t2g.tsv' \
+    && '$<TARGET_FILE:panCollapse>' convert \
+      --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
+      --count-mode genefull --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' \
+      --body-t2g '${MG_DIR}/transcript_body.t2g.tsv' --bam-multigene all \
+      --out-dir '${MG_DIR}/transcript_body_all' \
+      --bam-out '${MG_DIR}/transcript_body_all/reads.bam' \
+    && grep -qP '^emitted_groups\\t1$' '${MG_DIR}/transcript_body_all/summary.tsv' \
+    && grep -qP '^multigene_dropped_groups\\t1$' '${MG_DIR}/transcript_body_all/summary.tsv' \
+    && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/transcript_body_all/reads.bam' \
+       | grep multigeneread > '${MG_DIR}/transcript_body_all/multigeneread.sam' \
+    && grep -q 'TX:Z:NM_1.1;NM_2.1' '${MG_DIR}/transcript_body_all/multigeneread.sam' \
+    && grep -q 'GX:Z:GENE1;GENE2' '${MG_DIR}/transcript_body_all/multigeneread.sam' \
+    && grep -q 'GL:Z:U;S' '${MG_DIR}/transcript_body_all/multigeneread.sam' \
+    && ! grep -q 'XT:Z:' '${MG_DIR}/transcript_body_all/multigeneread.sam'")
+set_tests_properties(multigene_bam_transcript_body_all PROPERTIES
+  LABELS "vg;pathtally;genefull;multigene;bam;transcript-body"
+  FIXTURES_REQUIRED "multigene_bam_annotated;multigene_bam_reads")
+
 # score mode has no ledger drop to rescue from: --bam-multigene all is a true no-op there (RAD and
 # BAM records identical to omit; only the recorded @PG command line differs, which this test does
 # not compare). Confirms D058 does not touch the D048 default path.
 add_test(NAME multigene_bam_all_noop_in_score_mode
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
-    --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' --t2g '${MG_FIX}/t2g.tsv' \
+    --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' \
     --out-dir '${MG_DIR}/score_omit' --bam-out '${MG_DIR}/score_omit/reads.bam' --bam-multigene omit \
     && '$<TARGET_FILE:panCollapse>' convert \
-       --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' --t2g '${MG_FIX}/t2g.tsv' \
+       --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' \
        --out-dir '${MG_DIR}/score_all' --bam-out '${MG_DIR}/score_all/reads.bam' --bam-multigene all \
     && cmp '${MG_DIR}/score_omit/map.rad' '${MG_DIR}/score_all/map.rad' \
     && '${PANCOLLAPSE_SAMTOOLS}' view '${MG_DIR}/score_omit/reads.bam' > '${MG_DIR}/score_omit_records.txt' \
@@ -624,7 +1141,7 @@ set_tests_properties(splice_concordance_annotate PROPERTIES LABELS "vg;pathtally
 add_test(NAME genefull_ledger_splice_concordance_cross_gene
   COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
     --gamp '${SC_DIR}/reads.gamp' --xg '${SC_DIR}/genefull.xg' \
-    --count-mode genefull --t2g '${SC_FIX}/t2g.tsv' --body-t2g '${SC_DIR}/genefull.t2g.tsv' \
+    --count-mode genefull --legacy-adapter hst-v1 --t2g '${SC_FIX}/t2g.tsv' --body-t2g '${SC_DIR}/genefull.t2g.tsv' \
     --out-dir '${SC_DIR}/ledger' --bam-out '${SC_DIR}/ledger/reads.bam' \
     && grep -qP '^emitted_groups\\t1$' '${SC_DIR}/ledger/summary.tsv' \
     && grep -qP '^multigene_dropped_groups\\t0$' '${SC_DIR}/ledger/summary.tsv' \

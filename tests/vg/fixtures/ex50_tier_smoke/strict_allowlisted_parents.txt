@@ -1,0 +1,2 @@
+# panSC-strict-allowlisted-parents-v1
+BODY_PARENT_2

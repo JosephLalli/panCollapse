@@ -44,25 +44,40 @@ The converter is `build/src/panCollapse`.
 ## Usage
 
 ```
-panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir out
+panCollapse convert --gamp reads.gamp|- --xg graph.xg --out-dir out
+                    (--path-identity-ledger path_identity_ledger.tsv |
+                     --legacy-adapter hst-v1 --t2g t2g.tsv)
                     [--raw-cb-length 16] [--raw-umi-length 12]
                     [--score flat|qualadj] [--molecule-identity-failures skip|fail]
                     [--strand both|forward|reverse]
-                    [--count-mode score|gene|genefull|genefull_exonoverintron|genefull_ex50pas
-                     --body-t2g body.t2g]
+                    [--count-mode score|gene|genefull|genefull_exonoverintron|genefull_ex50pas]
+                    [--body-t2g body.t2g]
                     [--bam-out reads.bam] [--bam-multigene omit|first|all]
+                    [--no-ex50-score-window]
 ```
 
 ### Inputs
 
 - `--gamp` — name-grouped `vg mpmap -F GAMP` multipath alignments. All records for one read
   must be contiguous. Read names must carry the raw 10x barcode and UMI as
-  `<original_name>_<raw_CB>_<raw_UMI>` (place them there during FASTQ preparation, before
-  mapping). Pass `-` to read the GAMP stream from stdin.
+  `<original_name>_<raw_CB>_<raw_UMI>_cy<hex(CY)>_uy<hex(UY)>` (place them there during FASTQ
+  preparation, before mapping). `CY` is the raw barcode-quality string encoded as ASCII hex
+  so whitespace or `_` cannot corrupt the QNAME grammar. Legacy names without `_cy...` remain
+  accepted but cannot emit `CY`. Pass `-` to read the GAMP stream from stdin.
 - `--xg` — the `.xg` for the same graph that produced the GAMP, carrying the `vg rna` HST paths
   (`<transcript_id>_H<n>` / `_R<n>`).
-- `--t2g` — a two-column `HST_name<TAB>gene` map (as produced alongside `vg rna`). panCollapse
-  collapses HST haplotype copies to their transcript id.
+- `--path-identity-ledger` — production input using schema `panSC-path-identity-v1`. It maps each
+  exact `vg_path_name` through `unique_parent` to `canonical_transcript` and `gene_id`, carries
+  exon/body layer identity and graph provenance, and is checked against exact XG path names and
+  lengths before any GAMP is read.
+- `--legacy-adapter hst-v1 --t2g` — explicit compatibility input:
+  `graph_path<TAB>gene[<TAB>canonical_transcript]`. With two columns,
+  panCollapse preserves the original convention and strips a terminal `_H<n>` / `_R<n>`
+  from the graph path to obtain the transcript ID. Optional column 3 explicitly aliases an
+  arbitrary raw path name (for example, a CAT-projected haplotype transcript) to its canonical
+  transcript. Multiple paths may alias to one transcript; one path may not alias to several
+  transcripts, and one canonical transcript may not map to several genes.
+  There is no file-shape auto-detection: old t2gs are rejected unless `hst-v1` is selected.
 
 ### Options
 
@@ -72,7 +87,7 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
   `qualadj` reproduces vg's base-quality-adjusted scoring for exact fidelity to
   quality-adjusted mapping.
 - `--molecule-identity-failures skip|fail` — how to treat reads whose name has a missing,
-  malformed, or wrong-length CB/UMI (default `skip`, counted in the summary).
+  malformed, or wrong-length CB/UMI/CY/UY field (default `skip`, counted in the summary).
 - `--strand both|forward|reverse` — target-relative orientation filter (default `both`, no
   filtering). `forward` keeps only targets the read aligns to in the same (sense) orientation;
   `reverse` keeps only antisense targets. Reads left with no matching target emit no record and
@@ -84,6 +99,15 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv --out-dir ou
 - `--bam-multigene omit|first|all` — `XT` tag policy for multi-gene reads (default `omit`). `all` is
   a ledger-`--count-mode`-only rescue path that carries a multi-gene read into the BAM instead of
   dropping it, for a downstream UMI-level rescue; see [`docs/bam-export.md`](docs/bam-export.md).
+- `--no-ex50-score-window` — disable v0.8's default exact-Ex50 top-minus-five eligibility filter
+  and send every complete compatible exact traversal to downstream E/P/B-orientation ranking.
+  This is an explicit pre-D068 sensitivity mode; it does not change RAD or ordinary Gene evidence.
+- `--body-t2g` — `hst-v1`-only body annotation. A two-column `body_path<TAB>gene` file preserves the
+  legacy gene-body/span classifier. A consistently three-column
+  `raw_body_path<TAB>gene<TAB>canonical_transcript` file enables transcript-first bodies: raw
+  body copies/fragments MAX-collapse to the same canonical transcript used by `--t2g`, and S/U
+  is classified per transcript before count_cr groups transcripts into genes. Mixed two- and
+  three-column rows are rejected.
 
 ### GeneFull / STARsolo-style counting
 
@@ -93,14 +117,24 @@ writes `genefull.t2g.tsv`. There are two ways to use it:
 
 - **Coarse, no flag:** run the default count with your HST t2g for a spliced count, or with the
   gene-body t2g for a GeneFull-ish count. Same graph, the t2g selects the layer.
-- **`--count-mode` for exact STARsolo/CellRanger rules:** `gene` (STARsolo `Gene`), `genefull`
-  (STARsolo `GeneFull`), `genefull_exonoverintron` / `genefull_ex50pas` (the CellRanger v7
-  default, which also drops purely-exonic antisense reads). These read **both** layers at once —
-  `--t2g` is the exon layer, `--body-t2g` the gene-body layer — so panCollapse can classify each
-  compatible **transcript** as spliced- or unspliced-compatible by intron touch (the `TX`/`GL`
-  tags); a downstream counter groups transcripts by gene, derives ambiguity, and applies the mode
-  rule and CellRanger's `Unique` multimapper rule (a read compatible with >1 gene is dropped,
-  counted in `multigene_dropped_groups`). See [`docs/genefull.md`](docs/genefull.md).
+- **`--count-mode` for STARsolo/CellRanger rules:** `gene` (STARsolo `Gene`), `genefull`
+  (STARsolo `GeneFull`), and `genefull_exonoverintron` emit a transcript-specific spliced/unspliced
+  ledger (`TX`/`GL`). Production `genefull_ex50pas` instead emits exact STARsolo 2.7.11b
+  Parent-preserving E/P/B overlap evidence (`TX`/`GT`/`XP`/`XU`) so a downstream counter can apply
+  the global six-rank sense/antisense priority. See [`docs/genefull.md`](docs/genefull.md).
+
+Production count modes take both exon and body rows from one `--path-identity-ledger`; they do not
+take `--t2g` or `--body-t2g`. The old two-file forms remain available only through
+`--legacy-adapter hst-v1`, except exact `genefull_ex50pas`, which rejects the legacy adapter.
+
+For transcript-first counting, use the production path ledger, `--bam-out`, and
+`--bam-multigene all`. Ordinary modes retain the complete `TX`/`GX`/`GD`/`GL` ledger. Exact
+`genefull_ex50pas` requires all three options and emits parallel `TX`/`GX`/`GD`/`GT`/`XP`/`XU`,
+with one exact path/Parent per evidence slot and repeated canonical `TX` values allowed. count_cr
+performs the only priority, transcript-to-gene, and UMI reduction step. By default, exact evidence
+must first be within five alignment-score points of the global compatible optimum. Pass
+`--no-ex50-score-window` to restore all-compatible exact evidence for a sensitivity run. The
+existing RAD Unique policy and bytes are unchanged.
 
 ### Outputs (in `--out-dir`)
 
@@ -108,10 +142,13 @@ writes `genefull.t2g.tsv`. There are two ways to use it:
   per-target orientation), written with a streaming seek-and-backpatch writer.
 - `tx2gene.tsv` — transcript-to-gene map for `alevin-fry quant`.
 - `summary.tsv` — per-run counters (records, emitted groups, no-compatible / unaligned reads,
-  molecule-identity skips).
-- `reads.bam` (only with `--bam-out`) — one mapped record per emitted read carrying 10x tags
-  (`CB`/`UB`/`GX`/`GN`, and `XT` for `umi_tools --gene-tag`), for a CellRanger-style counter.
-  Positions are nominal; genes come from the graph, not a linear reference. See
+  molecule-identity skips) plus `exact_ex50_score_window` provenance (`5`, `disabled`, or
+  `not_applicable`).
+- `reads.bam` (only with `--bam-out`) — one record per valid input read group. Feature-bearing
+  records are mapped nominally and carry 10x molecule/feature tags (`CB`/`UB`/`CY`,
+  `GX`/`GN`, `TX`/`XP`/`XU` for production identity, `GL` or exact-tier `GT`, and optional `XT`). Featureless groups
+  are unmapped `XB:Z:barcode_only` records with no gene tags, retained only for downstream
+  barcode correction. Genes come from the graph, not a linear reference. See
   [`docs/bam-export.md`](docs/bam-export.md).
 
 ## Example
@@ -120,7 +157,8 @@ writes `genefull.t2g.tsv`. There are two ways to use it:
 # reads.fastq read names already end in _<CB>_<UMI>
 vg mpmap -n rna -x graph.spliced.xg -g graph.spliced.gcsa -d graph.spliced.dist \
          -F GAMP -f reads.fastq \
-  | panCollapse convert --gamp - --xg graph.spliced.xg --t2g t2g.tsv --out-dir out
+  | panCollapse convert --gamp - --xg graph.spliced.xg \
+      --path-identity-ledger path_identity_ledger.tsv --out-dir out
 
 alevin-fry generate-permit-list -i out -d fw -o pl --unfiltered-pl 3M-february-2018.txt
 alevin-fry collate -i pl -r out
@@ -129,30 +167,34 @@ alevin-fry quant -i pl -m out/tx2gene.tsv -o quant -r cr-like --use-mtx
 
 ## Docker
 
-A runtime image is published as `josephlalli/pancollapse:v0.2`. It bundles the panCollapse
-binary with the exact shared-library closure it was built against, so it does not need vg
-installed at runtime (vg and alevin-fry remain separate tools for the surrounding pipeline
-steps). Mount your inputs and an output directory:
+The current runtime image is built locally as `josephlalli/pancollapse:v0.8.0`;
+publish that tag before using it from a host that does not already have the
+validated local image. It bundles the panCollapse binary with the exact
+shared-library closure it was built against, so it does not need vg installed
+at runtime (vg and alevin-fry remain separate tools for the surrounding
+pipeline steps). Mount your inputs and an output directory:
 
 ```sh
 docker run --rm \
   -v "$PWD":/work \
-  josephlalli/pancollapse:v0.2 convert \
+  josephlalli/pancollapse:v0.8.0 convert \
   --gamp /work/reads.gamp --xg /work/graph.spliced.xg \
-  --t2g /work/t2g.tsv --out-dir /work/out
+  --path-identity-ledger /work/path_identity_ledger.tsv --out-dir /work/out
 ```
 
 It also reads a GAMP stream on stdin (`--gamp -`). To build the image locally after compiling
 the binary, run [`scripts/build-docker-image.sh`](scripts/build-docker-image.sh), which stages
-the binary and its library closure and tags `josephlalli/pancollapse:v0.2`.
+the binary and its library closure and tags `josephlalli/pancollapse:v0.8.0`.
 
 ## How it works
 
 For each read, across all of its GAMP alignments, panCollapse scores every aligned node under
-vg's own scoring scheme, adds each node's score to the HST paths crossing it, keeps the HSTs
-tied at the top score, collapses them to unique transcript ids (RAD `refs`), and records each
-transcript's orientation from the read's direction along the HST path. The full algorithm is
-in [`docs/conversion-algorithm.md`](docs/conversion-algorithm.md).
+vg's own scoring scheme and adds each node's score to the exact ledger paths crossing it. Paths
+MAX-collapse within their unique Parent, Parents MAX-collapse within canonical transcript, and
+canonical transcripts tied at the global top become RAD `refs`. Alternative paths/Parents are
+never summed. The converter records
+each transcript's orientation from the read's direction along the HST path. The full algorithm
+is in [`docs/conversion-algorithm.md`](docs/conversion-algorithm.md).
 
 ## Documentation
 

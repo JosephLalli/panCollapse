@@ -96,8 +96,10 @@ Requirements for either route:
 
 * GAMP node IDs belong to the MHC `.xg`;
 * records for one read are contiguous (name-grouped);
-* read names carry the synthetic raw CB/UMI suffix panCollapse parses
-  (`<original_name>_<raw_CB>_<raw_UMI>`);
+* read names carry the synthetic raw CB/UMI/quality suffix panCollapse parses
+  (`<original_name>_<raw_CB>_<raw_UMI>_cy<hex(CY)>_uy<hex(UY)>`; legacy quality-free
+  or CY-only suffixes may be used only
+  when a fixture intentionally tests quality-free compatibility);
 * the GAMP exercises realistic structure: single- and multi-subpath records, `connection`
   arcs across annotated splice junctions, reverse orientation, and multi-node traversals,
   not only single perfect exon-interior mappings.

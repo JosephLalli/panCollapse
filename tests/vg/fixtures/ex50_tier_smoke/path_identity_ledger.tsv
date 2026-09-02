@@ -1,0 +1,5 @@
+schema_version	vg_path_name	vg_path_length	vg_haplotype_origins	unique_parent	source_parent	input_parent	canonical_transcript	gene_id	source_path_or_contig	sample	haplotype	annotation_source	feature_layer	selection_status	fallback_status	exon_unique_parent	gene_locus	source_gene	source_transcript	transcript_class	strand	start	end
+panSC-path-identity-v1	P1_EXON	30	HAP1	EXON_PARENT_1	SOURCE_PARENT_1	INPUT_PARENT_1	CANON	GENE	chr1	SAMPLE1	H1	CAT	exon	selected	none	EXON_PARENT_1	chr1:1-40	GENE	SOURCE_TX_1	mapped	+	1	40
+panSC-path-identity-v1	P1_BODY	40	HAP1	BODY_PARENT_1	SOURCE_PARENT_1	INPUT_PARENT_1	CANON	GENE	chr1	SAMPLE1	H1	CAT	body	selected	none	EXON_PARENT_1	chr1:1-40	GENE	SOURCE_TX_1	mapped	+	1	40
+panSC-path-identity-v1	P2_EXON	20	HAP2	EXON_PARENT_2	SOURCE_PARENT_2	INPUT_PARENT_2	CANON	GENE	chr1	SAMPLE2	H2	CAT	exon	selected	none	EXON_PARENT_2	chr1:1-40	GENE	SOURCE_TX_2	mapped	+	1	40
+panSC-path-identity-v1	P2_BODY	40	HAP2	BODY_PARENT_2	SOURCE_PARENT_2	INPUT_PARENT_2	CANON	GENE	chr1	SAMPLE2	H2	CAT	body	selected	none	EXON_PARENT_2	chr1:1-40	GENE	SOURCE_TX_2	mapped	+	1	40

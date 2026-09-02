@@ -54,10 +54,12 @@ is meant to keep — are missed.
 
 ```sh
 # spliced (exonic)
-panCollapse convert --gamp reads.gamp --xg genefull.xg --t2g your_hst.t2g.tsv --out-dir out_spliced
+panCollapse convert --gamp reads.gamp --xg genefull.xg --legacy-adapter hst-v1 \
+  --t2g your_hst.t2g.tsv --out-dir out_spliced
 
 # GeneFull (exon + intron), same graph, gene t2g
-panCollapse convert --gamp reads.gamp --xg genefull.xg --t2g genefull.t2g.tsv \
+panCollapse convert --gamp reads.gamp --xg genefull.xg --legacy-adapter hst-v1 \
+  --t2g genefull.t2g.tsv \
   --out-dir out_full --bam-out out_full/reads.bam
 ```
 
@@ -71,44 +73,118 @@ gene (the top-score-plus-ties rule, applied to gene-body paths just as to transc
 
 ## Exact STARsolo/CellRanger rules (`--count-mode`)
 
-The t2g-selects-the-layer approach above is coarse (it counts by the D048 top-score rule). A ledger
-`--count-mode` (`gene`, `genefull`, `genefull_exonoverintron`, `genefull_ex50pas`) reads **both**
-layers at once — `--t2g` is the exon (HST) layer, `--body-t2g` the gene-body layer — and makes
-panCollapse emit a per-**transcript** **`spliced`/`unspliced` classification** (the optional BAM's
-`TX`/`GL` tags; see [BAM export](bam-export.md)) that a downstream counter groups by gene and
-collapses into STARsolo/CellRanger's exact `soloFeatures` semantics (D060/D061).
+The t2g-selects-the-layer approach above is a legacy coarse count. The `gene`, `genefull`, and
+`genefull_exonoverintron` ledger modes read both layers at once and emit a per-transcript `S`/`U`
+ledger in the optional BAM's parallel `TX`/`GX`/`GD`/`GL` tags. Production
+`genefull_ex50pas` is deliberately different: it emits exact STARsolo 2.7.11b E/P/B
+alignment/transcript evidence in `TX`/`GX`/`GD`/`GT`/`XP`/`XU`.
 
-Gene compatibility itself is still D048's top-score tie (the genes whose body or an exon transcript
-ties the read's single top score). Within each compatible gene, panCollapse classifies **every
-candidate transcript**, never the gene as a whole: a transcript "spans" the read if the read's
-gene-body node range falls inside that transcript's own on-body exon span (precomputed once per
-gene at graph load). It is **spliced (`S`)** if its own exon path also ties the read's top score
-**and** (D061) it owns every splice edge (node-skip) the read's alignment crosses — a strand-blind
-concordance check mirroring STAR's `classifyAlign`, which catches a read that lands its aligned
-bases on one transcript's exon while the splice it actually makes belongs to a different,
-overlapping transcript's intron. It is **unspliced (`U`)** if it spans the read, its gene's body
-ties the top score, and it is likewise splice-concordant. A transcript that ties the exon score but
-fails concordance is **neither** `S` nor `U` — absent from the emitted set entirely, because a
-spliced read is not also an unspliced one; without this gate a concordance-failed transcript would
-fall through to `U` and spuriously make its gene ambiguous. Every classified transcript is emitted
-(`TX`) with its gene (`GX`), the gene's orientation (`GD`), and its call (`GL`), one entry per
-transcript, positionally parallel. A gene with **both** an `S` and a `U` transcript among its
-compatible set is velocyto's "ambiguous" (spliced for one isoform, unspliced for another) —
-panCollapse never computes that; a downstream counter groups `TX` by `GX`, derives ambiguity, and
-applies the count-mode rule.
+### Production path identity ledger (D064)
 
-**panCollapse's own RAD/BAM output does not depend on which ledger `--count-mode` value is
-passed** — `gene`/`genefull`/`genefull_exonoverintron`/`genefull_ex50pas` all drive the identical
-`TX`/`GX`/`GD`/`GL` classification above (only `--count-mode score` differs, skipping the ledger
-machinery entirely). The value selects which STARsolo/CellRanger rule a *downstream counter*
-applies to those flags:
+Use one `--path-identity-ledger path_identity_ledger.tsv`; its explicit exon/body rows replace both
+t2gs and body rows crosslink to their exon Parent. Ordinary score and S/U ledger modes MAX-collapse
+exact paths within `unique_parent` and Parents within canonical transcript. Run transcript-first
+counting with `--bam-out ... --bam-multigene all`; BAM `XP`/`XU` preserve every tied exact
+path/Parent behind each `TX`. See [Input and Output Contract](input-output-contract.md).
+
+### Exact production GeneFull_Ex50pAS evidence (D066)
+
+`--count-mode genefull_ex50pas` requires the production path identity ledger, `--bam-out`, and
+`--bam-multigene all`. The `hst-v1` adapter is rejected because its t2gs do not identify the exact
+linked exon/body path and Parent needed for base-resolved evidence.
+
+For every complete MultipathAlignment traversal contained by an exact body path, panCollapse
+accumulates its stored GAMP subpath and scored-connection alignment score and counts
+reference-aligned bases overlapping its linked exact exon path. Across all records in the read
+group, it retains only evidence within five points of the global best compatible traversal,
+inclusive. This is the v0.8 default; `--no-ex50-score-window` instead retains every complete
+compatible traversal, reproducing pre-D068 evidence eligibility before downstream ranking. It then
+emits one strand-neutral tier for each retained traversal/model identity:
+
+- `E`: every reference-aligned base is exonic and every splice junction is concordant;
+- `P`: strictly more than half of the reference-aligned bases are exonic;
+- `B`: the traversal is body-contained but meets neither E nor P.
+
+Exactly 50% exonic is B. A fully exonic traversal with a discordant splice junction falls through
+to P. The five-point window is applied before these tiers compete and corresponds to one
+mismatch-equivalent under vg's default `+1` match / `-4` mismatch scoring. `GD` combines with `GT`
+to give STARsolo's six global priority ranks:
+E-sense, E-antisense, P-sense, P-antisense, B-sense, B-antisense. The consumer selects the first
+nonempty rank; an antisense winning rank produces no count.
+
+The BAM header records `panCollapse-ex50-score-window:5` or `disabled`, and `summary.tsv` records
+the same policy. Disabled means no pruning; it is not an exact-tie-only zero-width window.
+
+This mode does **not** Parent- or canonical-collapse the evidence first. Every semicolon-parallel
+`TX`/`GX`/`GD`/`GT`/`XP`/`XU` slot contains one exact path and its one exact Parent. E/P slots name
+the exon path/Parent; B slots name the linked body path/Parent. A canonical `TX` can therefore
+repeat for distinct locus Parents, paths, tiers, or alignment alternatives. Each slot must resolve
+through the ledger to that same `TX` and `GX`, and the Parent derived from `XP` must equal `XU`.
+count_cr performs the six-rank selection, gene pooling, and UMI resolution downstream.
+
+The implementation propagates model-bound states through the MultipathAlignment DAG; it does not
+enumerate its potentially exponential complete traversals. The established S/U classifier still
+drives `map.rad`, so selecting exact Ex50pAS changes only its BAM evidence and leaves RAD bytes
+unchanged.
+
+### Legacy transcript-first body t2g (D063)
+
+Use a consistently three-column body t2g:
+
+```text
+raw_body_graph_path<TAB>gene<TAB>canonical_transcript
+```
+
+The canonical transcript must occur in the exon t2g and map to the same gene. A canonical
+transcript may have several raw body paths — haplotype copies, CAT projections, or fragment-local
+segments — and their scores MAX-collapse, never sum, just like raw exon paths. For each read:
+
+1. panCollapse independently MAX-collapses raw exon and raw body paths into the same canonical
+   transcript target space and finds the global top score across both layers;
+2. a transcript whose exon score is within the existing flank tolerance of top is `S`;
+3. otherwise, that exact transcript is `U` only when its own body score is within tolerance;
+4. D061 splice concordance gates both calls. Splice ownership is built by comparing each canonical
+   transcript's exon paths only with that transcript's own body paths. An exon edge is a splice
+   when its endpoints have internal steps on one body path, or when the endpoints occur across
+   separate body fragments and no body path contains them adjacently. Any adjacent occurrence is
+   a conservative veto, including ambiguous repeated-node/copy geometry. A transcript that does
+   not own every splice the read crosses is absent, not demoted to `U`. Fragment paths need not
+   overlap: their shared canonical-transcript column is the authoritative body-union grouping.
+
+No gene identity enters this S/U classifier. `GD` is likewise computed per `TX` target in this
+mode. Only after panCollapse emits the complete transcript ledger does count_cr map `TX` to `GX`,
+derive gene ambiguity, apply the selected count-mode rule, and resolve multi-gene UMIs. Run with
+`--bam-out ... --bam-multigene all`; without `all`, the established ledger output policy can omit
+multi-gene records before count_cr sees them. The RAD Unique policy remains unchanged.
+
+At graph load, three-column mode reports `evaluated_target_edges`, `owned_target_edges`,
+`fragment_only_target_edges`, and `adjacent_vetoed_target_edges` to stderr. These count canonical
+transcript/edge associations (not only distinct graph edges), so a real d46 run can audit how much
+splice ownership depends solely on body-fragment union without changing RAD/BAM contents.
+
+### Legacy two-column body t2g
+
+A fully two-column `body_path<TAB>gene` file under `--legacy-adapter hst-v1` preserves D060/D061
+unchanged for compatibility. It
+MAX-collapses bodies by gene, infers each transcript's U state from its on-body span, and computes
+orientation per gene. A body t2g may be entirely two-column or entirely three-column; mixed widths
+are rejected so one run cannot silently mix classifiers.
+
+Every classified transcript is emitted (`TX`) with its gene (`GX`), orientation (`GD`), and call
+(`GL`), one positionally parallel entry per transcript. A gene with both an `S` and a `U`
+transcript is velocyto's "ambiguous"; panCollapse does not compute that gene label in the
+transcript-first path. count_cr performs the final grouping and applies the count-mode rule.
+
+For `gene`, `genefull`, and `genefull_exonoverintron`, panCollapse emits the identical
+`TX`/`GX`/`GD`/`GL` classification above and the value selects which rule a downstream counter
+applies. Exact production `genefull_ex50pas` is the D066 exception and emits `GT` evidence instead:
 
 | `--count-mode` | a downstream counter keeps a gene when… | STARsolo |
 |---|---|---|
 | `gene` | `spliced` and not `unspliced` (a gene flagged both — "ambiguous" — is excluded) | `Gene` |
 | `genefull` | `spliced` or `unspliced` (any compatible gene) | `GeneFull` |
 | `genefull_exonoverintron` | as `genefull`, but prefer purely-`spliced` genes over intron-touching ones when a read has both among its candidates | `GeneFull_ExonOverIntron` |
-| `genefull_ex50pas` | as `genefull_exonoverintron`, and also drop a purely-`spliced` gene that is **antisense** | `GeneFull_Ex50pAS` (CellRanger v7 default) |
+| `genefull_ex50pas` | select the first nonempty global E-sense, E-AS, P-sense, P-AS, B-sense, B-AS rank; an AS winning rank is not counted | `GeneFull_Ex50pAS` (CellRanger v7 default) |
 
 `count_cr.py` (panSC) is the reference implementation of this table. All ledger modes still apply
 the **Unique** multimapper rule at the RAD/`map.rad` level: a read compatible with more than one
@@ -117,13 +193,13 @@ gene is dropped from the RAD and counted in `multigene_dropped_groups` regardles
 `--bam-multigene all` carries it to the optional BAM anyway for a downstream UMI-level rescue (see
 below). The default `--count-mode score` is the D048 count and is unchanged.
 
-> **Strand and `GeneFull_Ex50pAS`.** The "drop purely-exonic antisense" step in the table is only
-> panCollapse's in-mode *fragment* of Ex50pAS. STARsolo's `GeneFull_Ex50pAS` excludes ALL antisense
-> body overlap (`intronicAS` too), not just purely-exonic antisense — keeping antisense *intronic* reads
-> inflates large (−)-strand genes on a genomic pangenome (e.g. PTPRT ×734 vs STARsolo). Since v0.4.4
-> (D059) panCollapse does the rest by *emitting* each read's per-gene orientation (the `GD` tag) rather
-> than filtering on it, and the counter applies the full sense-strand policy — see
-> [Strandedness](#strandedness).
+For D063 transcript-first runs, `--bam-multigene all` is required: it preserves every multi-gene
+`TX` candidate in the BAM so count_cr, rather than panCollapse, performs the final gene pooling.
+
+> **Strand and `GeneFull_Ex50pAS`.** D066 emits orientation beside each exact E/P/B slot instead of
+> filtering it in panCollapse. count_cr must apply the six-rank policy globally: an E-antisense
+> candidate outranks P- or B-sense candidates and causes the read to be excluded, exactly as
+> STARsolo 2.7.11b does. See [Strandedness](#strandedness).
 
 ## Multi-gene BAM rescue (`--bam-multigene all`)
 
@@ -146,17 +222,15 @@ no effect in `--count-mode score` (there is no Unique drop there to rescue from 
 
 ## Strandedness
 
-By default GeneFull counts a read for a gene regardless of the read's orientation. The read's
-per-gene orientation (sense/forward vs antisense/reverse — the majority of aligned bases, matching
-the RAD `dirs`) is classified by panCollapse and **emitted**, so which orientation to count is a
-*counter* choice rather than baked into the collapse:
+By default GeneFull counts regardless of orientation. In the D063 transcript-first path, the
+read's orientation is computed and emitted per `TX`; exact Ex50pAS emits it per E/P/B evidence
+slot; the legacy two-column body path retains its per-gene orientation. Which orientation to count
+remains a counter choice rather than being filtered during evidence production:
 
-- **Recommended (D059):** run panCollapse strand-agnostic (`--strand both`, the default) so both
-  orientations reach the BAM, each tagged with its per-gene orientation in `GD` (see
-  [BAM export](bam-export.md)). The counter then applies the policy: `count_cr.py --strand forward`
-  keeps sense reads and drops **all** antisense — the full `GeneFull_Ex50pAS` antisense exclusion
-  (`intronicAS` included), not the 100%-exonic-only approximation of the in-mode rule. `--strand
-  reverse`/`both` select the other policies from the same BAM, no re-run.
+- **Recommended:** run panCollapse strand-agnostic (`--strand both`, the default) so both
+  orientations reach the BAM, each tagged in `GD` (see [BAM export](bam-export.md)). For exact
+  Ex50pAS, count_cr applies orientation inside the six-rank E/P/B priority. For ordinary S/U modes,
+  its configured strand policy can keep forward, reverse, or both orientations from the same BAM.
 - **RAD-side (D056):** `--strand forward`/`reverse` still make panCollapse filter targets by
   orientation before writing the RAD (dropped reads counted in `strand_filtered_groups`), for a
   RAD/alevin-fry consumer that cannot read `GD`. `--strand both` (default) filters nothing.

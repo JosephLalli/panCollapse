@@ -1339,6 +1339,373 @@ against STARsolo (forward strand, all four ledger modes): `Gene` 294,116 vs STAR
 `GeneFull_Ex50pAS` +0.67% (r 0.998). Every ledger mode is now within a few percent of STARsolo on a
 whole chromosome, closing the large-gene/tail-to-tail over-count D060 alone left open.
 
+### D062 — Optional t2g path aliases carry CAT collapse identity
+
+**Decision source:** User (clarified that CAT maps reference genes and transcripts onto added
+haplotypes, and that an unambiguous projected copy must collapse to its source reference
+gene/transcript; genuinely novel genes, paralogs, and extra copies remain distinct).
+
+**Problem:** D048 inferred transcript identity only by stripping a terminal `_H<n>` / `_R<n>`
+from each graph path. CAT-projected transcript paths must remain raw and haplotype-unique while
+`vg rna` builds the graph, so their names do not necessarily encode the source ENST. Rewriting
+those raw names before graph construction can merge distinct transcript models, while leaving
+them unchanged gives panCollapse no way to collapse an unambiguous projection afterward.
+
+**Decision:** `--t2g` accepts either two columns
+`graph_path<TAB>gene` or three columns
+`graph_path<TAB>gene<TAB>canonical_transcript`. A two-column row behaves exactly as before:
+panCollapse derives the target by stripping a terminal `_H<n>` / `_R<n>`. In a three-column
+row, column 3 explicitly supplies the target transcript while column 1 remains the exact raw
+graph path. Several raw paths may map to one canonical transcript. One raw path mapping to
+different transcripts, or one canonical transcript mapping to different genes, is a hard
+input error. Output `tx2gene.tsv` remains the ordinary canonical two-column transcript-to-gene
+map. This is an extension of the t2g, not a separate runtime collapse manifest.
+
+**Score-order rule:** score and select raw graph paths first. Only raw paths tied at the single
+top score are then grouped by canonical transcript. Orientation evidence is combined among those
+winning paths only. Scores from several raw paths mapped to one transcript are never summed
+before winner selection, so additional haplotype copies cannot manufacture a higher transcript
+score.
+
+**Ledger rule:** every raw exon path resolves to the same canonical target id before the
+per-transcript ledger is built. Its exon score remains the maximum across those raw paths, never
+their sum; duplicate spans cannot duplicate the final call, and splice-edge ownership is set-deduped
+through the canonical target id. The existing suffix-stripped bare-t2g fallback remains for
+canonical targets introduced by two-column ledger rows; a three-column alias is exact and cannot
+activate that fallback for an unlisted graph path.
+Gene-body `--body-t2g` stays an ordinary path-to-gene map.
+
+**Verification:** the pure PathTally test has two raw paths aliasing to `CANON_A` tied with a
+third path aliasing to `CANON_B`; both targets must survive, which fails under pre-selection score
+summing. The independent RAD oracle exercises the same case end to end. Two negative fixtures
+exercise the path-to-multiple-transcripts and transcript-to-multiple-genes errors. A ledger
+fixture embeds two raw exon paths for one transcript and verifies one canonical target in RAD/BAM
+and `tx2gene.tsv`; its adversarial body-dominant read classifies `U` under MAX collapse but would
+incorrectly classify `S` if the two raw exon scores were summed.
+
+**Rationale:** raw graph identity and biological collapse identity are different namespaces.
+Keeping both in one t2g row lets `vg rna` retain correct CAT models while panCollapse emits the
+reference transcript identity only where the reference builder has established an unambiguous
+mapping. The ordering rule preserves D048's best-HST evidence model regardless of how many
+haplotype paths represent a transcript.
+
+### D063 — Optional body aliases keep ledger evidence transcript-specific
+
+**Decision source:** User (requested that transcripts remain the counting unit through S/U
+classification and be pooled into genes only by count_cr; requested that CAT body copies and
+fragments collapse to the same canonical transcript as their exon paths).
+
+**Supersedes:** D062's final sentence only. `--body-t2g` may now use a three-column
+`raw_body_path<TAB>gene<TAB>canonical_transcript` contract in addition to its unchanged legacy
+two-column `body_path<TAB>gene` contract.
+
+**Decision:** A body t2g is consistently two-column or consistently three-column; mixing widths
+is a hard error. In three-column mode, every canonical body transcript must occur in `--t2g` and
+must name the same gene there. Several raw body paths may map to one canonical transcript. Their
+scores collapse by maximum, never sum, so haplotype copies or graph fragments cannot manufacture
+extra evidence.
+
+**Transcript-first ledger rule:** Exon and body scores are keyed by canonical transcript and share
+one global top-score threshold. A near-top exon score calls that transcript `S`; otherwise its own
+near-top body score calls it `U`. Another transcript of the same gene cannot inherit the body call.
+D061 splice concordance gates both states. Splice ownership is precomputed by comparing each
+canonical transcript's exon paths only with that transcript's body paths, rather than with a pooled
+gene body. Body-path traversal order, not numeric node-id order, defines an internal step. For a
+body split at haplotype breaks, endpoint presence across separate fragments also establishes
+ownership, but any adjacent endpoint occurrence on any body path conservatively makes the edge
+ordinary; this also resolves repeated-node/copy ambiguity. Fragments need not overlap because
+column 3's canonical transcript is the authoritative union key. `GD` is likewise computed per transcript
+in this mode. No gene identity participates in
+the classifier; count_cr groups the emitted `TX` entries by `GX`, derives gene ambiguity, applies
+the selected count mode, and resolves multi-gene UMIs.
+
+**Output policy:** Existing RAD Unique behavior and BAM policy do not change. Therefore a
+transcript-first production run must use `--bam-out ... --bam-multigene all` so multi-gene ledger
+records survive into count_cr; the RAD continues to omit them. A two-column body t2g continues to
+use the D060/D061 gene-body/span classifier and gene-level orientation for backward compatibility.
+
+**Verification:** Pure classifier cases cover exon-over-body precedence, exact-transcript body
+assignment, no cross-isoform inheritance, splice-concordance gating, and empty input. Integration
+fixtures cover raw exon and raw body MAX-vs-sum adversaries, transcript-specific splice ownership
+(including fragmented bodies, nonmonotonic node ids, reverse paths, and repeated-node adjacency),
+canonical-transcript/gene validation, missing exon transcripts, and mixed-width rejection. The
+pre-existing two-column suite remains the compatibility gate.
+
+**Rationale:** CAT projection creates several raw exon/body graph paths for one biological
+transcript. Collapsing those paths at the transcript boundary preserves that biological identity;
+pooling bodies by gene earlier discards isoform information and can assign one isoform's unspliced
+evidence or splice geometry to another.
+
+### D064 — Versioned path identity ledger is the production runtime contract
+
+**Decision source:** User (required explicit, lossless path/Parent/canonical identity across
+panSC graph construction and panCollapse; prohibited heuristic suffix parsing in production).
+
+**Supersedes:** D062 and D063 only for their runtime input format and identity-inference surface.
+Their transcript-first exon/body semantics, splice rules, MAX-not-sum rule, and explicit legacy
+behavior remain in force.
+
+**Decision:** Production conversion selects `--path-identity-ledger` and accepts only the headered
+schema `panSC-path-identity-v1`. Each emitted path row carries the complete annotation provenance:
+`unique_parent`, separate `source_parent` and `input_parent`, canonical transcript/gene,
+source/sample/haplotype/annotation fields, exon/body layer and selection/fallback state, explicit
+body-to-exon Parent crosslink, source identities/class/coordinates/strand, and exact vg path name,
+length, and haplotype origins. Historical exon/body t2gs are available only with the explicit
+`--legacy-adapter hst-v1`; neither CLI route auto-detects or silently falls back to the other.
+
+**Identity and score rule:** Production lookup is exact
+`vg_path_name -> unique_parent -> canonical_transcript -> gene_id`. Paths MAX-collapse within a
+Parent, Parents MAX-collapse within a canonical transcript, and downstream gene pooling occurs only
+after transcript-level classification. All tied winning paths and Parents survive as provenance;
+scores are never summed. Identifier strings are opaque, including literal `_H<n>`/`_R<n>` suffixes.
+
+**Validation:** The reader requires the exact canonical 24-column header/order and nonempty,
+TSV-safe fields; numeric positive
+coordinates/path lengths; `start <= end`; unique exact path names; one annotation identity and one
+feature layer per Parent; canonical transcript to one gene; disjoint exon/body Parents; exon
+self-links; and body links to an existing exon Parent with matching canonical transcript/gene.
+Missing-source fallback canonicalizes to the exon Parent (`unique_parent` for exon rows,
+`exon_unique_parent` for body rows). At runtime every ledger path must occur exactly in the XG with
+the recorded length; extra non-ledger genomic paths are allowed. Comma/semicolon are rejected only
+where they would corrupt BAM provenance grouping (`vg_path_name`/`unique_parent`; semicolon also for
+`canonical_transcript`/`gene_id`); general provenance, including comma-separated
+`vg_haplotype_origins`, is not subject to BAM delimiters.
+
+**BAM provenance:** Production BAM records carry canonical `TX` and parallel `XP`/`XU` Z tags.
+Groups are semicolon-separated in `TX` order; tied exact paths/Parents within a group are
+comma-sorted. Count-mode `XP`/`XU` describe the exon/body layer that supplied the `S`/`U` call.
+Production score-mode BAM also carries these tags, while its `GX`/`GD` stay gene-level. The
+`hst-v1` adapter emits no new score-mode tags and retains its prior tested layout.
+
+**Verification:** The strict reader unit fixture covers required fields/schema, Parent and
+canonical conflicts, layer overlap, body crosslinks, fallback, coordinates, and reserved versus
+general-provenance delimiters. Pure selection tests cover multiple paths per Parent, multiple
+Parents per canonical, literal `_R1`, and MAX-not-sum tied provenance. End-to-end score/count
+fixtures use sequence-identical paths with distinct canonical identities and assert exact
+`TX`/`XP`/`XU`, including literal `_R1`, `panSCup1_<64 lowercase hex>`, and
+`panSCbody1_<64 lowercase hex>` Parents; missing XG paths and path-length mismatches hard-fail. The full pre-existing suite
+runs through explicit `--legacy-adapter hst-v1`.
+
+### D065 — Preserve barcode quality and the all-read correction population
+
+**Decision source:** User (barcode handling must match the intended STARsolo/Cell Ranger boundary;
+runtime gene-ID normalization is out of scope and Gene any-S reduction is already downstream).
+
+**Decision:** The supported RNA carry-along name is
+`<original_name>_<raw_CB>_<raw_UMI>_cy<hex(CY)>_uy<hex(UY)>`, where `CY` and `UY`
+are the raw R1 cell-barcode and UMI qualities encoded as ASCII hex. Hex avoids whitespace
+and delimiter ambiguity in FASTQ/GAMP names. Legacy quality-free and CY-only suffixes
+remain accepted and produce only the qualities they carry.
+
+When `--bam-out` is active, panCollapse writes exactly one BAM record per valid raw-molecule read
+group. A feature-bearing group keeps the nominal mapped ledger record and gains `CY`/`UY` when
+available. Any group without a BAM count feature writes one unmapped `XB:Z:barcode_only` record
+with `CB`/`CR`, `UB`/`UR`, optional `CY`/`UY`, and no feature tags. This includes unaligned,
+no-compatible, and policy-omitted groups.
+
+**Consumer boundary:** barcode correction includes all primary records when tallying exact
+whitelist abundance, then removes `XB:Z:barcode_only` records from its output. count_cr also
+recognizes and skips the tag defensively when correction is disabled. Thus barcode-only records
+can change correction posteriors but cannot become gene evidence.
+
+**Verification:** `genefull_spliced_drops_intron` asserts one feature plus one barcode-only BAM
+record, decoded `CY`/`UY`, unmapped/no-`GX` layout, and summary conservation. The multigene-omit fixture
+asserts the omitted read survives only as barcode evidence; the `all` fixture still carries its
+complete feature ledger.
+
+### D066 — Emit exact, Parent-preserving STARsolo GeneFull_Ex50pAS evidence
+
+**Decision source:** User (required exact STARsolo 2.7.11b overlap tiers and prohibited collapsing
+distinct locus Parents before the downstream six-rank selection).
+
+**Supersedes:** D057/D060/D063 only for production `genefull_ex50pas` BAM evidence. Their S/U
+classifier remains the ordinary ledger-mode and RAD compatibility path. D064's exact identity
+ledger remains authoritative, but its path -> Parent -> canonical MAX collapse does not apply
+before Ex50pAS tier selection.
+
+**Decision:** Production `--count-mode genefull_ex50pas` requires
+`--path-identity-ledger`, `--bam-out`, and `--bam-multigene all`. The `hst-v1` adapter is rejected
+because t2g/body-t2g rows cannot establish the required exact exon/body path and Parent pair.
+
+For each complete MultipathAlignment traversal contained by a ledger body path, compare its
+reference-aligned bases with the exact exon path linked through `exon_unique_parent`. Following
+STARsolo 2.7.11b `Transcriptome_alignExonOverlap.cpp`, emit E when all bases are exonic and every
+splice junction is concordant; otherwise P when strictly more than half are exonic; otherwise B.
+Exactly half is B. Fully exonic but splice-discordant is P. Target-relative orientation expands
+these to the global priority E-sense, E-AS, P-sense, P-AS, B-sense, B-AS; count_cr selects the
+first nonempty rank, and an antisense winning rank yields no count.
+
+**BAM contract:** `TX`/`GX`/`GD`/`GT`/`XP`/`XU` are semicolon-parallel and `GL` is absent.
+Every evidence slot carries exactly one path and its exact Parent: E/P use the exon path/Parent and
+B uses its linked body path/Parent. Canonical `TX` may repeat across distinct exon locus Parents,
+paths, tiers, or alignment alternatives. Every slot must resolve through the ledger to the same
+canonical `TX` and gene `GX`; the Parent derived from `XP` must equal `XU`. No canonical- or
+gene-level reduction occurs until count_cr applies priority and UMI resolution.
+
+**Execution boundary:** Model-bound states propagate through the MultipathAlignment DAG, including
+ordinary `next` and `connection` arcs, without enumerating complete traversals. States track exact
+body coordinates, aligned-base total, exon overlap, junction concordance, and orientation.
+Repeated-node or body/exon geometry that cannot assign an exact occurrence/orientation is a hard
+error rather than guessed evidence.
+
+**Verification:** The exact-tier fixture covers E; P; the exact 50% B boundary; fully exonic,
+splice-discordant P; reverse orientation; two distinct locus Parents sharing one canonical
+transcript/gene; and a branching MultipathAlignment that retains several tier entries. Its verifier
+round-trips every parallel slot through the ledger. A separate assertion rejects legacy Ex50pAS,
+and exact versus ordinary ledger conversion produces byte-identical RAD. D068 extends the fixture
+to nine non-homopolymer UMIs with minimum pairwise Hamming distance six; downstream exact selection
+should count eight `GENE` UMIs and reject the reverse E-AS read.
+
+### D067 — Emit one superset counting BAM plus an opt-in audit-debug payload
+
+**Decision source:** User, after reviewing the completed/interrupted chr20 seam
+work on 2026-07-28.
+
+**Supersedes:** D057/D060/D066 only where they require separate ordinary and
+exact-Ex50 BAM conversions or make `GL` and `GT` mutually exclusive. Their
+classification, exact-tier, Parent-preservation, strict-ledger, RAD, and
+barcode-only contracts remain active.
+
+**Decision:** PanCollapse is the GAMP-to-counting-BAM information producer.
+One normal ledger-backed conversion must emit common `TX`/`GX`/`GD`, Gene
+`GL`, exact-Ex50 `GT`/`XP`/`XU`, and `CB`/`UB`/`CY`/`UY` evidence needed by
+both downstream count modes. A consumer requires its selected mode's fields
+and permits extra fields. Producing separate mode BAMs is an interim
+implementation, not the final production architecture.
+
+Add an explicit debug mode that also emits the instrumented splice-edge count
+and the exact-top candidate set before flank filtering. Normal mode remains
+compact, and enabling debug evidence must not change any production
+classification or RAD bytes.
+
+**Implementation status (2026-07-28):** production ledger count-mode BAMs carry
+the exact `@CO` schema marker plus parallel `XR/TX/GX/GD/GL/GT/XP/XU` rows,
+using literal `.` for the inactive family. `--debug-evidence-out` writes
+normalized `panCollapse-debug-evidence-v1` read and candidate rows atomically.
+Focused tests compare debug versus normal BAM records and RAD bytes. Producing
+the typed union requires at least one linked body row for every exon Parent;
+general score-mode and non-BAM conversions remain less restrictive.
+
+**Cross-repository contract:** source-gene normalization and UMI ordering remain
+owned by panSC `count_cr.py`, not PanCollapse. The complete implementation,
+workflow, audit, and QC gates are fixed in
+`/mnt/ssd/lalli/panSC/docs/pancollapse_countcr_superset_plan.md`.
+
+**Validation status (2026-07-29):** the D067 cross-repository plan completed.
+The real chr20 generation corrected one 1,998,188-record typed-union BAM once
+and consumed its 1,863,531-record corrected subset in both Gene and exact Ex50.
+The source-ordered 3,996,376-row read-by-mode audit conserved the declared
+universe and byte-replayed both production matrices; the checksum-bound
+STARsolo comparison report regenerated byte-identically. PanCollapse passes
+105/105 CTests as 0.7.0. Exact roots, hashes, the remaining chr20-exploratory
+inference boundary, and cross-repository checks are recorded in the linked
+panSC plan. The validated Docker image remains a local tag, not a published
+registry artifact.
+
+### D068 — Score-window exact Ex50 candidates before six-rank feature selection
+
+**Decision source:** User, 2026-08-02, after identifying that equal `GT`/`GD` categories do not
+establish equal alignment scores.
+
+**Supersedes:** D066 only for eligibility of exact Ex50 BAM evidence. D066's Parent preservation,
+body/exon geometry, splice-concordance, E/P/B definitions, orientation, and downstream six-rank
+selection remain active. D067's typed-union, debug-neutrality, ordinary Gene, and RAD contracts are
+unchanged.
+
+**Decision:** Score every complete transcript-compatible traversal by summing the stored GAMP
+subpath scores and any scored `connection` transitions along that traversal. For identical
+Parent/path/tier/orientation evidence, retain its best score across DAG alternatives and all
+MultipathAlignment records in the read group. Let `S` be the largest score among all compatible
+exact evidence for the group. Retain evidence with score `>= S - 5`, inclusive, and discard evidence
+below that window before `count_cr.py` applies the global E/P/B-orientation priority.
+
+Typed-union BAM headers carry `@CO panCollapse-ex50-score-window:5` so this changed selection
+semantics is distinguishable from pre-D068 BAMs that share the v1 field schema.
+
+The five-point window is the approved one-mismatch fudge factor: with vg's default `+1` match and
+`-4` mismatch scores, replacing one match by one mismatch lowers an otherwise identical alignment
+by five. The comparison is made on complete model-constrained traversals, not individual subpaths,
+MAPQ, or the legacy node-to-reference path tally. Distinct exact Parents remain distinct when both
+survive the score window.
+
+**Verification:** The exact-tier integration fixture contains otherwise-identical alternatives at
+top-minus-five and top-minus-six both as branches inside one MultipathAlignment (including scored
+connections) and as separate records in one read group. The five-point alternatives retain all
+expected exact Parent/path rows; the six-point alternatives do not. Focused exact-Ex50 BAM,
+debug-neutrality, and byte-identical RAD tests pass. The full current suite passes 105/105 tests.
+
+The bounded real HG002 chr20 qualification targets the 445,665 reads STARsolo assigned but the
+pre-D068 graph run rejected at direct Unique. D068 assigns 5,306 (1.190580%), leaves 440,305
+(98.797303%) direct-multigene, and strand-vetoes 54 (0.012117%). Among residual exactly-two-gene
+reads, no pair shares a curated HGNC identity and no pair has identical complete retained-exon
+sequence sets. This establishes that the approved score ordering is operational but explains only
+a small fraction of the observed loss; most remaining ambiguity is between distinct biological
+count identities. The bounded artifact is not promoted production evidence because its process
+started before the marker-only rebuild and its BAM therefore lacks the D068 header comment. Exact
+results and checksums are recorded in
+`/mnt/ssd/lalli/hg002_10x5p_q100_chr20_v1/ex50_read_loss_crosstab_v1_20260802T110935-0500/pair_analysis_v1/score_window5_v1/REPORT.md`.
+
+### D069 — Promote D068 as an opt-out v0.8.0 feature
+
+**Decision source:** User, 2026-08-02, after reviewing the bounded retained-read improvement.
+
+**Supersedes:** D068 only where it made the five-point eligibility rule unconditional. D068's
+default score definition, inclusive boundary, traversal scoring, Ex50 ordering, and biological
+qualification remain active.
+
+**Decision:** panCollapse v0.8.0 enables the inclusive five-point exact-Ex50 score window by
+default. `--no-ex50-score-window` disables score pruning entirely and restores the pre-D068
+all-compatible exact-evidence surface before downstream E/P/B-orientation selection. Disabled is
+not equivalent to a zero-point window: zero would retain exact-top ties only. The opt-out is
+accepted only where a production-ledger count-mode BAM actually carries exact Ex50 evidence;
+otherwise it fails instead of becoming a silent no-op. Ordinary Gene evidence and RAD are
+unchanged under either policy.
+
+Typed-union BAMs record `@CO panCollapse-ex50-score-window:5` under the default or
+`@CO panCollapse-ex50-score-window:disabled` under the opt-out. `summary.tsv` records the same
+state as `exact_ex50_score_window` and uses `not_applicable` when no exact evidence is produced.
+
+**Verification:** The exact-tier fixture runs in both modes. Default output retains top-minus-five
+and excludes top-minus-six alternatives; disabled output restores the top-minus-six alternatives
+both within one MultipathAlignment DAG (including a scored connection) and across records in one
+read group. The verifier rejects the opposite header marker, invalid-scope opt-out use fails, and
+default/disabled RAD files compare byte-identically.
+
+### D070 — Keep compact exact-count output explicit, justified, and conspicuous
+
+**Decision source:** User, 2026-08-21.
+
+**Decision:** The normal information-complete typed-union BAM remains the production default.
+`--compact-exact-count-bam` is an explicit, lossy research opt-in and must never be enabled
+by default in the CLI, pipeline, configuration, or ordinary example recipe. Before a run
+uses it, the plan must record a concrete case-specific reason: the constraint being
+addressed, why the normal BAM is unsuitable for that run, and the evidence lost when the
+producer applies score/Parent filtering and global winner selection. The run update and
+result must prominently label compact mode as compact, lossy, and experimental.
+
+**Current implementation:** The option is already default-off: its state is unset until the
+flag is parsed, and the production panSC module/configuration does not pass it. This decision
+adds a usage and reporting gate; it does not promote the compact format or change the normal
+runtime path.
+
+**Scope:** Existing terminal HG002 compact experiments remain bounded research evidence.
+They do not become production validation, and their prior existence is not a reason for
+future use.
+
+### D071 — Compact necessity and authorization remain a user decision
+
+**Decision source:** User, 2026-08-21.
+
+**Decision:** Only the user determines whether `--compact-exact-count-bam` is necessary and
+authorizes its use. It is currently not necessary, including for the next chr20 k32
+pangenome-loss diagnostic. Agents must not substitute convenience, output size, an existing
+runner, or prior compact artifacts for that determination. The normal typed-union BAM is
+required unless the user later makes a new explicit decision.
+
+**Scope:** This strengthens D070's use gate. It does not remove the compact implementation or
+its tests, and it does not change the notice/evidence-loss requirements that would apply to a
+future user-authorized run.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

@@ -27,8 +27,8 @@ V1 supports:
   whose `vg rna` HST path crosses the read's aligned nodes;
 - per-node scoring under vg's own alignment scheme, with the top HST score across all of a
   read's alignments plus ties selecting the winners;
-- transcript-copy collapse implicit in HST path naming (haplotype copies collapse to one
-  transcript ID);
+- transcript-copy collapse either implicit in conventional HST path naming or explicit in
+  optional t2g column 3 (haplotype paths collapse to one canonical transcript ID);
 - preservation of multimapping transcript equivalence classes;
 - mapper-style, uncollated RAD output for alevin-fry;
 - preservation of target-relative read orientation in RAD `dirs`;
@@ -58,8 +58,9 @@ The final V1 CLI must accept:
 1. **Name-grouped GAMP** containing one or more multipath alignments per cDNA read.
 2. **Existing `.xg` graph** for the same graph/node-id space that produced the GAMP,
    exposing the `vg rna` HST paths used to read transcript compatibility.
-3. **Transcript-to-gene map (t2g)** projecting transcript targets to genes and driving
-   `tx2gene.tsv`.
+3. **Path identity ledger** (`--path-identity-ledger`, schema `panSC-path-identity-v1`)
+   projecting exact graph paths through unique annotation Parents to canonical transcripts and
+   genes, and driving `tx2gene.tsv`.
 4. **Output destination** for mapper-style uncollated RAD and associated metadata/logs.
 5. **Raw molecule-identity lengths** for the cell barcode and UMI (`--raw-cb-length`,
    `--raw-umi-length`; Phase 2 defaults 16 and 12).
@@ -70,20 +71,28 @@ indexes may be needed upstream to produce the GAMP with `vg mpmap`; once GAMP ex
 not panCollapse inputs. The implementation must not require GFF3, GBZ as a substitute for
 `.xg`, or a custom lookup index in V1.
 
+Historical two- and three-column exon/body t2gs are accepted only through the explicit
+`--legacy-adapter hst-v1`; they are never inferred from file shape. The production ledger carries
+both exon and body rows. Ordinary ledger modes keep S/U evidence transcript-specific.
+`genefull_ex50pas` instead emits exact Parent-preserving E/P/B evidence and requires
+`--bam-out --bam-multigene all`; it rejects `hst-v1`. See `docs/genefull.md`.
+
 ## 5. Barcode and UMI source
 
 Upstream FASTQ preparation writes the observed raw cell barcode and UMI into the
 biological read name before alignment. panCollapse reads those uncorrected values from
 the GAMP name field and writes them to RAD:
 
-- RNA read-name convention: `<original_read_name>_<raw_CB>_<raw_UMI>`.
-- The barcode and UMI are parsed from the right side of the name so the original read
+- RNA read-name convention:
+  `<original_read_name>_<raw_CB>_<raw_UMI>_cy<hex(raw_barcode_quality)>_uy<hex(raw_UMI_quality)>`.
+- Barcode, UMI, and optional qualities are parsed from the right side of the name so the original read
   name may contain underscores.
+- Legacy quality-free and CY-only names remain accepted; absent qualities cannot be emitted.
 - Parsed raw barcode and UMI values must match the configured barcode and UMI lengths.
 - panCollapse does not correct cell barcodes or UMIs and does not build a permit list.
 - alevin-fry performs permit-list construction and cell-barcode correction, followed by
   UMI deduplication/resolution during quantification.
-- missing, malformed, or unsupported raw barcode/UMI fields are reported in diagnostics;
+- missing, malformed, or unsupported raw barcode/UMI/quality fields are reported in diagnostics;
 - `--molecule-identity-failures skip|fail` controls whether those conditions are skipped
   and counted or treated as hard failures; the default is `skip`.
 
@@ -111,9 +120,12 @@ transcript's winning HSTs disagree on orientation, the majority of aligned bases
 
 ## 8. Path and copy collapse
 
-Transcript-copy collapse is implicit in HST naming: a read's winning HST haplotype copies of
-one transcript collapse to one transcript ID. A transcript's score is the score of its best
-HST and is never inflated by summing across copies. There is no runtime collapse manifest.
+Production transcript-copy collapse follows the exact ledger chain
+`vg_path_name -> unique_parent -> canonical_transcript -> gene_id`. Paths MAX-collapse within a
+Parent, then Parents MAX-collapse within a canonical transcript; tied winning paths and Parents
+are retained as provenance, never summed. Path names are opaque: a literal `_R1` is not stripped.
+The XG must contain every ledger path exactly once at the recorded `vg_path_length`. The explicit
+`hst-v1` adapter preserves D062/D063's historical suffix and t2g behavior.
 
 ## 9. Alignment eligibility and scoring
 
@@ -122,6 +134,17 @@ Each aligned node is scored under vg's own alignment scheme, reproduced per node
 its best HST. The read's targets are the HSTs tied at the single top score pooled across all
 of the read's alignments; lower-scoring HSTs are not emitted. RAD output is an unweighted
 target set with no probabilistic weighting.
+
+Exact `genefull_ex50pas` BAM evidence has a D068-specific eligibility rule. Its model-bound
+dynamic program accumulates the stored GAMP subpath scores and scored connections for each
+complete transcript-compatible traversal. Across every MultipathAlignment record in the read
+group, retain evidence whose best traversal score is at least the global compatible top minus
+five, inclusive; only then may the downstream consumer apply the six E/P/B-orientation ranks.
+This five-point window is one mismatch-equivalent under vg's default `+1` match and `-4`
+mismatch scoring. It does not change the ordinary score-mode target set or RAD output.
+In v0.8 this is the default. `--no-ex50-score-window` skips exact-evidence score pruning entirely
+and restores all complete compatible traversals before the same six-rank consumer logic. The
+opt-out is a sensitivity mode and likewise leaves ordinary score/RAD output unchanged.
 
 ## 10. Emitted target set
 
@@ -139,14 +162,39 @@ alevin-fry collate
 alevin-fry quant
 ```
 
-Target IDs in RAD are the transcript IDs a read's winning HSTs collapse to. A standard
-two-column transcript-to-gene map allows alevin-fry to produce the final cell-by-gene
-matrix. V1 does not attach splicing-state labels.
+Target IDs in RAD are the canonical transcript IDs a read's winning HSTs collapse to.
+panCollapse writes their ordinary two-column canonical `tx2gene.tsv`, which allows
+alevin-fry to produce the final cell-by-gene matrix. V1 does not attach splicing-state labels.
 
 Each emitted read record carries the raw cell barcode, raw UMI, compatible target IDs,
 and one orientation value per target. Target IDs are indices into the RAD header target
 dictionary, not genomic coordinates. Orientation values are target-level RAD metadata
 consumed by alevin-fry's expected-orientation filtering.
+
+With optional BAM output, production identity is auditable per target through `TX`, exact-path
+`XP`, and unique-Parent `XU` tags. `XP`/`XU` use semicolon-separated groups parallel to `TX` and
+comma-sorted tied winners inside each group in ordinary modes. Exact `genefull_ex50pas` uses
+parallel `TX`/`GX`/`GD`/`GT`/`XP`/`XU` slots with exactly one path/Parent each (exon for E/P,
+linked body for B); canonical `TX` values may repeat across distinct evidence slots. The existing
+RAD remains byte-identical. By default these exact slots have passed D068's inclusive five-point
+complete-traversal score window; under `--no-ex50-score-window`, they retain all compatible exact
+evidence. Their ordering in the BAM is not a score ranking. Typed-union BAMs pin the selected policy
+with `@CO panCollapse-ex50-score-window:5` or `:disabled` in addition to the evidence-schema marker.
+
+The normal information-complete typed-union BAM is the production default. The
+`--compact-exact-count-bam` projection is an explicit, lossy research opt-in and must never
+be enabled by a default CLI value, pipeline configuration, or example recipe. Only the user
+may decide that it is necessary and authorize a use; the current decision is that it is not
+necessary. A later authorized plan must record the concrete operational reason, why the
+normal BAM is unsuitable for that run, and which downstream-reselectable evidence is
+discarded; run updates and results must highlight that compact mode was used.
+
+The optional BAM also preserves the barcode-correction population independently of feature
+construction. Every valid raw-molecule group emits exactly one BAM record. Featureless groups are
+unmapped `XB:Z:barcode_only` records with `CB`/`CR`, `UB`/`UR`, and optional raw qualities
+`CY`/`UY`; they carry no gene/transcript tags. The supported upstream RNA name is
+`<name>_<CB>_<UMI>_cy<hex(CY)>_uy<hex(UY)>`, with qualities encoded as ASCII hex.
+Legacy quality-free and CY-only names remain readable.
 
 The exact RAD header, record fields, orientation encoding, chunking, and metadata are
 defined by the supported alevin-fry/libradicl baseline. Current active V1 execution is
@@ -170,6 +218,7 @@ least:
 - grouping violations;
 - groups with no compatible transcript;
 - groups emitted and number of targets per emitted group;
+- total optional-BAM records and barcode-only prior-evidence records;
 - manifest misses and annotation/index consistency failures.
 
 Errors affecting input interpretation must fail loudly rather than silently changing the

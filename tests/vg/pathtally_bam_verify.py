@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Parity checker for the optional BAM output.
 
-Confirms every BAM record carries the 10x tags (CB/CR/UB/UR/GX/GN, and XT per the
-multi-gene policy), is flagged mapped, and is placed on its primary gene's contig; and
-that each read's GX gene set equals the gene set the independent oracle derives for that
-read from the GAMP. Reuses pathtally_oracle for the graph-native gene derivation, so the
-BAM's gene assignment is checked against an implementation that never touches panCollapse's
-C++.
+Confirms every valid input group has exactly one BAM record. Feature records carry the
+10x tags (CB/CR/UB/UR/GX/GN, and XT per the multi-gene policy), are mapped nominally,
+and have the gene set the independent oracle derives. Groups for which the oracle finds
+no feature must instead be unmapped XB:Z:barcode_only records with molecule tags and no
+feature tags.
 
 Usage: pathtally_bam_verify.py reads.bam subset.json paths.gfa t2g.tsv expected_count omit|first
 """
@@ -20,9 +19,16 @@ import pysam  # noqa: E402
 
 
 def original_name(name):
-    i = name.rfind("_")
-    j = name.rfind("_", 0, i)
-    return name[:j]
+    molecule_name = name
+    quality_sep = molecule_name.rfind("_")
+    if quality_sep >= 0 and molecule_name[quality_sep + 1:].startswith("uy"):
+        molecule_name = molecule_name[:quality_sep]
+    quality_sep = molecule_name.rfind("_")
+    if quality_sep >= 0 and molecule_name[quality_sep + 1:].startswith("cy"):
+        molecule_name = molecule_name[:quality_sep]
+    i = molecule_name.rfind("_")
+    j = molecule_name.rfind("_", 0, i)
+    return molecule_name[:j]
 
 
 def main():
@@ -57,22 +63,47 @@ def main():
     node_paths = oracle.load_node_paths(gfa, hst_set, touched)
 
     expected = {}  # original read name -> sorted unique gene list
+    valid = set()
     for name, group in groups:
         if oracle.parse_molecule(name) is None:
             continue
+        valid.add(original_name(name))
         targets = oracle.predict(group, node_paths)
         if not targets:
             continue
         expected[original_name(name)] = sorted({tx_gene[tx] for tx, _ in targets})
 
     seen = set()
+    feature_seen = set()
+    barcode_only_seen = set()
     bam = pysam.AlignmentFile(bam_path, "rb")
     for rec in bam:
         q = rec.query_name
+        if q in seen:
+            print(f"FAIL: BAM has more than one record for {q}")
+            return 1
+        seen.add(q)
+        if rec.has_tag("XB") and rec.get_tag("XB") == "barcode_only":
+            barcode_only_seen.add(q)
+            if q not in valid or q in expected:
+                print(f"FAIL: unexpected barcode-only record {q}")
+                return 1
+            if not rec.is_unmapped:
+                print(f"FAIL: barcode-only record {q} is mapped")
+                return 1
+            for tag in ("CB", "CR", "UB", "UR"):
+                if not rec.has_tag(tag):
+                    print(f"FAIL: barcode-only record {q} missing {tag}")
+                    return 1
+            for tag in ("GX", "GN", "GD", "TX", "GL", "XT"):
+                if rec.has_tag(tag):
+                    print(f"FAIL: barcode-only record {q} has feature tag {tag}")
+                    return 1
+            continue
         if q not in expected:
             print(f"FAIL: BAM has record {q} the oracle did not emit")
             return 1
-        seen.add(q)
+        feature_seen.add(q)
         genes = expected[q]
         if rec.is_unmapped:
             print(f"FAIL: {q} is flagged unmapped")
@@ -102,14 +133,20 @@ def main():
             print(f"FAIL: {q} has XT={rec.get_tag('XT')} but is multi-gene under omit policy")
             return 1
 
-    missing = sorted(set(expected) - seen)
+    missing = sorted(valid - seen)
     if missing:
         print(f"FAIL: BAM missing records for {missing}")
         return 1
-    if len(seen) != want:
-        print(f"FAIL: expected {want} BAM records, got {len(seen)}")
+    if len(feature_seen) != want:
+        print(f"FAIL: expected {want} BAM feature records, got {len(feature_seen)}")
         return 1
-    print(f"bam parity: PASS ({len(seen)} records; tags + GX gene sets match the oracle)")
+    if feature_seen != set(expected):
+        print(f"FAIL: feature-record names {sorted(feature_seen)} != oracle {sorted(expected)}")
+        return 1
+    print(
+        f"bam parity: PASS ({len(feature_seen)} feature + {len(barcode_only_seen)} barcode-only "
+        "records; feature tags/GX match the oracle)"
+    )
     return 0
 
 

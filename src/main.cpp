@@ -8,6 +8,7 @@
 #include "pathtally.hpp"
 #include "pathtally_ledger.hpp"
 #include "pathtally_qualadj.hpp"
+#include "path_identity_ledger.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -46,6 +47,11 @@ constexpr uint32_t kRadTargetIdMask = 0x7fffffffU;
 // constitutive intron only past this many body-only bases. Tunable on the d46 debug fixture.
 constexpr int64_t kIntronFlankBases = 5;
 
+// Exact GeneFull_Ex50pAS first selects complete transcript-compatible traversals whose mapper
+// score is within one mismatch-equivalent of the global compatible optimum. Under vg's default
+// scoring, replacing one +1 match with one -4 mismatch changes the score by five points.
+constexpr int64_t kExactEx50ScoreWindow = 5;
+
 enum class MoleculeIdentityFailurePolicy { Skip, Fail };
 
 enum class ScoreMode { Flat, QualAdj };
@@ -72,6 +78,8 @@ struct Options {
     std::filesystem::path gamp;
     std::filesystem::path xg;
     std::filesystem::path t2g;
+    std::filesystem::path path_identity_ledger;
+    std::string legacy_adapter;
     std::filesystem::path out_dir;
     size_t raw_cb_length = 16;
     size_t raw_umi_length = 12;
@@ -81,13 +89,28 @@ struct Options {
     BamMultiGenePolicy bam_multigene = BamMultiGenePolicy::Omit;
     StrandFilter strand = StrandFilter::Both;
     pathtally::CountMode count_mode = pathtally::CountMode::Score;
-    std::filesystem::path body_t2g;  // gene-body layer t2g, required for ledger count modes
+    std::filesystem::path body_t2g;  // hst-v1 gene-body layer, required for adapter count modes
+    std::filesystem::path debug_evidence_out;  // empty => no audit-only TSV sidecar
+    // Optional projected exact-count BAM. The value is the library orientation used to select
+    // the single global Ex50pAS winning rank before serialization. This is deliberately separate
+    // from --strand, which continues to control the RAD target filter.
+    std::optional<StrandFilter> compact_exact_count_strand;
+    std::string path_identity_ledger_sha256;
+    // Reference-build compatibility is a pre-score-window Parent filter. The allowlist is derived
+    // from the same annotation generation as the path ledger and is bound into the BAM header.
+    std::filesystem::path strict_allowlisted_parents;
+    std::string strict_allowlisted_parents_sha256;
+    // D068 is the v0.8 default. The explicit opt-out restores the pre-D068 exact-evidence
+    // eligibility surface: every complete compatible traversal reaches downstream Ex50 ranking.
+    bool exact_ex50_score_window_enabled = true;
 };
 
 struct MoleculeId {
     std::string original_name;
     std::string barcode;
     std::string umi;
+    std::string barcode_quality;
+    std::string umi_quality;
 };
 
 struct MoleculeParseResult {
@@ -106,12 +129,17 @@ struct EmittedRecord {
     std::vector<TargetHit> hits;
 };
 
-// The transcript-to-gene map (t2g): HST_name -> gene. PathTally collapses HST
-// haplotype copies to a transcript id; the RAD dictionary is the sorted set of
-// those transcript ids.
+// Internal path -> canonical transcript -> gene projection. Production populates it from the
+// strict identity ledger; hst-v1 uses the historical t2g parser below.
 struct T2gData {
-    std::unordered_set<std::string> hst_names;
+    std::map<std::string, std::string> path_transcript;
+    // Production-ledger-only exact path provenance. Empty under hst-v1.
+    std::map<std::string, std::string> path_unique_parent;
     std::map<std::string, std::string> transcript_gene;
+    // Only canonical targets introduced by a legacy two-column row may match additional
+    // graph paths through terminal _H<n>/_R<n> stripping in hst-v1 count mode. Three-column rows
+    // are exact raw-path aliases and must never enable that fallback implicitly.
+    std::unordered_set<std::string> legacy_fallback_transcripts;
     std::map<std::string, uint32_t> target_ids;
     std::vector<std::string> target_names;
     // Sorted unique gene ids and gene -> index, used only for the optional BAM output:
@@ -121,12 +149,20 @@ struct T2gData {
 };
 
 constexpr const char* kUsageText =
-    "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg --t2g t2g.tsv "
+    "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg "
+    "(--path-identity-ledger path_identity_ledger.tsv | "
+    "--legacy-adapter hst-v1 --t2g t2g.tsv) "
     "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
     "[--score flat|qualadj] [--molecule-identity-failures skip|fail] "
     "[--strand both|forward|reverse] "
-    "[--count-mode score|gene|genefull|genefull_exonoverintron|genefull_ex50pas --body-t2g body.t2g] "
-    "[--bam-out reads.bam] [--bam-multigene omit|first|all]";
+    "[--count-mode score|gene|genefull|genefull_exonoverintron|genefull_ex50pas] "
+    "[--body-t2g body.t2g] "
+    "[--bam-out reads.bam] [--bam-multigene omit|first|all] "
+    "[--debug-evidence-out audit.tsv] [--no-ex50-score-window] "
+    "[--compact-exact-count-bam forward|reverse] "
+    "[--path-identity-ledger-sha256 HEX] "
+    "[--strict-allowlisted-parents parents.txt] "
+    "[--strict-allowlisted-parents-sha256 HEX]";
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(kUsageText);
@@ -171,6 +207,10 @@ Options parse_options(int argc, char** argv) {
             options.xg = require_value("--xg");
         } else if (arg == "--t2g") {
             options.t2g = require_value("--t2g");
+        } else if (arg == "--path-identity-ledger") {
+            options.path_identity_ledger = require_value("--path-identity-ledger");
+        } else if (arg == "--legacy-adapter") {
+            options.legacy_adapter = require_value("--legacy-adapter");
         } else if (arg == "--out-dir") {
             options.out_dir = require_value("--out-dir");
         } else if (arg == "--raw-cb-length") {
@@ -236,26 +276,138 @@ Options parse_options(int argc, char** argv) {
             } else {
                 usage_error();
             }
+        } else if (arg == "--debug-evidence-out") {
+            options.debug_evidence_out = require_value("--debug-evidence-out");
+        } else if (arg == "--no-ex50-score-window") {
+            options.exact_ex50_score_window_enabled = false;
+        } else if (arg == "--compact-exact-count-bam") {
+            const std::string value = require_value("--compact-exact-count-bam");
+            if (value == "forward") {
+                options.compact_exact_count_strand = StrandFilter::Forward;
+            } else if (value == "reverse") {
+                options.compact_exact_count_strand = StrandFilter::Reverse;
+            } else {
+                throw std::runtime_error(
+                    "--compact-exact-count-bam must be forward or reverse");
+            }
+        } else if (arg == "--path-identity-ledger-sha256") {
+            options.path_identity_ledger_sha256 =
+                require_value("--path-identity-ledger-sha256");
+        } else if (arg == "--strict-allowlisted-parents") {
+            options.strict_allowlisted_parents =
+                require_value("--strict-allowlisted-parents");
+        } else if (arg == "--strict-allowlisted-parents-sha256") {
+            options.strict_allowlisted_parents_sha256 =
+                require_value("--strict-allowlisted-parents-sha256");
         } else {
             usage_error();
         }
     }
 
-    if (options.gamp.empty() || options.xg.empty() || options.t2g.empty() || options.out_dir.empty()) {
+    if (options.gamp.empty() || options.xg.empty() || options.out_dir.empty()) {
         usage_error();
     }
     if (options.raw_cb_length == 0 || options.raw_cb_length > 32 || options.raw_umi_length == 0 ||
         options.raw_umi_length > 32) {
         throw std::runtime_error("raw barcode and UMI lengths must be in 1..32");
     }
-    // Ledger count modes read two path->gene t2gs: --t2g is the exon/HST layer, --body-t2g the
-    // gene-body layer. --body-t2g is meaningless without a ledger mode.
-    if (options.count_mode == pathtally::CountMode::Score) {
-        if (!options.body_t2g.empty()) {
-            throw std::runtime_error("--body-t2g is only used with a ledger --count-mode");
+    const bool production_ledger = !options.path_identity_ledger.empty();
+    const bool legacy_adapter = !options.legacy_adapter.empty();
+    if (production_ledger == legacy_adapter) {
+        throw std::runtime_error(
+            "select exactly one identity input: --path-identity-ledger or --legacy-adapter hst-v1");
+    }
+    if (options.count_mode == pathtally::CountMode::GeneFullEx50pAS) {
+        if (!production_ledger) {
+            throw std::runtime_error(
+                "--count-mode genefull_ex50pas requires --path-identity-ledger; "
+                "legacy t2g/body-t2g evidence cannot represent exact base-overlap tiers");
         }
-    } else if (options.body_t2g.empty()) {
-        throw std::runtime_error("--count-mode gene/genefull/... requires --body-t2g");
+        if (options.bam_out.empty()) {
+            throw std::runtime_error(
+                "--count-mode genefull_ex50pas is a BAM/count_cr mode and requires --bam-out");
+        }
+        if (options.bam_multigene != BamMultiGenePolicy::All) {
+            throw std::runtime_error(
+                "--count-mode genefull_ex50pas requires --bam-multigene all so downstream "
+                "selection receives every exact evidence entry");
+        }
+    }
+    if (!options.exact_ex50_score_window_enabled &&
+        (!production_ledger || options.count_mode == pathtally::CountMode::Score ||
+         options.bam_out.empty())) {
+        throw std::runtime_error(
+            "--no-ex50-score-window applies only to a production-ledger count-mode BAM");
+    }
+    if (options.compact_exact_count_strand.has_value() &&
+        options.count_mode != pathtally::CountMode::GeneFullEx50pAS) {
+        throw std::runtime_error(
+            "--compact-exact-count-bam applies only to --count-mode genefull_ex50pas");
+    }
+    auto valid_sha256 = [](const std::string& digest) {
+        return digest.size() == 64 &&
+            std::all_of(digest.begin(), digest.end(), [](const char c) {
+                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            });
+    };
+    if (options.compact_exact_count_strand.has_value()) {
+        if (!valid_sha256(options.path_identity_ledger_sha256)) {
+            throw std::runtime_error(
+                "--compact-exact-count-bam requires --path-identity-ledger-sha256 "
+                "as 64 lowercase hexadecimal characters");
+        }
+    } else if (!options.path_identity_ledger_sha256.empty()) {
+        throw std::runtime_error(
+            "--path-identity-ledger-sha256 applies only with --compact-exact-count-bam");
+    }
+    if (!options.strict_allowlisted_parents.empty()) {
+        if (options.count_mode != pathtally::CountMode::GeneFullEx50pAS) {
+            throw std::runtime_error(
+                "--strict-allowlisted-parents applies only to --count-mode genefull_ex50pas");
+        }
+        if (!valid_sha256(options.strict_allowlisted_parents_sha256)) {
+            throw std::runtime_error(
+                "--strict-allowlisted-parents requires "
+                "--strict-allowlisted-parents-sha256 as 64 lowercase hexadecimal characters");
+        }
+    } else if (!options.strict_allowlisted_parents_sha256.empty()) {
+        throw std::runtime_error(
+            "--strict-allowlisted-parents-sha256 requires --strict-allowlisted-parents");
+    }
+    if (!options.debug_evidence_out.empty()) {
+        if (!production_ledger ||
+            options.count_mode != pathtally::CountMode::GeneFullEx50pAS ||
+            options.bam_out.empty() ||
+            options.bam_multigene != BamMultiGenePolicy::All) {
+            throw std::runtime_error(
+                "--debug-evidence-out is an audit sidecar for the production superset conversion "
+                "and requires --path-identity-ledger, --count-mode genefull_ex50pas, --bam-out, "
+                "and --bam-multigene all");
+        }
+        if (options.debug_evidence_out == options.bam_out) {
+            throw std::runtime_error("--debug-evidence-out must differ from --bam-out");
+        }
+    }
+    if (production_ledger) {
+        if (!options.t2g.empty() || !options.body_t2g.empty()) {
+            throw std::runtime_error(
+                "--path-identity-ledger cannot be combined with --t2g or --body-t2g");
+        }
+    } else {
+        if (options.legacy_adapter != "hst-v1") {
+            throw std::runtime_error("the only supported --legacy-adapter is hst-v1");
+        }
+        if (options.t2g.empty()) {
+            throw std::runtime_error("--legacy-adapter hst-v1 requires --t2g");
+        }
+        // The adapter preserves the historical two-file count-mode contract exactly.
+        if (options.count_mode == pathtally::CountMode::Score) {
+            if (!options.body_t2g.empty()) {
+                throw std::runtime_error("--body-t2g is only used by hst-v1 count modes");
+            }
+        } else if (options.body_t2g.empty()) {
+            throw std::runtime_error("--count-mode gene/genefull/... requires --body-t2g");
+        }
     }
 
     return options;
@@ -276,32 +428,43 @@ std::vector<std::string> split_tab(const std::string& line) {
     return fields;
 }
 
-T2gData read_t2g(const std::filesystem::path& filename) {
-    std::ifstream in(filename);
-    if (!in) {
-        throw std::runtime_error("cannot open t2g");
+std::unordered_set<std::string> read_strict_allowlisted_parents(
+    const std::filesystem::path& filename) {
+    std::ifstream input(filename);
+    if (!input) {
+        throw std::runtime_error("cannot open strict allowlisted Parent file");
     }
-    T2gData data;
+    std::unordered_set<std::string> parents;
     std::string line;
-    while (std::getline(in, line)) {
+    size_t line_number = 0;
+    while (std::getline(input, line)) {
+        ++line_number;
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
         if (line.empty() || line.front() == '#') {
             continue;
         }
-        const auto fields = split_tab(line);
-        if (fields.size() < 2 || fields[0].empty() || fields[1].empty()) {
-            throw std::runtime_error("t2g row must have transcript and gene columns");
+        if (line.find_first_of("\t ") != std::string::npos) {
+            throw std::runtime_error(
+                "strict allowlisted Parent file line " + std::to_string(line_number) +
+                " must contain exactly one Parent identity");
         }
-        const std::string& hst_name = fields[0];
-        const std::string& gene = fields[1];
-        data.hst_names.insert(hst_name);
-        const std::string transcript = pathtally::transcript_id_of(hst_name);
-        auto [it, inserted] = data.transcript_gene.emplace(transcript, gene);
-        if (!inserted && it->second != gene) {
-            throw std::runtime_error("t2g maps transcript " + transcript + " to multiple genes");
+        if (!parents.insert(line).second) {
+            throw std::runtime_error(
+                "duplicate strict allowlisted Parent " + line + " at line " +
+                std::to_string(line_number));
         }
     }
+    if (parents.empty()) {
+        throw std::runtime_error("strict allowlisted Parent file is empty");
+    }
+    return parents;
+}
+
+void finalize_t2g(T2gData& data) {
     if (data.transcript_gene.empty()) {
-        throw std::runtime_error("t2g has no data rows");
+        throw std::runtime_error("identity input has no exon data rows");
     }
     if (data.transcript_gene.size() > kRadTargetIdMask) {
         throw std::runtime_error("RAD target dictionary exceeds 31-bit target IDs");
@@ -316,35 +479,152 @@ T2gData read_t2g(const std::filesystem::path& filename) {
         id = static_cast<int32_t>(data.gene_names.size());
         data.gene_names.push_back(gene);
     }
-    return data;
 }
 
-// Read a t2g as a raw path_name -> gene map (no transcript-id collapse). Used for the ledger
-// count modes, where the exon (HST) and gene-body layers are each an ordinary path->gene t2g.
-std::map<std::string, std::string> read_path_gene(const std::filesystem::path& filename) {
+T2gData read_t2g(const std::filesystem::path& filename) {
     std::ifstream in(filename);
     if (!in) {
-        throw std::runtime_error("cannot open t2g " + filename.string());
+        throw std::runtime_error("cannot open t2g");
     }
-    std::map<std::string, std::string> path_gene;
+    T2gData data;
     std::string line;
     while (std::getline(in, line)) {
         if (line.empty() || line.front() == '#') {
             continue;
         }
         const auto fields = split_tab(line);
-        if (fields.size() < 2 || fields[0].empty() || fields[1].empty()) {
-            throw std::runtime_error("t2g row must have path and gene columns");
+        if ((fields.size() != 2 && fields.size() != 3) || fields[0].empty() || fields[1].empty() ||
+            (fields.size() == 3 && fields[2].empty())) {
+            throw std::runtime_error(
+                "t2g row must have path, gene, and optional canonical-transcript columns");
         }
-        auto [it, inserted] = path_gene.emplace(fields[0], fields[1]);
-        if (!inserted && it->second != fields[1]) {
-            throw std::runtime_error("t2g maps path " + fields[0] + " to multiple genes");
+        const std::string& hst_name = fields[0];
+        const std::string& gene = fields[1];
+        const std::string transcript =
+            fields.size() == 3 ? fields[2] : pathtally::transcript_id_of(hst_name);
+        if (fields.size() == 2) {
+            data.legacy_fallback_transcripts.insert(transcript);
+        }
+        auto [path_it, path_inserted] = data.path_transcript.emplace(hst_name, transcript);
+        if (!path_inserted && path_it->second != transcript) {
+            throw std::runtime_error("t2g maps path " + hst_name + " to multiple transcripts");
+        }
+        auto [it, inserted] = data.transcript_gene.emplace(transcript, gene);
+        if (!inserted && it->second != gene) {
+            throw std::runtime_error("t2g maps transcript " + transcript + " to multiple genes");
         }
     }
-    if (path_gene.empty()) {
+    finalize_t2g(data);
+    return data;
+}
+
+// Resolve a graph path to its canonical transcript. Exact raw-path aliases are always
+// authoritative. The hst-v1 count adapter additionally retains its historical bare-t2g fallback:
+// after stripping _H<n>/_R<n>, accept either a bare raw t2g row or an already-canonical
+// two-column transcript id. Score mode passes allow_suffix_fallback=false and therefore
+// continues to score only graph paths explicitly named in the t2g.
+const std::string* resolve_graph_transcript(const T2gData& data, const std::string& path_name,
+                                            bool allow_suffix_fallback) {
+    const auto exact = data.path_transcript.find(path_name);
+    if (exact != data.path_transcript.end()) {
+        return &exact->second;
+    }
+    if (!allow_suffix_fallback) {
+        return nullptr;
+    }
+    const std::string bare = pathtally::transcript_id_of(path_name);
+    if (bare == path_name) {
+        return nullptr;
+    }
+    if (data.legacy_fallback_transcripts.count(bare) == 0) {
+        return nullptr;
+    }
+    const auto canonical = data.transcript_gene.find(bare);
+    return canonical == data.transcript_gene.end() ? nullptr : &canonical->first;
+}
+
+struct BodyPathTarget {
+    std::string gene;
+    // Empty for the legacy two-column gene-body contract. In the three-column contract this is
+    // the canonical transcript whose unspliced body the raw graph path represents.
+    std::string transcript;
+};
+
+struct BodyT2gData {
+    std::map<std::string, BodyPathTarget> paths;
+    // Production-ledger-only exact path provenance. Empty under hst-v1.
+    std::map<std::string, std::string> path_unique_parent;
+    std::map<std::string, std::string> transcript_gene;
+    bool transcript_specific = false;
+};
+
+// Ledger body annotation. A consistently two-column file preserves the legacy raw
+// path->gene body layer. A consistently three-column file is transcript-specific:
+// raw_body_path<TAB>gene<TAB>canonical_transcript. Mixing row widths would silently mix two
+// different classification algorithms, so it is rejected.
+BodyT2gData read_body_t2g(const std::filesystem::path& filename) {
+    std::ifstream in(filename);
+    if (!in) {
+        throw std::runtime_error("cannot open t2g " + filename.string());
+    }
+    BodyT2gData data;
+    std::optional<bool> transcript_specific;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line.front() == '#') {
+            continue;
+        }
+        const auto fields = split_tab(line);
+        if ((fields.size() != 2 && fields.size() != 3) || fields[0].empty() || fields[1].empty() ||
+            (fields.size() == 3 && fields[2].empty())) {
+            throw std::runtime_error(
+                "body t2g row must have path, gene, and optional canonical-transcript columns");
+        }
+        const bool row_is_transcript_specific = fields.size() == 3;
+        if (!transcript_specific.has_value()) {
+            transcript_specific = row_is_transcript_specific;
+        } else if (*transcript_specific != row_is_transcript_specific) {
+            throw std::runtime_error("body t2g cannot mix two-column and three-column rows");
+        }
+        const std::string transcript = row_is_transcript_specific ? fields[2] : std::string{};
+        auto [it, inserted] = data.paths.emplace(fields[0], BodyPathTarget{fields[1], transcript});
+        if (!inserted &&
+            (it->second.gene != fields[1] || it->second.transcript != transcript)) {
+            throw std::runtime_error("body t2g maps path " + fields[0] + " inconsistently");
+        }
+        if (row_is_transcript_specific) {
+            auto [tg, tg_inserted] = data.transcript_gene.emplace(transcript, fields[1]);
+            if (!tg_inserted && tg->second != fields[1]) {
+                throw std::runtime_error("body t2g maps transcript " + transcript +
+                                         " to multiple genes");
+            }
+        }
+    }
+    if (data.paths.empty()) {
         throw std::runtime_error("t2g has no data rows: " + filename.string());
     }
-    return path_gene;
+    data.transcript_specific = transcript_specific.value_or(false);
+    return data;
+}
+
+// Exact body-path rows are authoritative. Only the legacy two-column format retains the
+// suffix-stripped bare-path fallback; explicit transcript-body rows must name the actual raw
+// graph paths so a fragment/copy cannot be assigned accidentally.
+const BodyPathTarget* resolve_body_graph_path(const BodyT2gData& data,
+                                              const std::string& path_name) {
+    const auto exact = data.paths.find(path_name);
+    if (exact != data.paths.end()) {
+        return &exact->second;
+    }
+    if (data.transcript_specific) {
+        return nullptr;
+    }
+    const std::string bare = pathtally::transcript_id_of(path_name);
+    if (bare == path_name) {
+        return nullptr;
+    }
+    const auto fallback = data.paths.find(bare);
+    return fallback == data.paths.end() ? nullptr : &fallback->second;
 }
 
 bool is_supported_molecule_base(char base) {
@@ -375,19 +655,76 @@ std::string molecule_status_counter(MoleculeParseStatus status) {
 }
 
 MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length, size_t umi_length) {
-    const size_t umi_sep = name.rfind('_');
+    // New RNA carry-along names end in _cy<hex(CY)>_uy<hex(UY)>. Hex keeps arbitrary printable
+    // FASTQ quality characters out of the QNAME delimiter/whitespace grammar. Legacy names with
+    // neither quality, and the transitional CY-only form, remain accepted.
+    std::string molecule_name = name;
+    std::string barcode_quality;
+    std::string umi_quality;
+    auto decode_quality_suffix = [&](const std::string& prefix, size_t expected_length,
+                                     std::string& decoded, const std::string& label) {
+        const size_t quality_sep = molecule_name.rfind('_');
+        if (quality_sep == std::string::npos ||
+            molecule_name.compare(quality_sep + 1, prefix.size(), prefix) != 0) {
+            return false;
+        }
+        const std::string encoded = molecule_name.substr(quality_sep + 1 + prefix.size());
+        if (encoded.size() != expected_length * 2) {
+            throw std::invalid_argument("hex-encoded raw " + label +
+                                        " quality length does not match configured length");
+        }
+        auto hex_value = [](char value) -> int {
+            if (value >= '0' && value <= '9') {
+                return value - '0';
+            }
+            value = static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
+            return value >= 'a' && value <= 'f' ? value - 'a' + 10 : -1;
+        };
+        decoded.reserve(expected_length);
+        for (size_t i = 0; i < encoded.size(); i += 2) {
+            const int hi = hex_value(encoded[i]);
+            const int lo = hex_value(encoded[i + 1]);
+            if (hi < 0 || lo < 0) {
+                throw std::invalid_argument("raw " + label +
+                                            " quality contains non-hexadecimal text");
+            }
+            const char quality = static_cast<char>((hi << 4) | lo);
+            const unsigned char printable = static_cast<unsigned char>(quality);
+            if (printable < 33 || printable > 126) {
+                throw std::invalid_argument("decoded raw " + label +
+                                            " quality is not printable FASTQ quality text");
+            }
+            decoded.push_back(quality);
+        }
+        molecule_name.resize(quality_sep);
+        return true;
+    };
+    try {
+        const bool has_uy = decode_quality_suffix("uy", umi_length, umi_quality, "UMI");
+        const bool has_cy = decode_quality_suffix("cy", cb_length, barcode_quality, "barcode");
+        if (has_uy && !has_cy) {
+            return {MoleculeParseStatus::Malformed, {},
+                    "raw UMI quality suffix requires the preceding barcode quality suffix"};
+        }
+    } catch (const std::invalid_argument& error) {
+        return {MoleculeParseStatus::Malformed, {}, error.what()};
+    }
+
+    const size_t umi_sep = molecule_name.rfind('_');
     if (umi_sep == std::string::npos) {
         return {MoleculeParseStatus::Missing, {}, "GAMP name does not contain raw UMI"};
     }
-    if (umi_sep == 0 || umi_sep + 1 == name.size()) {
+    if (umi_sep == 0 || umi_sep + 1 == molecule_name.size()) {
         return {MoleculeParseStatus::Missing, {}, "GAMP name has an empty raw CB or UMI field"};
     }
-    const size_t cb_sep = name.rfind('_', umi_sep - 1);
+    const size_t cb_sep = molecule_name.rfind('_', umi_sep - 1);
     if (cb_sep == std::string::npos) {
         return {MoleculeParseStatus::Missing, {}, "GAMP name does not contain raw CB"};
     }
 
-    MoleculeId id{name.substr(0, cb_sep), name.substr(cb_sep + 1, umi_sep - cb_sep - 1), name.substr(umi_sep + 1)};
+    MoleculeId id{molecule_name.substr(0, cb_sep),
+                  molecule_name.substr(cb_sep + 1, umi_sep - cb_sep - 1),
+                  molecule_name.substr(umi_sep + 1), barcode_quality, umi_quality};
     if (id.barcode.empty() || id.umi.empty()) {
         return {MoleculeParseStatus::Missing, {}, "GAMP name has an empty raw CB or UMI field"};
     }
@@ -655,13 +992,12 @@ private:
 // --gene-tag, then DropletUtils emptyDropsCellRanger). The RAD remains the primary output;
 // this writer is only constructed when --bam-out is given.
 //
-// The BAM carries panCollapse's graph-derived gene assignment as 10x tags, not real
-// alignment coordinates: UMI-tools dedups by (cell, UMI, gene) and ignores position, so each
-// read is placed nominally at position 1 of a synthetic per-gene contig. This keeps reads
-// that would never surject to the linear genome (non-reference alleles/insertions), which is
-// the whole point of counting off panCollapse instead of a genome-surjected BAM. One record
-// per emitted read, always flagged mapped. Records are written in GAMP order (@HD SO:unsorted);
-// downstream must samtools sort + index before umi_tools count.
+// Feature records carry panCollapse's graph-derived gene assignment as 10x tags, not real
+// alignment coordinates: the counter ignores position, so they are placed nominally at position
+// 1 of a synthetic per-gene contig. A valid group with no count feature instead gets one unmapped
+// barcode-only record. This keeps the barcode-correction population independent of feature
+// construction without manufacturing gene evidence. Records are written in GAMP order
+// (@HD SO:unsorted).
 class BamWriter {
 public:
     // One synthetic contig per gene needs a length; the value is nominal (position is ignored
@@ -669,8 +1005,14 @@ public:
     static constexpr int32_t kNominalContigLength = 1 << 28;
 
     BamWriter(const std::filesystem::path& filename, const std::vector<std::string>& gene_names,
-              const std::string& version, const std::string& command_line)
-        : final_path_(filename), temp_path_(filename.string() + ".tmp") {
+              const std::string& version, const std::string& command_line, bool typed_union,
+              bool exact_ex50_score_window_enabled,
+              const std::string& compact_exact_count_strand,
+              const std::string& path_identity_ledger_sha256,
+              const std::string& strict_allowlisted_parents_sha256,
+              size_t raw_cb_length, size_t raw_umi_length)
+        : final_path_(filename), temp_path_(filename.string() + ".tmp"),
+          compact_exact_(!compact_exact_count_strand.empty()) {
         fp_ = hts_open(temp_path_.c_str(), "wb");
         if (fp_ == nullptr) {
             throw std::runtime_error("cannot open BAM output");
@@ -693,6 +1035,43 @@ public:
                              version.c_str(), "CL", command_line.c_str(), NULL) < 0) {
             throw std::runtime_error("cannot write BAM @PG line");
         }
+        std::string compatibility_comments;
+        if (!strict_allowlisted_parents_sha256.empty()) {
+            compatibility_comments =
+                "@CO\tpanCollapse-compatible-parent-policy:strict-allowlisted-v1\n"
+                "@CO\tpanCollapse-compatible-parent-allowlist-sha256:" +
+                strict_allowlisted_parents_sha256 + "\n";
+        }
+        if (compact_exact_) {
+            const std::string comments =
+                "@CO\tpanCollapse-evidence-schema:panCollapse-exact-count-v1\n"
+                "@CO\tpanCollapse-exact-count-strand:" + compact_exact_count_strand + "\n"
+                "@CO\tpanCollapse-exact-count-candidates:both\n"
+                "@CO\tpanCollapse-exact-count-direction:target-relative-FR\n"
+                "@CO\tpanCollapse-raw-cb-length:" + std::to_string(raw_cb_length) + "\n"
+                "@CO\tpanCollapse-raw-umi-length:" + std::to_string(raw_umi_length) + "\n"
+                "@CO\tpanCollapse-path-identity-ledger-sha256:" +
+                path_identity_ledger_sha256 + "\n"
+                "@CO\tpanCollapse-ex50-score-window:" +
+                (exact_ex50_score_window_enabled
+                     ? std::to_string(kExactEx50ScoreWindow)
+                     : std::string("disabled")) +
+                "\n" + compatibility_comments;
+            if (sam_hdr_add_lines(hdr_, comments.c_str(), 0) < 0) {
+                throw std::runtime_error("cannot write BAM compact exact-count schema markers");
+            }
+        } else if (typed_union) {
+            const std::string comments =
+                "@CO\tpanCollapse-evidence-schema:panCollapse-superset-v1\n"
+                "@CO\tpanCollapse-ex50-score-window:" +
+                (exact_ex50_score_window_enabled
+                     ? std::to_string(kExactEx50ScoreWindow)
+                     : std::string("disabled")) +
+                "\n" + compatibility_comments;
+            if (sam_hdr_add_lines(hdr_, comments.c_str(), 0) < 0) {
+                throw std::runtime_error("cannot write BAM typed-union schema marker");
+            }
+        }
         if (sam_hdr_write(fp_, hdr_) < 0) {
             throw std::runtime_error("cannot write BAM header");
         }
@@ -714,19 +1093,41 @@ public:
         }
     }
 
-    // One nominal record: mapped (flag 0), placed at position 1 of the primary gene's contig,
-    // carrying 10x tags. xt is written only when has_xt is true; tx/gl are written only when
-    // non-empty (score mode passes neither, so its BAM is unchanged: no TX, no GL).
+    // One nominal feature record, or one unmapped barcode-only record when gene_tid is -1. The latter
+    // lets downstream correction compute STARsolo's pre-alignment all-read barcode prior without
+    // turning a featureless read into gene evidence. xt is written only when has_xt is true; optional
+    // identity/state tags are written only when non-empty.
     void write_record(const std::string& qname, int32_t gene_tid, const std::string& seq,
                       const std::string& qual, const std::string& cb, const std::string& ub,
-                      const std::string& gx, const std::string& gn, const std::string& xt,
-                      bool has_xt, const std::string& gd, const std::string& gl = "",
-                      const std::string& tx = "") {
+                      const std::string& cy, const std::string& uy, const std::string& gx,
+                      const std::string& gn,
+                      const std::string& xt, bool has_xt, const std::string& gd,
+                      const std::string& gl = "",
+                      const std::string& gt = "",
+                      const std::string& tx = "", const std::string& xp = "",
+                      const std::string& xu = "", const std::string& xr = "") {
+        if (!xr.empty()) {
+            const auto field_count = [](const std::string& value) {
+                return static_cast<size_t>(1 + std::count(value.begin(), value.end(), ';'));
+            };
+            const size_t n = field_count(xr);
+            if (field_count(tx) != n || field_count(gx) != n || field_count(gd) != n ||
+                field_count(gl) != n || field_count(gt) != n || field_count(xp) != n ||
+                field_count(xu) != n) {
+                throw std::runtime_error("typed-union BAM row vectors must have equal lengths");
+            }
+        }
         const size_t l_seq = seq.size();
         const uint32_t cigar = (static_cast<uint32_t>(l_seq) << BAM_CIGAR_SHIFT) | BAM_CMATCH;
         const bool have_qual = !qual.empty() && qual.size() == l_seq;
-        if (bam_set1(rec_, qname.size(), qname.c_str(), /*flag=*/0, gene_tid, /*pos=*/0,
-                     /*mapq=*/255, l_seq > 0 ? 1 : 0, l_seq > 0 ? &cigar : nullptr,
+        const bool barcode_only = gene_tid < 0;
+        if (bam_set1(rec_, qname.size(), qname.c_str(),
+                     /*flag=*/barcode_only ? BAM_FUNMAP : 0,
+                     /*tid=*/barcode_only ? -1 : gene_tid,
+                     /*pos=*/barcode_only ? -1 : 0,
+                     /*mapq=*/barcode_only ? 0 : 255,
+                     !barcode_only && l_seq > 0 ? 1 : 0,
+                     !barcode_only && l_seq > 0 ? &cigar : nullptr,
                      /*mtid=*/-1, /*mpos=*/-1, /*isize=*/0, l_seq, l_seq > 0 ? seq.data() : nullptr,
                      have_qual ? qual.data() : nullptr, /*l_aux=*/0) < 0) {
             throw std::runtime_error("cannot build BAM record");
@@ -735,32 +1136,63 @@ public:
         append_tag("CR", cb);  // panCollapse carries only raw values, so raw == the CB/UB values
         append_tag("UB", ub);
         append_tag("UR", ub);
+        if (!cy.empty()) {
+            append_tag("CY", cy);
+        }
+        if (!uy.empty()) {
+            append_tag("UY", uy);
+        }
+        if (barcode_only) {
+            append_tag("XB", "barcode_only");
+            if (sam_write1(fp_, hdr_, rec_) < 0) {
+                throw std::runtime_error("cannot write BAM record");
+            }
+            ++record_count_;
+            return;
+        }
         append_tag("GX", gx);
         append_tag("GN", gn);
-        // GD: orientation, ';'-separated. Score mode: one 'F'/'R' per GX gene. Ledger modes: one
-        // 'F'/'R' per TX transcript (parallel to TX/GX/GL), the transcript's GENE's majority
-        // orientation (a gene's transcripts are co-stranded, so every transcript of a gene repeats
-        // the same value). panCollapse emits BOTH orientations (run --strand both) and records the
-        // orientation here so a downstream counter owns the sense/antisense policy.
+        // GD: orientation, ';'-separated. Score mode has one 'F'/'R' per GX gene. Ledger modes have
+        // one per TX evidence entry, parallel to TX/GX and either GL or GT: D063 three-column bodies
+        // use that exact transcript's winning raw exon/body evidence, D066 Ex50pAS uses the exact
+        // body/exon model, and legacy two-column bodies retain the gene-majority value.
         append_tag("GD", gd);
-        // TX: ledger modes only -- the read's emitted compatible transcript ids, ';'-separated,
-        // sorted by transcript id. GX/GD/GL below are then one entry PER TX ENTRY, not per gene (GX
-        // repeats a gene once for each of its emitted isoforms -- that redundancy is what lets a
-        // downstream counter map transcript->gene and derive per-gene ambiguity without a side
-        // file). Absent on the Score-mode BAM, where GX/GD stay per-gene as before.
+        // TX: the read's emitted compatible transcript ids, ';'-separated and deterministically
+        // ordered. Exact Ex50pAS can repeat a canonical TX for distinct evidence slots. Production
+        // score mode also emits TX for XP/XU provenance, while GX/GD deliberately stay gene-level.
+        // Count-mode GX/GD and GL or GT are one entry per TX (GX may therefore repeat a gene).
         if (!tx.empty()) {
             append_tag("TX", tx);
         }
-        // GL: ledger modes only, ';'-separated and parallel to TX/GX/GD -- one 'S' (spliced: the
-        // read is exon-only on this transcript, i.e. explained without touching any of its introns)
-        // or 'U' (unspliced: the transcript's genomic span brackets the read but its exon path does
-        // not explain it -- the read sits in one of its introns) per emitted transcript. A GENE
-        // flagged both S (via one transcript) and U (via another) is velocyto's 'ambiguous' --
+        if (!xr.empty()) {
+            append_tag("XR", xr);
+        }
+        // Production-ledger count modes preserve the exact evidence behind every TX entry. XP and
+        // XU use ';' for TX-parallel groups; ordinary modes comma-sort tied values within a group,
+        // while exact Ex50pAS emits one path/Parent per group. The strict ledger reader reserves
+        // those delimiters in path/Parent identifiers.
+        if (!xp.empty()) {
+            append_tag("XP", xp);
+        }
+        if (!xu.empty()) {
+            append_tag("XU", xu);
+        }
+        // GL: non-Ex50 ledger modes only, ';'-separated and parallel to TX/GX/GD -- one S/U call
+        // per transcript. D063 calls S from that transcript's exon layer and otherwise U from that
+        // transcript's own body layer; legacy two-column bodies retain genomic-span inference.
+        // A GENE flagged both S (via one transcript) and U (via another) is velocyto's 'ambiguous' --
         // panCollapse never computes that; a downstream counter groups TX by GX and derives it, then
         // applies the count-mode rule (Gene = spliced-only, GeneFull = any) and the sense/antisense
         // policy. Absent on the Score-mode BAM, so a GL-less BAM counts by XT/GX as before.
         if (!gl.empty()) {
             append_tag("GL", gl);
+        }
+        // GT: production GeneFull_Ex50pAS only, parallel to TX/GX/GD/XP/XU. E is fully exonic
+        // and splice-junction concordant, P is strictly more than half exonic, and B is
+        // transcript-body evidence. Direction in GD expands these three strand-neutral tiers to
+        // STARsolo's six ordered overlap ranks downstream.
+        if (!gt.empty()) {
+            append_tag("GT", gt);
         }
         if (has_xt) {
             append_tag("XT", xt);
@@ -772,6 +1204,43 @@ public:
     }
 
     uint64_t record_count() const { return record_count_; }
+
+    bool compact_exact() const { return compact_exact_; }
+
+    // PanCollapse has already applied the compatible-Parent filter, score window, and global
+    // library-aware Ex50pAS rank. Retain only its ordered winner Parents and molecule tags.
+    void write_compact_exact_record(const std::string& qname, const std::string& cb,
+                                    const std::string& ub, const std::string& cy,
+                                    const std::string& uy, char gt, char gd,
+                                    const std::string& xu) {
+        if (!compact_exact_ || xu.empty()) {
+            throw std::runtime_error("invalid compact exact-count BAM record");
+        }
+        if (bam_set1(rec_, qname.size(), qname.c_str(),
+                     /*flag=*/BAM_FUNMAP, /*tid=*/-1, /*pos=*/-1, /*mapq=*/0,
+                     /*n_cigar=*/0, /*cigar=*/nullptr, /*mtid=*/-1, /*mpos=*/-1,
+                     /*isize=*/0, /*l_seq=*/0, /*seq=*/nullptr, /*qual=*/nullptr,
+                     /*l_aux=*/0) < 0) {
+            throw std::runtime_error("cannot build compact exact-count BAM record");
+        }
+        append_tag("CB", cb);
+        append_tag("CR", cb);
+        append_tag("UB", ub);
+        append_tag("UR", ub);
+        if (!cy.empty()) {
+            append_tag("CY", cy);
+        }
+        if (!uy.empty()) {
+            append_tag("UY", uy);
+        }
+        append_tag("GT", std::string(1, gt));
+        append_tag("GD", std::string(1, gd));
+        append_tag("XU", xu);
+        if (sam_write1(fp_, hdr_, rec_) < 0) {
+            throw std::runtime_error("cannot write compact exact-count BAM record");
+        }
+        ++record_count_;
+    }
 
     void finalize() {
         if (hts_close(fp_) < 0) {
@@ -797,6 +1266,97 @@ private:
     sam_hdr_t* hdr_ = nullptr;
     bam1_t* rec_ = nullptr;
     uint64_t record_count_ = 0;
+    bool compact_exact_ = false;
+    bool finalized_ = false;
+};
+
+// Audit-only normalized evidence. This deliberately lives outside the BAM: one row describes the
+// read group and each exact-top candidate gets its own row, so parsers never have to unpack a
+// variable-length nested tag. The sidecar is opt-in and receives only already-computed state.
+class DebugEvidenceWriter {
+public:
+    explicit DebugEvidenceWriter(const std::filesystem::path& filename)
+        : final_path_(filename), temp_path_(filename.string() + ".tmp") {
+        if (!final_path_.parent_path().empty()) {
+            std::filesystem::create_directories(final_path_.parent_path());
+        }
+        out_.open(temp_path_);
+        if (!out_) {
+            throw std::runtime_error("cannot open debug evidence output " +
+                                     final_path_.string());
+        }
+        out_ << "schema_version\tinput_group_ordinal\tinput_name\tqname\trow_type"
+                "\tsplice_edge_count\tcandidate_layer\tcanonical_transcript\tgene_id"
+                "\tscore\tsplice_concordant\n";
+    }
+
+    ~DebugEvidenceWriter() {
+        out_.close();
+        if (!finalized_) {
+            std::error_code ec;
+            std::filesystem::remove(temp_path_, ec);
+        }
+    }
+
+    void write_read(uint64_t ordinal, const std::string& input_name,
+                    const std::string& qname, size_t splice_edge_count) {
+        write_prefix(ordinal, input_name, qname);
+        out_ << "read\t" << splice_edge_count << "\t.\t.\t.\t.\t.\n";
+        require_good();
+    }
+
+    void write_candidate(uint64_t ordinal, const std::string& input_name,
+                         const std::string& qname, const char* layer,
+                         const std::string& transcript, const std::string& gene,
+                         int64_t score, bool splice_concordant) {
+        validate_field(layer, "candidate layer");
+        validate_field(transcript, "canonical transcript");
+        validate_field(gene, "gene id");
+        write_prefix(ordinal, input_name, qname);
+        out_ << "candidate\t.\t" << layer << '\t' << transcript << '\t' << gene
+             << '\t' << score << '\t' << (splice_concordant ? "true" : "false")
+             << '\n';
+        require_good();
+    }
+
+    void finalize() {
+        out_.close();
+        if (!out_) {
+            throw std::runtime_error("cannot finalize debug evidence output " +
+                                     final_path_.string());
+        }
+        std::filesystem::rename(temp_path_, final_path_);
+        finalized_ = true;
+    }
+
+private:
+    static void validate_field(const std::string& value, const char* label) {
+        if (value.empty() || value == "." || value.find_first_of("\t\r\n") != std::string::npos) {
+            throw std::runtime_error(std::string("debug evidence ") + label +
+                                     " is empty, reserved '.', or contains a TSV delimiter");
+        }
+    }
+
+    void write_prefix(uint64_t ordinal, const std::string& input_name,
+                      const std::string& qname) {
+        validate_field(input_name, "input name");
+        if (qname != ".") {
+            validate_field(qname, "QNAME");
+        }
+        out_ << "panCollapse-debug-evidence-v1\t" << ordinal << '\t' << input_name
+             << '\t' << qname << '\t';
+    }
+
+    void require_good() const {
+        if (!out_) {
+            throw std::runtime_error("cannot write debug evidence output " +
+                                     final_path_.string());
+        }
+    }
+
+    std::filesystem::path final_path_;
+    std::filesystem::path temp_path_;
+    std::ofstream out_;
     bool finalized_ = false;
 };
 
@@ -806,6 +1366,17 @@ void write_text_file(const std::filesystem::path& filename, const std::string& c
         throw std::runtime_error("cannot write " + filename.string());
     }
     out << contents;
+}
+
+std::string join_sorted(const std::set<std::string>& values, char delimiter) {
+    std::string joined;
+    for (const std::string& value : values) {
+        if (!joined.empty()) {
+            joined += delimiter;
+        }
+        joined += value;
+    }
+    return joined;
 }
 
 // D061 (splice-junction concordance): every consecutive aligned node pair a read group's own
@@ -863,17 +1434,104 @@ struct Group {
 
 int run_convert(int argc, char** argv) {
     const Options options = parse_options(argc, argv);
-    // Gene-calling source. Both score mode (D048) and the ledger count modes (D060) read the exon
-    // (HST) layer the same way -- read_t2g collapses each embedded HST path's haplotype copies
-    // (transcript_id_of) to a canonical transcript id, giving the RAD target dictionary
-    // (transcripts) and the transcript->gene map. The ledger modes additionally read the gene-body
-    // layer (--body-t2g) as a raw path->gene map -- a gene body is not itself a transcript, so it
-    // is not collapsed the same way -- used for the gene-body score and the transcript_spans
-    // precompute below.
-    T2gData t2g = read_t2g(options.t2g);
-    std::map<std::string, std::string> body_path_gene;
-    if (options.count_mode != pathtally::CountMode::Score) {
-        body_path_gene = read_path_gene(options.body_t2g);
+    const bool production_identity = !options.path_identity_ledger.empty();
+    const std::unordered_set<std::string> strict_allowlisted_parents =
+        options.strict_allowlisted_parents.empty()
+            ? std::unordered_set<std::string>{}
+            : read_strict_allowlisted_parents(options.strict_allowlisted_parents);
+    // Production uses one strict, versioned identity ledger. The hst-v1 adapter below is the only
+    // route to historical 2/3-column t2g behavior; CLI parsing makes the two routes exclusive.
+    std::optional<path_identity::PathIdentityLedger> identity_ledger;
+    T2gData t2g;
+    BodyT2gData body_t2g;
+    if (production_identity) {
+        identity_ledger = path_identity::read(options.path_identity_ledger);
+        if (!strict_allowlisted_parents.empty()) {
+            std::unordered_set<std::string> ledger_parents;
+            for (const auto& [path_name, row] : identity_ledger->rows_by_path) {
+                static_cast<void>(path_name);
+                ledger_parents.insert(row.annotation.unique_parent);
+            }
+            for (const std::string& parent : strict_allowlisted_parents) {
+                if (ledger_parents.count(parent) == 0) {
+                    throw std::runtime_error(
+                        "strict allowlisted Parent " + parent +
+                        " is absent from --path-identity-ledger");
+                }
+            }
+        }
+        if (options.count_mode != pathtally::CountMode::Score &&
+            !identity_ledger->has_body_layer) {
+            throw std::runtime_error(
+                "ledger --count-mode gene/genefull/... requires body feature_layer rows");
+        }
+        if (options.count_mode != pathtally::CountMode::Score &&
+            !options.bam_out.empty()) {
+            std::set<std::string> exon_parents;
+            std::set<std::string> body_linked_exon_parents;
+            for (const auto& [path_name, row] : identity_ledger->rows_by_path) {
+                if (row.annotation.feature_layer == "exon") {
+                    exon_parents.insert(row.annotation.unique_parent);
+                } else {
+                    body_linked_exon_parents.insert(
+                        row.annotation.exon_unique_parent);
+                }
+            }
+            std::vector<std::string> missing;
+            std::set_difference(
+                exon_parents.begin(), exon_parents.end(),
+                body_linked_exon_parents.begin(), body_linked_exon_parents.end(),
+                std::back_inserter(missing));
+            if (!missing.empty()) {
+                throw std::runtime_error(
+                    "production typed-union count-mode BAM requires at least one linked body "
+                    "row for every exon Parent; missing " +
+                    std::to_string(missing.size()) + " exon Parent(s), first: " +
+                    missing.front());
+            }
+        }
+        for (const auto& entry : identity_ledger->rows_by_path) {
+            const std::string& raw_path = entry.first;
+            const path_identity::AnnotationIdentity& annotation = entry.second.annotation;
+            if (annotation.feature_layer == "exon") {
+                t2g.path_transcript.emplace(raw_path, annotation.canonical_transcript);
+                t2g.path_unique_parent.emplace(raw_path, annotation.unique_parent);
+                t2g.transcript_gene.emplace(annotation.canonical_transcript, annotation.gene_id);
+            } else {
+                body_t2g.paths.emplace(
+                    raw_path,
+                    BodyPathTarget{annotation.gene_id, annotation.canonical_transcript});
+                body_t2g.path_unique_parent.emplace(raw_path, annotation.unique_parent);
+                body_t2g.transcript_gene.emplace(annotation.canonical_transcript,
+                                                 annotation.gene_id);
+            }
+        }
+        body_t2g.transcript_specific = true;
+        finalize_t2g(t2g);
+    } else {
+        t2g = read_t2g(options.t2g);
+    }
+    if (!production_identity && options.count_mode != pathtally::CountMode::Score) {
+        body_t2g = read_body_t2g(options.body_t2g);
+        if (body_t2g.transcript_specific) {
+            for (const auto& [raw_path, body] : body_t2g.paths) {
+                if (t2g.path_transcript.count(raw_path) != 0) {
+                    throw std::runtime_error("graph path " + raw_path +
+                                             " appears in both exon and body t2gs");
+                }
+            }
+            for (const auto& [transcript, gene] : body_t2g.transcript_gene) {
+                const auto exon = t2g.transcript_gene.find(transcript);
+                if (exon == t2g.transcript_gene.end()) {
+                    throw std::runtime_error("body t2g transcript " + transcript +
+                                             " is absent from the exon t2g");
+                }
+                if (exon->second != gene) {
+                    throw std::runtime_error("body t2g transcript " + transcript + " maps to gene " +
+                                             gene + " but exon t2g maps it to " + exon->second);
+                }
+            }
+        }
     }
 
     xg::XG graph;
@@ -883,6 +1541,25 @@ int run_convert(int argc, char** argv) {
     }
     graph.deserialize(xg_in);
 
+    if (production_identity) {
+        for (const auto& entry : identity_ledger->rows_by_path) {
+            const std::string& path_name = entry.first;
+            if (!graph.has_path(path_name)) {
+                throw std::runtime_error("path identity ledger vg_path_name " + path_name +
+                                         " is absent from the XG");
+            }
+            const auto path_handle = graph.get_path_handle(path_name);
+            const uint64_t graph_length = graph.get_path_length(path_handle);
+            if (graph_length != entry.second.vg_path_length) {
+                throw std::runtime_error("path identity ledger vg_path_length for " + path_name +
+                                         " is " +
+                                         std::to_string(entry.second.vg_path_length) +
+                                         " but the XG path length is " +
+                                         std::to_string(graph_length));
+            }
+        }
+    }
+
     // Score-mode HST lookup (node -> HST names, cached per node). Ledger-mode lookup is below.
     // Only the one for the active mode is built. Both do the node-id-space validation on first
     // touch.
@@ -890,21 +1567,20 @@ int run_convert(int argc, char** argv) {
     std::unordered_map<int64_t, std::vector<std::pair<const std::string*, bool>>> node_hst_cache;
     pathtally::PathLookup lookup;
 
-    // Ledger-mode state (D060: per-transcript intron-touch classification). ledger_path_info covers
-    // every reference path relevant to a ledger count mode -- both exon-layer transcripts and
-    // gene-body paths -- keyed by path handle, so the per-node cache below classifies a node's
-    // crossing paths in O(1). exon_name_transcript / body_name_gene are the SAME classification
-    // keyed by raw path NAME instead: after tally_read_group_into tallies a read's touched
-    // references by name (exactly as score mode does), these collapse that tally down to
-    // exon_score (per transcript) and body_score (per gene) -- see the ledger branch of flush_group.
+    // Ledger-mode state. ledger_path_info covers every exon/body reference path by graph handle.
+    // The by-name maps collapse the score tally after each read: exon paths always collapse to a
+    // transcript target; legacy two-column bodies collapse to a gene, while D063 three-column
+    // bodies collapse to that same canonical transcript target.
     struct PathInfo {
-        std::string name;       // raw graph path name, fed to the score tally's PathLookup
-        uint32_t gene_idx = 0;   // gene index (t2g.gene_ids space)
-        bool is_exon = false;    // exon-transcript path (true) vs gene-body path (false)
+        std::string name;       // raw graph path name, fed to PathLookup
+        uint32_t gene_idx = 0;  // gene index (legacy geometry/orientation and BAM header)
+        bool is_exon = false;   // spliced exon path vs unspliced body path
     };
     std::unordered_map<uint64_t, PathInfo> ledger_path_info;
+    std::unordered_map<std::string, uint64_t> ledger_path_handles_by_name;
     std::unordered_map<std::string, uint32_t> exon_name_transcript;  // exon path name -> transcript target id
-    std::unordered_map<std::string, uint32_t> body_name_gene;         // body path name -> gene idx
+    std::unordered_map<std::string, uint32_t> body_name_gene;        // legacy body path -> gene idx
+    std::unordered_map<std::string, uint32_t> body_name_transcript;  // D063 body path -> target id
     // Per-transcript spans for the spliced/unspliced classification, built once at load. For each
     // gene, each exon transcript contributes (first_on_body_exon_node_id, last_on_body_exon_node_id,
     // transcript_target_id). At read time a transcript "spans" the read iff its [lo,hi] node-id
@@ -912,28 +1588,43 @@ int run_convert(int argc, char** argv) {
     // id order within the gene's contiguous id band, so a node-id interval is the span. See
     // pathtally_ledger.hpp (classify_ledger_group) for how this feeds the classification.
     std::unordered_map<uint32_t, std::vector<pathtally::TranscriptSpan>> transcript_spans;
-    // D061 (splice-junction concordance): global undirected splice-edge (min,max on-body node id) ->
-    // owning transcript target ids, built in the SAME precompute pass as transcript_spans below (it
-    // reuses that loop's per-gene body_nodes). A read's own crossed splice edges (collect_read_node_pairs
-    // below, checked via pathtally::splice_concordant_transcripts) gate the S call in
-    // classify_ledger_group: a transcript explains a read's splice exon-only only if it owns every
-    // edge the read's own alignment skips over -- not merely because its exon path also happens to
-    // cross the same two nodes (the old, too-loose node-membership test). See pathtally_ledger.hpp.
+    // D061 splice-junction concordance. Legacy bodies compare each exon path with its gene's body
+    // nodes; D063 compares each canonical transcript's exon paths only with that transcript's own
+    // body paths. Either way this maps each splice edge to the target ids that own it.
     pathtally::SpliceEdgeMap splice_edges;
+    // A production counting BAM is a typed union: ordinary Gene rows and exact Ex50 rows are
+    // computed together from the same GAMP regardless of which downstream count mode selected it.
+    // Legacy and score BAMs deliberately keep their marker-absent historical interpretation.
+    const bool exact_ex50 = production_identity &&
+                           options.count_mode != pathtally::CountMode::Score &&
+                           !options.bam_out.empty();
+    struct ExactEx50Model {
+        const path_identity::PathIdentityRow* exon = nullptr;
+        const path_identity::PathIdentityRow* body = nullptr;
+        uint64_t exon_path_handle = 0;
+        uint64_t body_path_handle = 0;
+        uint32_t target_id = 0;
+    };
+    std::vector<ExactEx50Model> exact_ex50_models;
+    std::unordered_map<uint64_t, std::vector<size_t>> exact_ex50_models_by_body_path;
     // Per-node ledger cache. ref_paths feeds the score tally (tally_read_group_into, reused verbatim
     // from score mode): every reference path crossing the node, exon or gene-body, un-collapsed, so
     // a read's per-reference score here is exactly what score mode would compute for that
-    // reference. orient is (gene_idx, path_is_reverse) collapsed per gene at this node (a node on
-    // both a gene's exon and body paths keeps whichever is visited last, as before) -- used for the
-    // gene's majority-orientation GD tag, from EVERY touched node (exon or body), so even a
-    // purely-intronic read gets an orientation. body_genes is the deduped gene-index list whose BODY
-    // path crosses this node, used only to grow that gene's touched node-id range: a gene's body may
-    // be embedded as multiple haplotype copies (H1/R1) crossing the same node, and this must count
-    // once per gene, not once per copy.
+    // reference. gene_orient/body_genes preserve the D060 two-column behavior. D063 derives GD
+    // from the same max-scoring raw exon/body tallies used for each transcript's S/U call, below,
+    // so tied aliases combine orientation evidence deterministically instead of depending on graph
+    // path iteration order.
     struct NodeLedger {
         std::vector<std::pair<const std::string*, bool>> ref_paths;
-        std::vector<std::pair<uint32_t, bool>> orient;
+        std::vector<std::pair<uint32_t, bool>> gene_orient;
         std::vector<uint32_t> body_genes;
+        struct ExactStep {
+            uint64_t path_handle = 0;
+            handlegraph::step_handle_t step{};
+            bool path_is_reverse = false;
+        };
+        std::vector<ExactStep> exact_exon_steps;
+        std::vector<ExactStep> exact_body_steps;
     };
     std::unordered_map<int64_t, NodeLedger> node_ledger_cache;
     std::function<const NodeLedger&(int64_t)> node_ledger_of;
@@ -942,7 +1633,7 @@ int run_convert(int argc, char** argv) {
     if (options.count_mode == pathtally::CountMode::Score) {
         graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
             std::string name = graph.get_path_name(path);
-            if (t2g.hst_names.find(name) != t2g.hst_names.end()) {
+            if (resolve_graph_transcript(t2g, name, false) != nullptr) {
                 hst_path_name.emplace(handlegraph::as_integer(path), std::move(name));
             }
         });
@@ -972,9 +1663,11 @@ int run_convert(int argc, char** argv) {
             }
         };
     } else {
-        // Gene -> its exon-transcript and gene-body path handles, collected to build transcript_spans.
+        // Legacy geometry is grouped by gene. D063 geometry is grouped by canonical transcript.
         std::unordered_map<uint32_t, std::vector<handlegraph::path_handle_t>> gene_exon_paths;
         std::unordered_map<uint32_t, std::vector<handlegraph::path_handle_t>> gene_body_paths;
+        std::unordered_map<uint32_t, std::vector<handlegraph::path_handle_t>> transcript_exon_paths;
+        std::unordered_map<uint32_t, std::vector<handlegraph::path_handle_t>> transcript_body_paths;
         // t2g.gene_ids (built by read_t2g from the EXON layer only) may not cover every gene the
         // gene-body layer names -- a gene with body coverage but no annotated exon transcript at all
         // still needs a valid index here (it contributes no transcript output -- classify_ledger_group
@@ -990,65 +1683,195 @@ int run_convert(int argc, char** argv) {
             t2g.gene_names.push_back(gene);
             return static_cast<uint32_t>(idx);
         };
+        auto record_exon_path = [&](const handlegraph::path_handle_t& path,
+                                    const std::string& name, const std::string& transcript) {
+            const std::string& gene = t2g.transcript_gene.at(transcript);
+            const uint32_t gene_idx = gene_index_for(gene);
+            const uint32_t target_id = t2g.target_ids.at(transcript);
+            ledger_path_info.emplace(handlegraph::as_integer(path),
+                                     PathInfo{name, gene_idx, true});
+            exon_name_transcript.emplace(name, target_id);
+            gene_exon_paths[gene_idx].push_back(path);
+            transcript_exon_paths[target_id].push_back(path);
+        };
+
         graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
             const std::string name = graph.get_path_name(path);
-            const std::string transcript = pathtally::transcript_id_of(name);
-            // Exon layer: the SAME transcript dictionary as score mode (t2g.transcript_gene), keyed
-            // by the canonical (haplotype-copy-collapsed) transcript id. transcript_gene is keyed by
-            // transcript_id_of(t2g file's column 1), so this matches whether the t2g file used the
-            // full embedded path name or the bare/suffix-stripped id (bare-t2g regression guard).
-            const auto tg = t2g.transcript_gene.find(transcript);
-            if (tg != t2g.transcript_gene.end()) {
-                const uint32_t gene_idx = gene_index_for(tg->second);
-                const uint32_t target_id = t2g.target_ids.at(transcript);
-                ledger_path_info.emplace(handlegraph::as_integer(path), PathInfo{name, gene_idx, true});
-                exon_name_transcript.emplace(name, target_id);
-                gene_exon_paths[gene_idx].push_back(path);
+            // Exact exon rows win first. Then exact body rows win over the legacy exon bare-name
+            // fallback, so an explicitly named transcript-body path cannot be mistaken for an exon.
+            const std::string* transcript = resolve_graph_transcript(t2g, name, false);
+            if (transcript != nullptr) {
+                record_exon_path(path, name, *transcript);
+                ledger_path_handles_by_name.emplace(name, handlegraph::as_integer(path));
                 return;
             }
-            // Gene-body layer: a raw path->gene map -- a gene body is not a transcript, so it is not
-            // collapsed via transcript_id_of. Accept either the full embedded path name or the
-            // suffix-stripped bare gene id, the same fallback as the exon layer above.
-            auto b = body_path_gene.find(name);
-            if (b == body_path_gene.end() && transcript != name) {
-                b = body_path_gene.find(transcript);
+            const BodyPathTarget* body = resolve_body_graph_path(body_t2g, name);
+            if (body != nullptr) {
+                const uint32_t gene_idx = gene_index_for(body->gene);
+                if (body_t2g.transcript_specific) {
+                    const uint32_t target_id = t2g.target_ids.at(body->transcript);
+                    ledger_path_info.emplace(handlegraph::as_integer(path),
+                                             PathInfo{name, gene_idx, false});
+                    body_name_transcript.emplace(name, target_id);
+                    transcript_body_paths[target_id].push_back(path);
+                } else {
+                    ledger_path_info.emplace(handlegraph::as_integer(path),
+                                             PathInfo{name, gene_idx, false});
+                    body_name_gene.emplace(name, gene_idx);
+                    gene_body_paths[gene_idx].push_back(path);
+                }
+                ledger_path_handles_by_name.emplace(name, handlegraph::as_integer(path));
+                return;
             }
-            if (b != body_path_gene.end()) {
-                const uint32_t gene_idx = gene_index_for(b->second);
-                ledger_path_info.emplace(handlegraph::as_integer(path), PathInfo{name, gene_idx, false});
-                body_name_gene.emplace(name, gene_idx);
-                gene_body_paths[gene_idx].push_back(path);
+            if (!production_identity) {
+                transcript = resolve_graph_transcript(t2g, name, true);
+                if (transcript != nullptr) {
+                    record_exon_path(path, name, *transcript);
+                }
             }
         });
 
-        // Per-transcript spans for the ledger classification. For each gene, gather its gene-body node
-        // set, then record every exon transcript's [first,last on-body exon node id] interval. A
-        // transcript's introns are the body nodes inside that interval its own exon path skips; rather
-        // than materialise those (memory: hundreds of introns x tens of thousands of transcripts), the
-        // read-time classification counts, per gene, transcripts that span the read vs transcripts
-        // whose own exon path explains it, and infers intron touch from the difference (see
-        // pathtally_ledger.hpp). Off-body exon nodes (divergent haplotype isoforms whose exons leave
-        // the deduped body backbone) are excluded from the span so it stays within the gene's id band.
-        // This is the one added load-time pass over the graph. D061 extends the SAME pass: while
-        // walking each exon path's node sequence, also record which consecutive pairs are that
-        // transcript's OWN splice (intron-skip) edges, into the global splice_edges ownership map.
-        for (const auto& [gene_idx, exon_paths] : gene_exon_paths) {
-            std::unordered_set<int64_t> body_nodes;
-            const auto body_it = gene_body_paths.find(gene_idx);
-            if (body_it != gene_body_paths.end()) {
-                for (const handlegraph::path_handle_t& body_path : body_it->second) {
-                    graph.for_each_step_in_path(body_path, [&](const handlegraph::step_handle_t& step) {
-                        body_nodes.insert(graph.get_id(graph.get_handle_of_step(step)));
-                    });
+        if (exact_ex50) {
+            std::map<std::string, std::vector<const path_identity::PathIdentityRow*>>
+                exon_rows_by_parent;
+            std::map<std::string, std::vector<const path_identity::PathIdentityRow*>>
+                body_rows_by_exon_parent;
+            for (const auto& [path_name, row] : identity_ledger->rows_by_path) {
+                if (row.annotation.feature_layer == "exon") {
+                    exon_rows_by_parent[row.annotation.unique_parent].push_back(&row);
+                } else {
+                    body_rows_by_exon_parent[row.annotation.exon_unique_parent].push_back(&row);
                 }
             }
-            // Sorted once per gene so the D061 splice-edge check below ("is there a body node
-            // strictly between these two exon-path neighbours") is a binary search rather than an
-            // O(range) scan -- a gene's body can span thousands of nodes.
+            for (const auto& [exon_parent, exon_rows] : exon_rows_by_parent) {
+                const auto bodies = body_rows_by_exon_parent.find(exon_parent);
+                if (bodies == body_rows_by_exon_parent.end() || bodies->second.empty()) {
+                    throw std::runtime_error(
+                        "genefull_ex50pas requires a linked body path for exon Parent " +
+                        exon_parent);
+                }
+                for (const path_identity::PathIdentityRow* exon : exon_rows) {
+                    const uint64_t exon_handle =
+                        ledger_path_handles_by_name.at(exon->vg_path_name);
+                    const uint32_t target_id =
+                        t2g.target_ids.at(exon->annotation.canonical_transcript);
+                    for (const path_identity::PathIdentityRow* body : bodies->second) {
+                        const uint64_t body_handle =
+                            ledger_path_handles_by_name.at(body->vg_path_name);
+                        const size_t model_id = exact_ex50_models.size();
+                        exact_ex50_models.push_back(
+                            {exon, body, exon_handle, body_handle, target_id});
+                        exact_ex50_models_by_body_path[body_handle].push_back(model_id);
+                    }
+                }
+            }
+        }
+
+        size_t d63_splice_target_edges_evaluated = 0;
+        size_t d63_splice_target_edges_owned = 0;
+        size_t d63_splice_target_edges_fragment_only = 0;
+        size_t d63_splice_target_edges_adjacent_vetoed = 0;
+
+        // Shared geometry worker. Legacy D060 records exon spans against a pooled gene body. D063
+        // omits spans and derives splice ownership by comparing one canonical transcript's exon
+        // paths only with that transcript's own body paths.
+        auto record_geometry = [&](const std::vector<handlegraph::path_handle_t>& exon_paths,
+                                   const std::vector<handlegraph::path_handle_t>& body_paths,
+                                   const std::optional<uint32_t>& legacy_gene_idx) {
+            if (!legacy_gene_idx.has_value()) {
+                using Edge = std::pair<int64_t, int64_t>;
+                std::unordered_set<Edge, pathtally::NodePairHash> exon_edges;
+                std::optional<uint32_t> target_id;
+                for (const handlegraph::path_handle_t& exon_path : exon_paths) {
+                    const uint32_t path_target =
+                        exon_name_transcript.at(graph.get_path_name(exon_path));
+                    if (!target_id.has_value()) {
+                        target_id = path_target;
+                    } else if (*target_id != path_target) {
+                        throw std::runtime_error(
+                            "internal transcript-body geometry mixed canonical targets");
+                    }
+                    std::vector<int64_t> node_ids;
+                    graph.for_each_step_in_path(
+                        exon_path, [&](const handlegraph::step_handle_t& step) {
+                            node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
+                    });
+                    for (size_t i = 0; i + 1 < node_ids.size(); ++i) {
+                        if (node_ids[i] != node_ids[i + 1]) {
+                            exon_edges.insert(
+                                pathtally::undirected_node_pair(node_ids[i], node_ids[i + 1]));
+                        }
+                    }
+                }
+                if (!target_id.has_value()) {
+                    return;
+                }
+
+                // For the fragment-only audit, record whether both endpoints ever coexist on one
+                // raw body path. Index each candidate edge by its lower endpoint so each body path
+                // only probes candidates incident on nodes it actually contains.
+                std::unordered_map<int64_t, std::vector<Edge>> exon_edges_by_first;
+                for (const Edge& edge : exon_edges) {
+                    exon_edges_by_first[edge.first].push_back(edge);
+                }
+
+                pathtally::BodyGeometryIndex body_geometry;
+                std::unordered_set<Edge, pathtally::NodePairHash> same_path_endpoint_edges;
+                for (const handlegraph::path_handle_t& body_path : body_paths) {
+                    std::vector<int64_t> path_node_ids;
+                    graph.for_each_step_in_path(
+                        body_path, [&](const handlegraph::step_handle_t& step) {
+                            path_node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
+                        });
+                    pathtally::add_body_path(body_geometry, path_node_ids);
+                    if (same_path_endpoint_edges.size() == exon_edges.size()) {
+                        continue;  // all candidates already have same-path support; only union/adjacency remains
+                    }
+                    std::unordered_set<int64_t> path_nodes(path_node_ids.begin(),
+                                                           path_node_ids.end());
+                    for (const int64_t node_id : path_nodes) {
+                        const auto candidates = exon_edges_by_first.find(node_id);
+                        if (candidates == exon_edges_by_first.end()) {
+                            continue;
+                        }
+                        for (const Edge& edge : candidates->second) {
+                            if (path_nodes.count(edge.second) != 0) {
+                                same_path_endpoint_edges.insert(edge);
+                            }
+                        }
+                    }
+                }
+
+                for (const Edge& edge : exon_edges) {
+                    ++d63_splice_target_edges_evaluated;
+                    if (body_geometry.adjacent_edges.count(edge) != 0) {
+                        ++d63_splice_target_edges_adjacent_vetoed;
+                        continue;
+                    }
+                    if (!pathtally::body_geometry_owns_splice_edge(
+                            body_geometry, edge.first, edge.second)) {
+                        continue;
+                    }
+                    ++d63_splice_target_edges_owned;
+                    if (same_path_endpoint_edges.count(edge) == 0) {
+                        ++d63_splice_target_edges_fragment_only;
+                    }
+                    splice_edges[edge].insert(*target_id);
+                }
+                return;
+            }
+
+            // Legacy D060 deliberately retains its historical numeric span/edge behavior.
+            std::unordered_set<int64_t> body_nodes;
+            for (const handlegraph::path_handle_t& body_path : body_paths) {
+                graph.for_each_step_in_path(body_path, [&](const handlegraph::step_handle_t& step) {
+                    body_nodes.insert(graph.get_id(graph.get_handle_of_step(step)));
+                });
+            }
             std::vector<int64_t> body_sorted(body_nodes.begin(), body_nodes.end());
             std::sort(body_sorted.begin(), body_sorted.end());
 
-            auto& spans = transcript_spans[gene_idx];
+            std::vector<pathtally::TranscriptSpan>& spans = transcript_spans[*legacy_gene_idx];
             spans.reserve(exon_paths.size());
             for (const handlegraph::path_handle_t& exon_path : exon_paths) {
                 std::vector<int64_t> node_ids;
@@ -1077,11 +1900,38 @@ int run_convert(int argc, char** argv) {
                 for (size_t i = 0; i + 1 < node_ids.size(); ++i) {
                     const int64_t edge_lo = std::min(node_ids[i], node_ids[i + 1]);
                     const int64_t edge_hi = std::max(node_ids[i], node_ids[i + 1]);
-                    const auto between = std::upper_bound(body_sorted.begin(), body_sorted.end(), edge_lo);
-                    if (between != body_sorted.end() && *between < edge_hi) {
-                        splice_edges[{edge_lo, edge_hi}].insert(target_id);
+                    const auto edge = std::make_pair(edge_lo, edge_hi);
+                    const auto between =
+                        std::upper_bound(body_sorted.begin(), body_sorted.end(), edge_lo);
+                    const bool is_splice = between != body_sorted.end() && *between < edge_hi;
+                    if (is_splice) {
+                        splice_edges[edge].insert(target_id);
                     }
                 }
+            }
+        };
+
+        if (body_t2g.transcript_specific) {
+            for (const auto& [target_id, exon_paths] : transcript_exon_paths) {
+                const auto body = transcript_body_paths.find(target_id);
+                const std::vector<handlegraph::path_handle_t> no_body;
+                record_geometry(exon_paths,
+                                body == transcript_body_paths.end() ? no_body : body->second,
+                                std::nullopt);
+            }
+            std::cerr << "panCollapse: transcript-body splice geometry: evaluated_target_edges="
+                      << d63_splice_target_edges_evaluated
+                      << " owned_target_edges=" << d63_splice_target_edges_owned
+                      << " fragment_only_target_edges="
+                      << d63_splice_target_edges_fragment_only
+                      << " adjacent_vetoed_target_edges="
+                      << d63_splice_target_edges_adjacent_vetoed << '\n';
+        } else {
+            for (const auto& [gene_idx, exon_paths] : gene_exon_paths) {
+                const auto body = gene_body_paths.find(gene_idx);
+                const std::vector<handlegraph::path_handle_t> no_body;
+                record_geometry(exon_paths, body == gene_body_paths.end() ? no_body : body->second,
+                                gene_idx);
             }
         }
 
@@ -1094,7 +1944,7 @@ int run_convert(int argc, char** argv) {
                         " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
                 NodeLedger nl;
-                std::map<uint32_t, bool> orient_here;  // gene_idx -> is_reverse, deduped per node
+                std::map<uint32_t, bool> gene_orient_here;
                 std::set<uint32_t> body_genes_here;
                 const handlegraph::handle_t handle = graph.get_handle(node_id, false);
                 graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
@@ -1108,16 +1958,33 @@ int run_convert(int argc, char** argv) {
                     // Every reference path crossing the node (exon transcript or gene body),
                     // un-collapsed, is a scoreable reference for tally_read_group_into.
                     nl.ref_paths.emplace_back(&it->second.name, path_is_reverse);
-                    orient_here[it->second.gene_idx] = path_is_reverse;
-                    if (!it->second.is_exon) {
+                    if (exact_ex50) {
+                        NodeLedger::ExactStep exact_step{
+                            path_handle, step, path_is_reverse};
+                        if (it->second.is_exon) {
+                            nl.exact_exon_steps.push_back(exact_step);
+                        } else {
+                            nl.exact_body_steps.push_back(exact_step);
+                        }
+                    }
+                    gene_orient_here[it->second.gene_idx] = path_is_reverse;
+                    if (!it->second.is_exon && !body_t2g.transcript_specific) {
                         body_genes_here.insert(it->second.gene_idx);
                     }
                     return true;
                 });
-                for (const auto& [gene_idx, is_reverse] : orient_here) {
-                    nl.orient.emplace_back(gene_idx, is_reverse);
+                for (const auto& [gene_idx, is_reverse] : gene_orient_here) {
+                    nl.gene_orient.emplace_back(gene_idx, is_reverse);
                 }
                 nl.body_genes.assign(body_genes_here.begin(), body_genes_here.end());
+                auto by_path_handle = [](const NodeLedger::ExactStep& a,
+                                         const NodeLedger::ExactStep& b) {
+                    return a.path_handle < b.path_handle;
+                };
+                std::sort(nl.exact_exon_steps.begin(), nl.exact_exon_steps.end(),
+                          by_path_handle);
+                std::sort(nl.exact_body_steps.begin(), nl.exact_body_steps.end(),
+                          by_path_handle);
                 cached = node_ledger_cache.emplace(node_id, std::move(nl)).first;
             }
             return cached->second;
@@ -1128,6 +1995,426 @@ int run_convert(int argc, char** argv) {
             }
         };
     }
+
+    // Production GeneFull_Ex50pAS is a BAM-only evidence producer. Unlike the historical S/U
+    // classifier above, this walks the MultipathAlignment DAG without enumerating its complete
+    // traversals. A state exists only while one exact body path can contain that traversal, and
+    // carries exact reference-base and exon-overlap totals plus junction concordance for one linked
+    // exon path. Distinct exact paths/Parents remain distinct evidence slots; there is deliberately
+    // no Parent -> canonical collapse before count_cr applies STAR's six-rank priority.
+    struct ExactEx50Evidence {
+        uint32_t target_id = 0;
+        std::string locus_parent;
+        std::string path;
+        std::string parent;
+        char direction = 'F';
+        pathtally::Ex50Tier tier = pathtally::Ex50Tier::Body;
+        int64_t score = std::numeric_limits<int64_t>::min();
+    };
+    auto exact_evidence_less = [](const ExactEx50Evidence& a, const ExactEx50Evidence& b) {
+        auto tier_rank = [](pathtally::Ex50Tier tier) {
+            switch (tier) {
+            case pathtally::Ex50Tier::FullyExonic:
+                return 0;
+            case pathtally::Ex50Tier::ExonicMajority:
+                return 1;
+            case pathtally::Ex50Tier::Body:
+                return 2;
+            }
+            return 3;
+        };
+        return std::make_tuple(a.target_id, a.locus_parent, a.direction, tier_rank(a.tier),
+                               a.path, a.parent) <
+               std::make_tuple(b.target_id, b.locus_parent, b.direction, tier_rank(b.tier),
+                               b.path, b.parent);
+    };
+    using ExactEx50EvidenceSet =
+        std::set<ExactEx50Evidence, decltype(exact_evidence_less)>;
+    auto retain_best_exact_evidence = [](ExactEx50EvidenceSet& evidence,
+                                         ExactEx50Evidence candidate) {
+        const auto existing = evidence.find(candidate);
+        if (existing == evidence.end()) {
+            evidence.insert(std::move(candidate));
+        } else if (candidate.score > existing->score) {
+            evidence.erase(existing);
+            evidence.insert(std::move(candidate));
+        }
+    };
+
+    using ExactEdge = std::tuple<int64_t, bool, int64_t, bool>;
+    std::map<uint64_t, std::set<ExactEdge>> exact_exon_edges;
+    std::set<uint64_t> exact_exon_edges_built;
+    std::vector<std::optional<bool>> exact_body_exon_same(exact_ex50_models.size());
+
+    auto exact_step_range = [](const std::vector<NodeLedger::ExactStep>& steps,
+                               uint64_t path_handle) {
+        const auto first = std::lower_bound(
+            steps.begin(), steps.end(), path_handle,
+            [](const NodeLedger::ExactStep& step, uint64_t wanted) {
+                return step.path_handle < wanted;
+            });
+        const auto last = std::upper_bound(
+            first, steps.end(), path_handle,
+            [](uint64_t wanted, const NodeLedger::ExactStep& step) {
+                return wanted < step.path_handle;
+            });
+        return std::make_pair(first, last);
+    };
+
+    auto exon_edges_for = [&](const ExactEx50Model& model) -> const std::set<ExactEdge>& {
+        if (exact_exon_edges_built.insert(model.exon_path_handle).second) {
+            auto& edges = exact_exon_edges[model.exon_path_handle];
+            const handlegraph::path_handle_t exon_path =
+                graph.get_path_handle(model.exon->vg_path_name);
+            std::optional<std::pair<int64_t, bool>> previous;
+            graph.for_each_step_in_path(
+                exon_path, [&](const handlegraph::step_handle_t& step) {
+                    const handlegraph::handle_t handle = graph.get_handle_of_step(step);
+                    const std::pair<int64_t, bool> current{
+                        graph.get_id(handle), graph.get_is_reverse(handle)};
+                    if (previous.has_value()) {
+                        edges.emplace(previous->first, previous->second, current.first,
+                                      current.second);
+                        // The reverse traversal uses reversed node order and flipped handles.
+                        edges.emplace(current.first, !current.second, previous->first,
+                                      !previous->second);
+                    }
+                    previous = current;
+                });
+        }
+        return exact_exon_edges.at(model.exon_path_handle);
+    };
+
+    auto body_exon_orientation_same = [&](size_t model_id) {
+        std::optional<bool>& cached = exact_body_exon_same.at(model_id);
+        if (cached.has_value()) {
+            return *cached;
+        }
+        const ExactEx50Model& model = exact_ex50_models.at(model_id);
+        std::optional<bool> relation;
+        const handlegraph::path_handle_t exon_path =
+            graph.get_path_handle(model.exon->vg_path_name);
+        graph.for_each_step_in_path(
+            exon_path, [&](const handlegraph::step_handle_t& exon_step) {
+                const handlegraph::handle_t exon_handle = graph.get_handle_of_step(exon_step);
+                const int64_t node_id = graph.get_id(exon_handle);
+                const bool exon_reverse = graph.get_is_reverse(exon_handle);
+                const NodeLedger& node = node_ledger_of(node_id);
+                const auto body_steps =
+                    exact_step_range(node.exact_body_steps, model.body_path_handle);
+                for (auto it = body_steps.first; it != body_steps.second; ++it) {
+                    const bool same = exon_reverse == it->path_is_reverse;
+                    if (relation.has_value() && *relation != same) {
+                        throw std::runtime_error(
+                            "genefull_ex50pas cannot resolve body/exon orientation for repeated "
+                            "node " +
+                            std::to_string(node_id) + " on paths " +
+                            model.body->vg_path_name + " and " + model.exon->vg_path_name);
+                    }
+                    relation = same;
+                }
+            });
+        if (!relation.has_value()) {
+            throw std::runtime_error(
+                "genefull_ex50pas cannot establish body/exon orientation because linked paths " +
+                model.body->vg_path_name + " and " + model.exon->vg_path_name +
+                " share no graph node");
+        }
+        cached = relation;
+        return *cached;
+    };
+
+    auto exact_ex50_evidence_for =
+        [&](const vg::MultipathAlignment& alignment) -> ExactEx50EvidenceSet {
+        ExactEx50EvidenceSet evidence(exact_evidence_less);
+        if (!exact_ex50 || alignment.subpath_size() == 0) {
+            return evidence;
+        }
+
+        struct State {
+            size_t model_id = std::numeric_limits<size_t>::max();
+            bool body_forward = true;
+            uint64_t lo = 0;
+            uint64_t hi = 0;
+            uint64_t alignment_bases = 0;
+            uint64_t exon_overlap = 0;
+            int64_t last_node = 0;
+            bool last_mapping_reverse = false;
+            bool last_at_node_end = false;
+            bool splice_concordant = true;
+            int64_t score = 0;
+        };
+        constexpr size_t kUnstarted = std::numeric_limits<size_t>::max();
+        auto state_geometry_less = [](const State& a, const State& b) {
+            return std::tie(a.model_id, a.body_forward, a.lo, a.hi, a.alignment_bases,
+                            a.exon_overlap, a.last_node, a.last_mapping_reverse,
+                            a.last_at_node_end, a.splice_concordant) <
+                   std::tie(b.model_id, b.body_forward, b.lo, b.hi, b.alignment_bases,
+                            b.exon_overlap, b.last_node, b.last_mapping_reverse,
+                            b.last_at_node_end, b.splice_concordant);
+        };
+        auto state_geometry_equal = [&](const State& a, const State& b) {
+            return !state_geometry_less(a, b) && !state_geometry_less(b, a);
+        };
+        auto deduplicate_states = [&](std::vector<State>& states) {
+            std::sort(states.begin(), states.end(), [&](const State& a, const State& b) {
+                if (state_geometry_less(a, b)) {
+                    return true;
+                }
+                if (state_geometry_less(b, a)) {
+                    return false;
+                }
+                return a.score > b.score;
+            });
+            states.erase(
+                std::unique(states.begin(), states.end(), state_geometry_equal), states.end());
+        };
+
+        auto mapping_reference_bases = [](const vg::Mapping& mapping) {
+            uint64_t bases = 0;
+            for (const vg::Edit& edit : mapping.edit()) {
+                bases += static_cast<uint64_t>(edit.from_length());
+            }
+            return bases;
+        };
+
+        auto project_mapping = [&](const State& prior, size_t model_id,
+                                   const NodeLedger::ExactStep& body_step,
+                                   const vg::Mapping& mapping, uint64_t reference_bases,
+                                   bool initialize) -> std::optional<State> {
+            const ExactEx50Model& model = exact_ex50_models.at(model_id);
+            const int64_t node_id = mapping.position().node_id();
+            const uint64_t node_length =
+                graph.get_length(graph.get_handle(node_id, false));
+            const uint64_t offset = static_cast<uint64_t>(mapping.position().offset());
+            if (offset > node_length || reference_bases > node_length - offset) {
+                throw std::runtime_error(
+                    "GAMP mapping offset/reference length exceeds graph node " +
+                    std::to_string(node_id));
+            }
+
+            const bool mapping_reverse = mapping.position().is_reverse();
+            const bool body_forward = mapping_reverse == body_step.path_is_reverse;
+            const uint64_t step_start = graph.get_position_of_step(body_step.step);
+            const uint64_t lo = body_forward
+                ? step_start + offset
+                : step_start + node_length - offset - reference_bases;
+            const uint64_t hi = lo + reference_bases;
+
+            const NodeLedger& node = node_ledger_of(node_id);
+            const auto body_occurrences =
+                exact_step_range(node.exact_body_steps, model.body_path_handle);
+            const auto exon_occurrences =
+                exact_step_range(node.exact_exon_steps, model.exon_path_handle);
+            const bool exonic = exon_occurrences.first != exon_occurrences.second;
+            if (exonic && std::distance(body_occurrences.first, body_occurrences.second) > 1) {
+                throw std::runtime_error(
+                    "genefull_ex50pas cannot assign an exonic base to a repeated body-path node "
+                    "occurrence: node " +
+                    std::to_string(node_id) + ", body path " + model.body->vg_path_name +
+                    ", exon path " + model.exon->vg_path_name);
+            }
+
+            State next = prior;
+            if (initialize) {
+                next = {};
+                next.model_id = model_id;
+                next.body_forward = body_forward;
+                next.score = prior.score;
+            } else {
+                if (prior.model_id != model_id || prior.body_forward != body_forward) {
+                    return std::nullopt;
+                }
+                uint64_t gap = 0;
+                if (body_forward) {
+                    if (lo < prior.hi) {
+                        return std::nullopt;
+                    }
+                    gap = lo - prior.hi;
+                } else {
+                    if (hi > prior.lo) {
+                        return std::nullopt;
+                    }
+                    gap = prior.lo - hi;
+                }
+                if (gap > 0) {
+                    const ExactEdge edge{prior.last_node, prior.last_mapping_reverse, node_id,
+                                         mapping_reverse};
+                    const bool boundary_exact =
+                        prior.last_at_node_end && offset == 0;
+                    next.splice_concordant =
+                        next.splice_concordant && boundary_exact &&
+                        exon_edges_for(model).count(edge) != 0;
+                }
+            }
+
+            next.lo = lo;
+            next.hi = hi;
+            next.alignment_bases += reference_bases;
+            if (exonic) {
+                next.exon_overlap += reference_bases;
+            }
+            next.last_node = node_id;
+            next.last_mapping_reverse = mapping_reverse;
+            next.last_at_node_end = offset + reference_bases == node_length;
+            return next;
+        };
+
+        const size_t subpath_count =
+            static_cast<size_t>(alignment.subpath_size());
+        std::vector<std::vector<State>> incoming(subpath_count);
+        std::vector<char> is_source(subpath_count, 0);
+        if (alignment.start_size() > 0) {
+            for (const uint32_t start : alignment.start()) {
+                if (start >= subpath_count) {
+                    throw std::runtime_error(
+                        "GAMP MultipathAlignment start index is out of range");
+                }
+                is_source[start] = 1;
+            }
+        } else {
+            std::vector<char> has_incoming(subpath_count, 0);
+            for (size_t i = 0; i < subpath_count; ++i) {
+                const vg::Subpath& subpath =
+                    alignment.subpath(static_cast<int>(i));
+                for (const uint32_t next : subpath.next()) {
+                    if (next >= subpath_count) {
+                        throw std::runtime_error(
+                            "GAMP MultipathAlignment next index is out of range");
+                    }
+                    has_incoming[next] = 1;
+                }
+                for (const vg::Connection& connection : subpath.connection()) {
+                    if (connection.next() >= subpath_count) {
+                        throw std::runtime_error(
+                            "GAMP MultipathAlignment connection index is out of range");
+                    }
+                    has_incoming[connection.next()] = 1;
+                }
+            }
+            for (size_t i = 0; i < subpath_count; ++i) {
+                is_source[i] = !has_incoming[i];
+            }
+        }
+        for (size_t i = 0; i < subpath_count; ++i) {
+            if (is_source[i]) {
+                incoming[i].push_back(State{});
+                incoming[i].back().model_id = kUnstarted;
+            }
+        }
+
+        for (size_t subpath_index = 0; subpath_index < subpath_count;
+             ++subpath_index) {
+            std::vector<State> states = std::move(incoming[subpath_index]);
+            deduplicate_states(states);
+            const vg::Subpath& subpath =
+                alignment.subpath(static_cast<int>(subpath_index));
+            for (State& state : states) {
+                state.score += subpath.score();
+            }
+            for (const vg::Mapping& mapping : subpath.path().mapping()) {
+                const uint64_t reference_bases =
+                    mapping_reference_bases(mapping);
+                if (reference_bases == 0) {
+                    continue;
+                }
+                const NodeLedger& node =
+                    node_ledger_of(mapping.position().node_id());
+                std::vector<State> advanced;
+                for (const State& state : states) {
+                    if (state.model_id == kUnstarted) {
+                        for (const NodeLedger::ExactStep& body_step :
+                             node.exact_body_steps) {
+                            const auto models = exact_ex50_models_by_body_path.find(
+                                body_step.path_handle);
+                            if (models == exact_ex50_models_by_body_path.end()) {
+                                continue;
+                            }
+                            for (const size_t model_id : models->second) {
+                                const std::optional<State> projected =
+                                    project_mapping(state, model_id, body_step, mapping,
+                                                    reference_bases, true);
+                                if (projected.has_value()) {
+                                    advanced.push_back(*projected);
+                                }
+                            }
+                        }
+                    } else {
+                        const ExactEx50Model& model =
+                            exact_ex50_models.at(state.model_id);
+                        const auto body_steps = exact_step_range(
+                            node.exact_body_steps, model.body_path_handle);
+                        for (auto step = body_steps.first;
+                             step != body_steps.second; ++step) {
+                            const std::optional<State> projected =
+                                project_mapping(state, state.model_id, *step, mapping,
+                                                reference_bases, false);
+                            if (projected.has_value()) {
+                                advanced.push_back(*projected);
+                            }
+                        }
+                    }
+                }
+                states = std::move(advanced);
+                deduplicate_states(states);
+                if (states.empty()) {
+                    break;
+                }
+            }
+
+            bool has_outgoing = false;
+            auto validate_outgoing = [&](uint32_t next) {
+                if (next >= subpath_count || next <= subpath_index) {
+                    throw std::runtime_error(
+                        "GAMP MultipathAlignment subpaths are not in topological order");
+                }
+            };
+            for (const uint32_t next : subpath.next()) {
+                validate_outgoing(next);
+                incoming[next].insert(incoming[next].end(), states.begin(), states.end());
+                has_outgoing = true;
+            }
+            for (const vg::Connection& connection : subpath.connection()) {
+                const uint32_t next = connection.next();
+                validate_outgoing(next);
+                for (const State& state : states) {
+                    State connected = state;
+                    connected.score += connection.score();
+                    incoming[next].push_back(std::move(connected));
+                }
+                has_outgoing = true;
+            }
+            if (has_outgoing) {
+                continue;
+            }
+
+            for (const State& state : states) {
+                if (state.model_id == kUnstarted ||
+                    state.alignment_bases == 0) {
+                    continue;
+                }
+                const ExactEx50Model& model =
+                    exact_ex50_models.at(state.model_id);
+                const pathtally::Ex50Tier tier = pathtally::classify_ex50_tier(
+                    state.exon_overlap, state.alignment_bases,
+                    state.splice_concordant);
+                const bool direction_forward =
+                    state.body_forward ==
+                    body_exon_orientation_same(state.model_id);
+                const bool body_tier = tier == pathtally::Ex50Tier::Body;
+                retain_best_exact_evidence(
+                    evidence,
+                    {model.target_id,
+                     model.exon->annotation.unique_parent,
+                     body_tier ? model.body->vg_path_name
+                               : model.exon->vg_path_name,
+                     body_tier ? model.body->annotation.unique_parent
+                               : model.exon->annotation.unique_parent,
+                     direction_forward ? 'F' : 'R', tier, state.score});
+            }
+        }
+        return evidence;
+    };
 
     std::shared_ptr<pathtally::QualAdjScorer> qual_adj_scorer;
     pathtally::NodeScorer node_scorer = pathtally::flat_scorer();
@@ -1167,8 +2454,24 @@ int run_convert(int argc, char** argv) {
             }
             command_line += argv[i];
         }
-        bam_writer = std::make_unique<BamWriter>(options.bam_out, t2g.gene_names, PANCOLLAPSE_VERSION,
-                                                 command_line);
+        std::string compact_exact_count_strand;
+        if (options.compact_exact_count_strand == StrandFilter::Forward) {
+            compact_exact_count_strand = "forward";
+        } else if (options.compact_exact_count_strand == StrandFilter::Reverse) {
+            compact_exact_count_strand = "reverse";
+        }
+        bam_writer = std::make_unique<BamWriter>(
+            options.bam_out, t2g.gene_names, PANCOLLAPSE_VERSION, command_line,
+            production_identity && options.count_mode != pathtally::CountMode::Score,
+            options.exact_ex50_score_window_enabled, compact_exact_count_strand,
+            options.path_identity_ledger_sha256,
+            options.strict_allowlisted_parents_sha256,
+            options.raw_cb_length, options.raw_umi_length);
+    }
+    std::unique_ptr<DebugEvidenceWriter> debug_writer;
+    if (!options.debug_evidence_out.empty()) {
+        debug_writer = std::make_unique<DebugEvidenceWriter>(
+            options.debug_evidence_out);
     }
 
     std::ifstream gamp_file;
@@ -1192,6 +2495,8 @@ int run_convert(int argc, char** argv) {
     size_t raw_molecule_malformed_groups = 0;
     size_t raw_molecule_unsupported_groups = 0;
     size_t raw_molecule_skipped_groups = 0;
+    size_t barcode_only_bam_records = 0;
+    size_t strict_allowlisted_evidence_dropped = 0;
     // Histogram of emitted-group target-set sizes: target_count -> group_count.
     std::map<size_t, size_t> emitted_target_histogram;
     // completed_names: one entry per read-group name that has been fully processed and
@@ -1237,6 +2542,9 @@ int run_convert(int argc, char** argv) {
             return;
         }
         if (current_group.skip_for_molecule_identity) {
+            if (debug_writer) {
+                debug_writer->write_read(input_read_groups, current_group.name, ".", 0);
+            }
             ++raw_molecule_skipped_groups;
             switch (current_group.molecule_status) {
             case MoleculeParseStatus::Missing:
@@ -1258,6 +2566,26 @@ int run_convert(int argc, char** argv) {
             return;
         }
 
+        bool bam_record_written = false;
+        auto write_barcode_only = [&]() {
+            if (!bam_writer || bam_record_written) {
+                return;
+            }
+            const std::string empty;
+            const vg::MultipathAlignment* read =
+                current_group.records.empty() ? nullptr : &current_group.records.front();
+            bam_writer->write_record(
+                current_group.molecule.original_name, /*gene_tid=*/-1,
+                read == nullptr || bam_writer->compact_exact() ? empty : read->sequence(),
+                read == nullptr || bam_writer->compact_exact() ? empty : read->quality(),
+                current_group.molecule.barcode,
+                current_group.molecule.umi, current_group.molecule.barcode_quality,
+                current_group.molecule.umi_quality,
+                /*gx=*/empty, /*gn=*/empty, /*xt=*/empty, /*has_xt=*/false, /*gd=*/empty);
+            bam_record_written = true;
+            ++barcode_only_bam_records;
+        };
+
         std::vector<pathtally::RadTarget> targets;
         // Distinct genes among a ledger read's emitted transcripts (score mode leaves this empty --
         // it has no Unique multi-GENE drop; a score-mode multi-target read is ordinary D048
@@ -1272,7 +2600,31 @@ int run_convert(int argc, char** argv) {
                 record_ptrs.push_back(&record);
             }
             pathtally::tally_read_group_into(tally_workspace, record_ptrs, lookup, node_scorer);
-            targets = pathtally::select_targets(tally_workspace);
+            if (production_identity) {
+                targets = pathtally::select_identity_targets(
+                    tally_workspace,
+                    [&](const std::string& raw_path) -> pathtally::ResolvedPathIdentity {
+                        const auto transcript = t2g.path_transcript.find(raw_path);
+                        const auto parent = t2g.path_unique_parent.find(raw_path);
+                        if (transcript == t2g.path_transcript.end() ||
+                            parent == t2g.path_unique_parent.end()) {
+                            throw std::runtime_error("scored graph path " + raw_path +
+                                                     " is absent from the path identity ledger");
+                        }
+                        return {parent->second, transcript->second};
+                    });
+            } else {
+                targets = pathtally::select_targets(
+                    tally_workspace, [&](const std::string& raw_path) -> const std::string& {
+                        const std::string* transcript =
+                            resolve_graph_transcript(t2g, raw_path, false);
+                        if (transcript == nullptr) {
+                            throw std::runtime_error("scored graph path " + raw_path +
+                                                     " is absent from the t2g");
+                        }
+                        return *transcript;
+                    });
+            }
         } else {
             // Ledger modes (D060): reuse the score-mode tally verbatim -- tally_read_group_into over
             // a PathLookup covering BOTH exon-layer transcripts and gene-body paths (ledger_lookup) --
@@ -1284,12 +2636,11 @@ int run_convert(int argc, char** argv) {
             }
             pathtally::tally_read_group_into(tally_workspace, record_ptrs, ledger_lookup, node_scorer);
 
-            // A second, plain node visitation (score-independent) for what the score tally cannot
-            // give us: per-gene orientation (aligned bases, majority vote -- same rule as score
-            // mode's RadTarget.forward) and the read's touched gene-body node-id range per gene, used
-            // to test each transcript's precomputed span below.
-            std::map<uint32_t, std::pair<int64_t, int64_t>> gene_orient;  // gene idx -> (fwd, rev) bases
-            std::map<uint32_t, std::pair<int64_t, int64_t>> body_range;    // gene idx -> (lo, hi) touched
+            // Score-independent aligned-base orientation and touched body ranges are retained for
+            // the legacy two-column mode. D063 orientation is derived later from the winning raw
+            // paths for the exact transcript/layer that supplied its S/U call.
+            std::map<uint32_t, std::pair<int64_t, int64_t>> gene_orient;
+            std::map<uint32_t, std::pair<int64_t, int64_t>> body_range;
             for (const vg::MultipathAlignment& record : current_group.records) {
                 for (int s = 0; s < record.subpath_size(); ++s) {
                     const vg::Path& path = record.subpath(s).path();
@@ -1302,7 +2653,7 @@ int run_convert(int argc, char** argv) {
                         const int64_t node_id = mapping.position().node_id();
                         const bool read_is_reverse = mapping.position().is_reverse();
                         const NodeLedger& nl = node_ledger_of(node_id);
-                        for (const auto& [gene_idx, path_is_reverse] : nl.orient) {
+                        for (const auto& [gene_idx, path_is_reverse] : nl.gene_orient) {
                             auto& orient = gene_orient[gene_idx];
                             if (read_is_reverse == path_is_reverse) {
                                 orient.first += aligned;
@@ -1321,69 +2672,324 @@ int run_convert(int argc, char** argv) {
                 }
             }
 
-            // Collapse the by-name score tally to exon_score (per transcript target id) and
-            // body_score (per gene idx), each the MAX score among that transcript's/gene's raw
-            // haplotype-copy paths -- not a sum, so a node shared by two haplotype copies of the
-            // same transcript or gene body is not double-counted (the best-explaining copy's own
-            // score already reflects every node on ITS path once).
+            // Collapse raw path tallies with MAX, never sum. exon_score is always per canonical
+            // transcript. body_score is per gene only for the legacy two-column body t2g and per
+            // canonical transcript for D063's three-column body t2g.
             std::map<uint32_t, int64_t> exon_score;
             std::map<uint32_t, int64_t> body_score;
-            for (const auto& [name, tally] : tally_workspace) {
-                const auto ex = exon_name_transcript.find(name);
-                if (ex != exon_name_transcript.end()) {
-                    auto [it, inserted] = exon_score.try_emplace(ex->second, std::numeric_limits<int64_t>::min());
-                    it->second = std::max(it->second, tally.score);
-                    continue;
+            struct TargetOrientationEvidence {
+                int64_t best_score = std::numeric_limits<int64_t>::min();
+                int64_t forward_bases = 0;
+                int64_t reverse_bases = 0;
+            };
+            std::map<uint32_t, TargetOrientationEvidence> exon_target_orient;
+            std::map<uint32_t, TargetOrientationEvidence> body_target_orient;
+            std::map<uint32_t, pathtally::CollapsedIdentityTally> exon_identity_evidence;
+            std::map<uint32_t, pathtally::CollapsedIdentityTally> body_identity_evidence;
+            auto retain_max_orientation = [](TargetOrientationEvidence& evidence,
+                                             const pathtally::HstTally& tally) {
+                if (tally.score > evidence.best_score) {
+                    evidence.best_score = tally.score;
+                    evidence.forward_bases = tally.forward_bases;
+                    evidence.reverse_bases = tally.reverse_bases;
+                } else if (tally.score == evidence.best_score) {
+                    evidence.forward_bases += tally.forward_bases;
+                    evidence.reverse_bases += tally.reverse_bases;
                 }
-                const auto bd = body_name_gene.find(name);
-                if (bd != body_name_gene.end()) {
-                    auto [it, inserted] = body_score.try_emplace(bd->second, std::numeric_limits<int64_t>::min());
-                    it->second = std::max(it->second, tally.score);
+            };
+            if (production_identity) {
+                exon_identity_evidence = pathtally::collapse_identity_tallies(
+                    tally_workspace,
+                    [&](const std::string& name)
+                        -> std::optional<pathtally::NumericPathIdentity> {
+                        const auto ex = exon_name_transcript.find(name);
+                        if (ex == exon_name_transcript.end()) {
+                            return std::nullopt;
+                        }
+                        return pathtally::NumericPathIdentity{
+                            t2g.path_unique_parent.at(name), ex->second};
+                    });
+                body_identity_evidence = pathtally::collapse_identity_tallies(
+                    tally_workspace,
+                    [&](const std::string& name)
+                        -> std::optional<pathtally::NumericPathIdentity> {
+                        const auto body = body_name_transcript.find(name);
+                        if (body == body_name_transcript.end()) {
+                            return std::nullopt;
+                        }
+                        return pathtally::NumericPathIdentity{
+                            body_t2g.path_unique_parent.at(name), body->second};
+                    });
+                for (const auto& [target_id, evidence] : exon_identity_evidence) {
+                    exon_score.emplace(target_id, evidence.score);
+                    exon_target_orient.emplace(
+                        target_id,
+                        TargetOrientationEvidence{evidence.score, evidence.forward_bases,
+                                                  evidence.reverse_bases});
+                }
+                for (const auto& [target_id, evidence] : body_identity_evidence) {
+                    body_score.emplace(target_id, evidence.score);
+                    body_target_orient.emplace(
+                        target_id,
+                        TargetOrientationEvidence{evidence.score, evidence.forward_bases,
+                                                  evidence.reverse_bases});
+                }
+            } else {
+                for (const auto& [name, tally] : tally_workspace) {
+                    const auto ex = exon_name_transcript.find(name);
+                    if (ex != exon_name_transcript.end()) {
+                        auto [it, inserted] = exon_score.try_emplace(
+                            ex->second, std::numeric_limits<int64_t>::min());
+                        it->second = std::max(it->second, tally.score);
+                        retain_max_orientation(exon_target_orient[ex->second], tally);
+                        continue;
+                    }
+                    const auto body_transcript = body_name_transcript.find(name);
+                    if (body_transcript != body_name_transcript.end()) {
+                        auto [it, inserted] = body_score.try_emplace(
+                            body_transcript->second, std::numeric_limits<int64_t>::min());
+                        it->second = std::max(it->second, tally.score);
+                        retain_max_orientation(body_target_orient[body_transcript->second], tally);
+                        continue;
+                    }
+                    const auto body_gene = body_name_gene.find(name);
+                    if (body_gene != body_name_gene.end()) {
+                        auto [it, inserted] = body_score.try_emplace(
+                            body_gene->second, std::numeric_limits<int64_t>::min());
+                        it->second = std::max(it->second, tally.score);
+                    }
                 }
             }
 
             // D061: the read group's own splice-concordant transcript set -- nullopt (unconstrained)
             // unless its alignments actually cross a splice edge (collect_read_node_pairs), in which
             // case only a transcript owning EVERY crossed edge stays eligible for S below.
+            const std::vector<std::pair<int64_t, int64_t>> read_node_pairs =
+                collect_read_node_pairs(current_group.records);
             const std::optional<std::set<uint32_t>> splice_concordant =
-                pathtally::splice_concordant_transcripts(collect_read_node_pairs(current_group.records),
-                                                          splice_edges);
+                pathtally::splice_concordant_transcripts(read_node_pairs, splice_edges);
 
-            // classify_ledger_group (pathtally_ledger.hpp): spliced = a transcript whose own exon-path
-            // score ties the read's top (within kIntronFlankBases) AND is splice-concordant (D061);
-            // unspliced = a transcript that spans the read's touched gene-body range, for a gene whose
-            // body ties top, and is not already spliced. Emitted once per transcript, deduped.
-            const std::vector<pathtally::LedgerCall> calls =
-                pathtally::classify_ledger_group(exon_score, body_score, body_range, transcript_spans,
-                                                 kIntronFlankBases, splice_concordant);
+            if (debug_writer) {
+                std::set<std::pair<int64_t, int64_t>> crossed_splice_edges;
+                for (const auto& [a, b] : read_node_pairs) {
+                    const auto edge = pathtally::undirected_node_pair(a, b);
+                    if (splice_edges.count(edge) != 0) {
+                        crossed_splice_edges.insert(edge);
+                    }
+                }
+                debug_writer->write_read(
+                    input_read_groups, current_group.name,
+                    current_group.molecule.original_name, crossed_splice_edges.size());
 
-            // Per emitted transcript: its gene and the gene's majority orientation (a gene's
-            // transcripts are co-stranded, so every transcript of a gene carries the SAME GD).
-            // ledger_genes collects the distinct genes among the emitted transcripts, for the
-            // Unique multi-GENE (not multi-transcript) RAD drop below.
+                int64_t exact_top = std::numeric_limits<int64_t>::min();
+                for (const auto& [transcript, score] : exon_score) {
+                    exact_top = std::max(exact_top, score);
+                }
+                for (const auto& [transcript, score] : body_score) {
+                    exact_top = std::max(exact_top, score);
+                }
+                auto is_concordant = [&](uint32_t transcript) {
+                    return !splice_concordant.has_value() ||
+                           splice_concordant->count(transcript) != 0;
+                };
+                auto write_exact_top = [&](const char* layer,
+                                           const std::map<uint32_t, int64_t>& scores) {
+                    for (const auto& [transcript_id, score] : scores) {
+                        if (score != exact_top) {
+                            continue;
+                        }
+                        const std::string& transcript =
+                            t2g.target_names.at(transcript_id);
+                        debug_writer->write_candidate(
+                            input_read_groups, current_group.name,
+                            current_group.molecule.original_name, layer, transcript,
+                            t2g.transcript_gene.at(transcript), score,
+                            is_concordant(transcript_id));
+                    }
+                };
+                write_exact_top("exon", exon_score);
+                write_exact_top("body", body_score);
+            }
+
+            ExactEx50EvidenceSet exact_group_evidence(exact_evidence_less);
+            if (exact_ex50) {
+                for (const vg::MultipathAlignment& record : current_group.records) {
+                    ExactEx50EvidenceSet record_evidence =
+                        exact_ex50_evidence_for(record);
+                    for (const ExactEx50Evidence& evidence : record_evidence) {
+                        retain_best_exact_evidence(exact_group_evidence, evidence);
+                    }
+                }
+                // Reference filtering changes the compatible transcript surface, so it must run
+                // before the top-score-minus-5 window and before the global E/P/B rank. Filtering
+                // a projected winner downstream cannot recover an allowed lower candidate.
+                if (!strict_allowlisted_parents.empty()) {
+                    const size_t before = exact_group_evidence.size();
+                    std::erase_if(
+                        exact_group_evidence,
+                        [&](const ExactEx50Evidence& evidence) {
+                            return strict_allowlisted_parents.count(evidence.parent) == 0;
+                        });
+                    strict_allowlisted_evidence_dropped +=
+                        before - exact_group_evidence.size();
+                }
+                if (options.exact_ex50_score_window_enabled &&
+                    !exact_group_evidence.empty()) {
+                    int64_t top_score = std::numeric_limits<int64_t>::min();
+                    for (const ExactEx50Evidence& evidence : exact_group_evidence) {
+                        top_score = std::max(top_score, evidence.score);
+                    }
+                    std::erase_if(exact_group_evidence, [&](const ExactEx50Evidence& evidence) {
+                        return evidence.score < top_score - kExactEx50ScoreWindow;
+                    });
+                }
+            }
+
+            const std::vector<pathtally::LedgerCall> calls = body_t2g.transcript_specific
+                ? pathtally::classify_transcript_body_ledger_group(
+                      exon_score, body_score, kIntronFlankBases, splice_concordant)
+                : pathtally::classify_ledger_group(exon_score, body_score, body_range,
+                                                   transcript_spans, kIntronFlankBases,
+                                                   splice_concordant);
+
+            // D063 keeps orientation per transcript through TX/GD. It uses only the max-scoring
+            // raw paths in the layer that supplied the call (exon for S, body for U); tied aliases
+            // combine aligned-base evidence with a deterministic forward fallback. Legacy
+            // two-column bodies retain D060's per-gene orientation for byte-compatible behavior.
             std::map<uint32_t, char> transcript_gd;  // transcript target id -> 'F'/'R'
             for (const pathtally::LedgerCall& call : calls) {
                 const std::string& transcript = t2g.target_names[call.transcript_target_id];
                 const std::string& gene = t2g.transcript_gene.at(transcript);
                 ledger_genes.insert(gene);
-                const uint32_t gene_idx = static_cast<uint32_t>(t2g.gene_ids.at(gene));
-                const auto oit = gene_orient.find(gene_idx);
-                const bool forward = oit == gene_orient.end() || oit->second.first >= oit->second.second;
+                bool forward = true;
+                if (body_t2g.transcript_specific) {
+                    const auto& orient_map =
+                        call.spliced ? exon_target_orient : body_target_orient;
+                    const auto oit = orient_map.find(call.transcript_target_id);
+                    forward = oit == orient_map.end() ||
+                              oit->second.forward_bases >= oit->second.reverse_bases;
+                } else {
+                    const uint32_t gene_idx = static_cast<uint32_t>(t2g.gene_ids.at(gene));
+                    const auto oit = gene_orient.find(gene_idx);
+                    forward = oit == gene_orient.end() || oit->second.first >= oit->second.second;
+                }
                 transcript_gd[call.transcript_target_id] = forward ? 'F' : 'R';
             }
 
-            // Emit the per-transcript ledger into the BAM: TX = emitted transcript ids, GX/GD/GL one
-            // entry per TX entry (parallel) -- gene, orientation, spliced('S')/unspliced('U'). GX
-            // repeats a gene once per one of its emitted isoforms; that redundancy is what lets
-            // count_cr map transcript->gene and derive ambiguity without a side file. The count mode,
-            // ambiguity resolution, and strand policy all live in count_cr -- panCollapse classifies
-            // per transcript, the counter groups by gene and collapses. A single-gene read is always
-            // written (XT set). A multi-gene read follows --bam-multigene, mirroring the RAD Unique
-            // drop below: omit leaves it out of the BAM, first assigns it to the primary gene (XT
-            // set), all carries it with the full candidate set and no XT so count_cr's
-            // MultiGeneUMI_CR rescue can resolve the dominant gene.
-            if (bam_writer && !calls.empty()) {
-                std::string tx, gx, gd, gl, primary_gene;
+            // The production normal BAM is a versioned typed union. G rows retain ordinary S/U
+            // evidence and carry '.' in exact fields; E rows retain exact Parent evidence and carry
+            // '.' in GL. Repeated TX values are evidence rows, not a transcript->gene ambiguity:
+            // TX->GX remains single-valued and only identical complete rows deduplicate.
+            if (bam_writer && options.compact_exact_count_strand.has_value() &&
+                !exact_group_evidence.empty()) {
+                const char wanted =
+                    *options.compact_exact_count_strand == StrandFilter::Forward ? 'F' : 'R';
+                auto compact_rank = [wanted](const ExactEx50Evidence& evidence) {
+                    int base = 2;
+                    if (evidence.tier == pathtally::Ex50Tier::FullyExonic) {
+                        base = 0;
+                    } else if (evidence.tier == pathtally::Ex50Tier::ExonicMajority) {
+                        base = 1;
+                    }
+                    return 2 * base + static_cast<int>(evidence.direction != wanted);
+                };
+                int winning_rank = std::numeric_limits<int>::max();
+                for (const ExactEx50Evidence& evidence : exact_group_evidence) {
+                    winning_rank = std::min(winning_rank, compact_rank(evidence));
+                }
+                std::string xu;
+                char winning_gt = '\0';
+                char winning_gd = '\0';
+                for (const ExactEx50Evidence& evidence : exact_group_evidence) {
+                    if (compact_rank(evidence) != winning_rank) {
+                        continue;
+                    }
+                    if (!xu.empty()) {
+                        xu += ',';
+                    }
+                    xu += evidence.parent;
+                    winning_gt = pathtally::ex50_tier_code(evidence.tier);
+                    winning_gd = evidence.direction;
+                }
+                bam_writer->write_compact_exact_record(
+                    current_group.molecule.original_name, current_group.molecule.barcode,
+                    current_group.molecule.umi, current_group.molecule.barcode_quality,
+                    current_group.molecule.umi_quality, winning_gt, winning_gd, xu);
+                bam_record_written = true;
+            } else if (bam_writer && !options.compact_exact_count_strand.has_value() &&
+                production_identity &&
+                (!calls.empty() || !exact_group_evidence.empty())) {
+                std::string xr, tx, gx, gd, gl, gt, xp, xu, primary_gene;
+                int32_t primary_tid = -1;
+                std::set<std::string> bam_genes;
+                size_t n = 0;
+                for (const pathtally::LedgerCall& call : calls) {
+                    const std::string& transcript = t2g.target_names[call.transcript_target_id];
+                    const std::string& gene = t2g.transcript_gene.at(transcript);
+                    if (n++ > 0) {
+                        xr += ';'; tx += ';'; gx += ';'; gd += ';'; gl += ';'; gt += ';'; xp += ';'; xu += ';';
+                    }
+                    xr += 'G';
+                    tx += transcript;
+                    gx += gene;
+                    gd += transcript_gd.at(call.transcript_target_id);
+                    gl += call.spliced ? 'S' : 'U';
+                    gt += '.';
+                    const auto& evidence_map =
+                        call.spliced ? exon_identity_evidence : body_identity_evidence;
+                    const auto evidence = evidence_map.find(call.transcript_target_id);
+                    if (evidence == evidence_map.end()) {
+                        throw std::runtime_error(
+                            "internal path identity provenance is missing for a ledger call");
+                    }
+                    xp += join_sorted(evidence->second.winning_paths, ',');
+                    xu += join_sorted(evidence->second.winning_parents, ',');
+                    bam_genes.insert(gene);
+                    if (primary_gene.empty()) {
+                        primary_gene = gene;
+                        primary_tid = t2g.gene_ids.at(gene);
+                    }
+                }
+                for (const ExactEx50Evidence& evidence : exact_group_evidence) {
+                    const std::string& transcript =
+                        t2g.target_names[evidence.target_id];
+                    const std::string& gene =
+                        t2g.transcript_gene.at(transcript);
+                    if (n++ > 0) {
+                        xr += ';'; tx += ';'; gx += ';'; gd += ';'; gl += ';'; gt += ';'; xp += ';'; xu += ';';
+                    }
+                    xr += 'X';
+                    tx += transcript;
+                    gx += gene;
+                    gd += evidence.direction;
+                    gl += '.';
+                    gt += pathtally::ex50_tier_code(evidence.tier);
+                    xp += evidence.path;
+                    xu += evidence.parent;
+                    bam_genes.insert(gene);
+                    if (primary_gene.empty()) {
+                        primary_gene = gene;
+                        primary_tid = t2g.gene_ids.at(gene);
+                    }
+                }
+                const bool multigene = bam_genes.size() > 1;
+                const bool has_xt = !multigene || options.bam_multigene == BamMultiGenePolicy::First;
+                const vg::MultipathAlignment& read =
+                    current_group.records.front();
+                if (!multigene || options.bam_multigene != BamMultiGenePolicy::Omit) {
+                    bam_writer->write_record(
+                        current_group.molecule.original_name, primary_tid,
+                        read.sequence(), read.quality(),
+                        current_group.molecule.barcode, current_group.molecule.umi,
+                        current_group.molecule.barcode_quality,
+                        current_group.molecule.umi_quality, gx,
+                        /*gn=*/gx, /*xt=*/primary_gene, /*has_xt=*/has_xt,
+                        /*gd=*/gd, /*gl=*/gl, /*gt=*/gt, /*tx=*/tx, /*xp=*/xp,
+                        /*xu=*/xu, /*xr=*/xr);
+                    bam_record_written = true;
+                }
+            } else if (bam_writer && !exact_ex50 && !calls.empty()) {
+                std::string tx, gx, gd, gl, xp, xu, primary_gene;
                 int32_t primary_tid = -1;
                 size_t n = 0;
                 for (const pathtally::LedgerCall& call : calls) {
@@ -1394,11 +3000,26 @@ int run_convert(int argc, char** argv) {
                         gx += ';';
                         gd += ';';
                         gl += ';';
+                        if (production_identity) {
+                            xp += ';';
+                            xu += ';';
+                        }
                     }
                     tx += transcript;
                     gx += gene;
                     gd += transcript_gd.at(call.transcript_target_id);
                     gl += call.spliced ? 'S' : 'U';
+                    if (production_identity) {
+                        const auto& evidence_map =
+                            call.spliced ? exon_identity_evidence : body_identity_evidence;
+                        const auto evidence = evidence_map.find(call.transcript_target_id);
+                        if (evidence == evidence_map.end()) {
+                            throw std::runtime_error(
+                                "internal path identity provenance is missing for a ledger call");
+                        }
+                        xp += join_sorted(evidence->second.winning_paths, ',');
+                        xu += join_sorted(evidence->second.winning_parents, ',');
+                    }
                     if (n == 0) {
                         primary_gene = gene;
                         primary_tid = t2g.gene_ids.at(gene);
@@ -1413,15 +3034,19 @@ int run_convert(int argc, char** argv) {
                     bam_writer->write_record(current_group.molecule.original_name, primary_tid,
                                              read.sequence(), read.quality(),
                                              current_group.molecule.barcode, current_group.molecule.umi,
-                                             gx, /*gn=*/gx, /*xt=*/primary_gene, /*has_xt=*/has_xt,
-                                             /*gd=*/gd, /*gl=*/gl, /*tx=*/tx);
+                                             current_group.molecule.barcode_quality,
+                                             current_group.molecule.umi_quality, gx,
+                                             /*gn=*/gx, /*xt=*/primary_gene, /*has_xt=*/has_xt,
+                                             /*gd=*/gd, /*gl=*/gl, /*gt=*/"", /*tx=*/tx, /*xp=*/xp,
+                                             /*xu=*/xu);
+                    bam_record_written = true;
                 }
             }
 
             // RAD/alevin-fry: the emitted transcripts are the read's equivalence class.
             for (const pathtally::LedgerCall& call : calls) {
                 targets.push_back({t2g.target_names[call.transcript_target_id],
-                                   transcript_gd.at(call.transcript_target_id) == 'F'});
+                                   transcript_gd.at(call.transcript_target_id) == 'F', {}, {}});
             }
         }
 
@@ -1430,6 +3055,7 @@ int run_convert(int argc, char** argv) {
             if (current_group.saw_unaligned_record && !current_group.saw_subpath_record) {
                 ++unaligned_reads;
             }
+            write_barcode_only();
             completed_names.insert(current_group.name);
             have_group = false;
             return;
@@ -1447,6 +3073,7 @@ int run_convert(int argc, char** argv) {
                           targets.end());
             if (targets.empty()) {
                 ++strand_filtered_groups;
+                write_barcode_only();
                 completed_names.insert(current_group.name);
                 have_group = false;
                 return;
@@ -1464,6 +3091,7 @@ int run_convert(int argc, char** argv) {
             options.count_mode != pathtally::CountMode::Score && ledger_genes.size() > 1;
         if (ledger_multigene) {
             ++multigene_dropped_groups;
+            write_barcode_only();
             completed_names.insert(current_group.name);
             have_group = false;
             return;
@@ -1506,17 +3134,39 @@ int run_convert(int argc, char** argv) {
             const std::string& primary_gene = *genes.begin();
             const bool has_xt =
                 genes.size() == 1 || options.bam_multigene == BamMultiGenePolicy::First;
+            std::string tx, xp, xu;
+            if (production_identity) {
+                for (const pathtally::RadTarget& target : targets) {
+                    if (!tx.empty()) {
+                        tx += ';';
+                        xp += ';';
+                        xu += ';';
+                    }
+                    tx += target.transcript;
+                    std::set<std::string> paths(target.winning_paths.begin(),
+                                                target.winning_paths.end());
+                    std::set<std::string> parents(target.winning_parents.begin(),
+                                                  target.winning_parents.end());
+                    xp += join_sorted(paths, ',');
+                    xu += join_sorted(parents, ',');
+                }
+            }
             const vg::MultipathAlignment& read = current_group.records.front();
             bam_writer->write_record(current_group.molecule.original_name,
                                      t2g.gene_ids.at(primary_gene), read.sequence(), read.quality(),
-                                     current_group.molecule.barcode, current_group.molecule.umi, gx,
-                                     /*gn=*/gx, /*xt=*/primary_gene, has_xt, /*gd=*/gd);
+                                     current_group.molecule.barcode, current_group.molecule.umi,
+                                     current_group.molecule.barcode_quality,
+                                     current_group.molecule.umi_quality, gx,
+                                     /*gn=*/gx, /*xt=*/primary_gene, has_xt, /*gd=*/gd,
+                                     /*gl=*/"", /*gt=*/"", /*tx=*/tx, /*xp=*/xp, /*xu=*/xu);
+            bam_record_written = true;
         }
         // hits stays empty for a ledger multi-gene read (RAD skipped even when the BAM rescues
         // it), so the RAD emitted-target histogram reflects only actual RAD records.
         if (!ledger_multigene) {
             ++emitted_target_histogram[hits.size()];
         }
+        write_barcode_only();
         completed_names.insert(current_group.name);
         have_group = false;
     };
@@ -1552,6 +3202,9 @@ int run_convert(int argc, char** argv) {
     if (bam_writer) {
         bam_writer->finalize();
     }
+    if (debug_writer) {
+        debug_writer->finalize();
+    }
     std::string tx2gene;
     for (const std::string& target_name : t2g.target_names) {
         tx2gene += target_name + '\t' + t2g.transcript_gene.at(target_name) + '\n';
@@ -1566,6 +3219,12 @@ int run_convert(int argc, char** argv) {
         }
         histogram_value += std::to_string(target_count) + ':' + std::to_string(group_count);
     }
+    const std::string exact_ex50_score_window =
+        exact_ex50
+            ? (options.exact_ex50_score_window_enabled
+                   ? std::to_string(kExactEx50ScoreWindow)
+                   : std::string("disabled"))
+            : std::string("not_applicable");
     write_text_file(options.out_dir / "summary.tsv",
                     "input_records\t" + std::to_string(input_records) + "\ninput_read_groups\t" +
                         std::to_string(input_read_groups) + "\nemitted_groups\t" +
@@ -1577,9 +3236,21 @@ int run_convert(int argc, char** argv) {
                         std::to_string(raw_molecule_missing_groups) + "\nraw_molecule_malformed_groups\t" +
                         std::to_string(raw_molecule_malformed_groups) + "\nraw_molecule_unsupported_groups\t" +
                         std::to_string(raw_molecule_unsupported_groups) + "\nraw_molecule_skipped_groups\t" +
-                        std::to_string(raw_molecule_skipped_groups) + "\ngrouping_recurrence_failures\t" +
-                        std::to_string(grouping_recurrence_failures) + "\nemitted_target_count_histogram\t" +
-                        histogram_value + "\n");
+                        std::to_string(raw_molecule_skipped_groups) + "\nbam_records\t" +
+                        std::to_string(bam_writer ? bam_writer->record_count() : 0) +
+                        "\nbarcode_only_bam_records\t" +
+                        std::to_string(barcode_only_bam_records) + "\ngrouping_recurrence_failures\t" +
+                        std::to_string(grouping_recurrence_failures) +
+                        "\nexact_ex50_score_window\t" + exact_ex50_score_window +
+                        "\ncompatible_parent_policy\t" +
+                        (strict_allowlisted_parents.empty()
+                             ? std::string("unfiltered")
+                             : std::string("strict-allowlisted-v1")) +
+                        "\ncompatible_parent_allowlist_size\t" +
+                        std::to_string(strict_allowlisted_parents.size()) +
+                        "\nstrict_allowlisted_evidence_dropped\t" +
+                        std::to_string(strict_allowlisted_evidence_dropped) +
+                        "\nemitted_target_count_histogram\t" + histogram_value + "\n");
     return 0;
 }
 

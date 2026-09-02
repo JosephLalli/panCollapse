@@ -32,6 +32,12 @@ def pack(seq):
 
 
 def parse_molecule(name):
+    # Strip the optional quality transport suffixes from right to left. Tests accept
+    # both the current CY+UY contract and the transitional CY-only contract.
+    if name.rsplit("_", 1)[-1].startswith("uy"):
+        name = name.rsplit("_", 1)[0]
+    if name.rsplit("_", 1)[-1].startswith("cy"):
+        name = name.rsplit("_", 1)[0]
     i = name.rfind("_")
     if i <= 0 or i + 1 == len(name):
         return None
@@ -137,7 +143,7 @@ def load_node_paths(gfa_path, hst_set, touched):
     return node_paths
 
 
-def predict(group, node_paths):
+def predict(group, node_paths, path_transcript=None):
     tally = {}  # hst -> [score, fwd_bases, rev_bases]
     for mp in group:
         total_len = len(mp.get("sequence", ""))
@@ -163,7 +169,7 @@ def predict(group, node_paths):
     for name, (score, fwd, rev) in tally.items():
         if score != top:
             continue
-        tx = transcript_id(name)
+        tx = path_transcript[name] if path_transcript is not None else transcript_id(name)
         agg = per_tx.setdefault(tx, [0, 0])
         agg[0] += fwd
         agg[1] += rev
@@ -225,11 +231,13 @@ def main():
     subset_json, gfa, t2g_path, rad = sys.argv[1:5]
 
     hst_gene = {}
+    path_transcript = {}
     with open(t2g_path) as fh:
         for line in fh:
             p = line.split()
             if len(p) >= 2:
                 hst_gene[p[0]] = p[1]
+                path_transcript[p[0]] = p[2] if len(p) >= 3 else transcript_id(p[0])
     hst_set = set(hst_gene)
 
     groups, cur, cur_name = [], [], None
@@ -256,7 +264,7 @@ def main():
         mol = parse_molecule(name)
         if mol is None:
             continue
-        targets = predict(group, node_paths)
+        targets = predict(group, node_paths, path_transcript)
         if not targets:
             continue
         bc, umi = mol

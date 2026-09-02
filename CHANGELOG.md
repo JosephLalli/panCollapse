@@ -3,6 +3,138 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.8.0]
+
+### Changed
+
+- **Exact GeneFull_Ex50pAS now score-filters compatible traversals before feature ordering.**
+  Across every MultipathAlignment record in a read group, Parent-specific exact evidence is retained
+  only when its best complete compatible traversal score is within five points of the global
+  compatible optimum, inclusive. The dynamic program includes stored subpath and scored-connection
+  values; downstream `count_cr.py` applies the six E/P/B-orientation ranks only after this filter.
+  The five-point window is one mismatch-equivalent under vg's default scoring. Ordinary Gene
+  evidence and RAD output are unchanged. New typed-union BAMs pin the policy with
+  `@CO panCollapse-ex50-score-window:5`. (D068)
+
+### Added
+
+- **`--no-ex50-score-window` restores pre-D068 exact-evidence eligibility.** The v0.8 default
+  remains the inclusive five-point filter; the opt-out skips score pruning entirely and sends
+  every complete compatible exact traversal to downstream E/P/B-orientation ranking. It is
+  accepted only for production-ledger count-mode BAMs. Opt-out BAMs carry
+  `@CO panCollapse-ex50-score-window:disabled`, and `summary.tsv` records `5`, `disabled`, or
+  `not_applicable`. Focused fixtures prove the disabled policy restores top-minus-six alternatives
+  both within a GAMP DAG and across records while leaving RAD byte-identical. (D069)
+
+The bounded HG002 chr20 qualification recovered 5,306 of 445,665 prior direct-multigene drops
+(1.190580%). The policy is retained as a valid default improvement with an explicit sensitivity
+opt-out; it is not presented as the primary explanation for the remaining graph/STAR gap.
+
+See `docs/decisions.md` D068 and D069 for the score policy, qualification, and opt-out contract.
+
+## [0.7.0]
+
+### Changed
+
+- **BREAKING: production ledger count-mode BAMs are now a versioned typed union.** A single
+  `genefull_ex50pas` conversion carries both ordinary Gene and exact Ex50 evidence under the exact
+  `@CO	panCollapse-evidence-schema:panCollapse-superset-v1` header marker. Parallel
+  `XR/TX/GX/GD/GL/GT/XP/XU` rows use `XR=G` or `XR=X` as the family discriminator and literal `.`
+  for the inactive family. Repeated transcripts remain independent evidence rows. Consumers must
+  validate the complete union before projecting one family; the previous mode-specific production
+  BAM layout remains available only on marker-absent legacy paths.
+- **Typed-union BAM production requires complete body provenance.** Every exon Parent in the
+  production path-identity ledger must have at least one linked body row. This fail-closed
+  requirement applies only to production ledger count-mode BAM output; general score-mode and
+  non-BAM RAD conversion remain less restrictive.
+
+### Added
+
+- **`--debug-evidence-out` emits the versioned `panCollapse-debug-evidence-v1` TSV sidecar.** It
+  records source-order read rows, recognized splice-edge counts, and the exact-top candidate set
+  before flank filtering. The sidecar is written atomically and is diagnostic only: enabling it
+  does not change BAM classifications or RAD bytes.
+
+See `docs/decisions.md` D067 for the schema rationale and cross-repository consumer contract.
+
+## [0.6.0]
+
+### Changed
+
+- **BREAKING: production conversion now takes `--path-identity-ledger`, and a bare `--t2g` is a hard
+  error.** The ledger is a headered, strictly validated `panSC-path-identity-v1` TSV whose 24 columns
+  carry the full annotation provenance for every emitted path: `unique_parent`, separate
+  `source_parent` and `input_parent`, canonical transcript and gene, source/sample/haplotype/annotation
+  fields, exon-versus-body layer and selection/fallback state, an explicit body-to-exon Parent
+  crosslink, source identities/class/coordinates/strand, and the exact vg path name, length, and
+  haplotype origins. The historical exon/body t2gs still work, but only behind an explicit
+  `--legacy-adapter hst-v1`. Neither route auto-detects the other and neither silently falls back --
+  selecting exactly one identity input is required, and combining `--path-identity-ledger` with
+  `--t2g`/`--body-t2g` is rejected. This replaces heuristic identity inference: production lookup is
+  the exact chain `vg_path_name -> unique_parent -> canonical_transcript -> gene_id`, and identifier
+  strings are opaque, including any literal `_H<n>`/`_R<n>` suffix that previously would have been
+  stripped.
+- **BREAKING: production `genefull_ex50pas` is now an exact BAM/count_cr evidence mode.** It requires
+  `--path-identity-ledger`, `--bam-out`, and `--bam-multigene all`; `--legacy-adapter hst-v1`
+  is rejected. Each exact body-contained GAMP traversal is classified as E (fully exonic with
+  concordant junctions), P (strictly more than half exonic), or B. Exactly half is B and a fully
+  exonic splice-discordant traversal is P. Evidence remains path/Parent-specific until count_cr
+  applies STARsolo 2.7.11b's six sense/antisense ranks. The RAD compatibility path is unchanged.
+- **Transcript is the classification unit end to end; no isoform inherits another's evidence.** Exon
+  and body scores are keyed by canonical transcript against one shared global top-score threshold. A
+  transcript is `S` from its own near-top exon score, and otherwise `U` from its own near-top *body*
+  score -- another transcript of the same gene can no longer inherit a gene-body `U` call. D061 splice
+  concordance gates both states. Splice ownership is precomputed per canonical transcript by comparing
+  that transcript's exon paths only against its own body paths, rather than against a pooled gene body,
+  and body-path traversal order (not numeric node-id order) defines an internal step, so fragmented
+  bodies, nonmonotonic node ids, reverse paths, and repeated-node adjacency resolve correctly. No gene
+  identity participates in the classifier at all; `count_cr` groups the emitted `TX` entries by `GX`.
+- **`GD` is computed per transcript in the transcript-first path**, not as one majority orientation per
+  gene -- closing the gap 0.5.0 recorded as "not implemented". A two-column body t2g continues to use
+  the D060/D061 gene-body/span classifier and gene-level orientation.
+- **Scores collapse by maximum, never by sum, at every level.** Paths MAX-collapse within a Parent and
+  Parents MAX-collapse within a canonical transcript, with all tied winning paths and Parents retained
+  as provenance. Raw graph paths are scored and selected *first*; only those tied at the single top
+  score are then grouped by canonical identity. Additional CAT-projected haplotype copies of one
+  transcript therefore cannot manufacture a higher score than a single-copy competitor, which summing
+  before winner selection would have allowed.
+
+### Added
+
+- **`GT` BAM tag for exact `genefull_ex50pas` evidence.** It is parallel to
+  `TX`/`GX`/`GD`/`XP`/`XU`; every slot has one exact exon path/Parent for E/P or one linked body
+  path/Parent for B. Canonical `TX` values may repeat across locus Parents and alignment
+  alternatives. `GL` is absent in this mode.
+- **`XP` and `XU` BAM tags**, parallel to `TX`, naming the exon and body layer that supplied each
+  transcript's `S`/`U` call. Groups are semicolon-separated in `TX` order; tied exact paths and Parents
+  within a group are comma-sorted. Production score-mode BAM carries these tags too, while its
+  `GX`/`GD` stay gene-level. The `hst-v1` adapter emits no new score-mode tags and keeps its prior
+  tested layout.
+- **Optional three-column t2g aliases** for both `--t2g` (`graph_path`, `gene`,
+  `canonical_transcript`) and `--body-t2g` (`raw_body_path`, `gene`, `canonical_transcript`), the
+  intermediate that the path identity ledger generalizes. Column 1 stays the exact raw graph path, so
+  CAT-projected transcripts remain haplotype-unique while `vg rna` builds the graph. A t2g is
+  consistently two- or three-column; mixing widths is a hard error, as is one raw path mapping to
+  different transcripts or one canonical transcript mapping to different genes.
+- **Strict ledger validation at load and at runtime.** The reader requires the exact 24-column header
+  and order, nonempty TSV-safe fields, positive numeric coordinates and path lengths, `start <= end`,
+  unique exact path names, one annotation identity and one feature layer per Parent, each canonical
+  transcript bound to one gene, disjoint exon and body Parents, exon self-links, and body links to an
+  existing exon Parent with matching canonical transcript and gene. At runtime every ledger path must
+  occur in the XG with exactly the recorded length; extra non-ledger genomic paths are allowed. Comma
+  and semicolon are rejected only where they would corrupt BAM provenance grouping, so general
+  provenance such as comma-separated `vg_haplotype_origins` is unaffected.
+
+### Notes
+
+- A transcript-first production run must pass `--bam-out ... --bam-multigene all` so multi-gene ledger
+  records survive into `count_cr`. RAD output policy is unchanged and continues to omit them under the
+  Unique rule.
+- The version is bumped to 0.6.0 rather than 0.5.1 because requiring `--path-identity-ledger` removes a
+  previously valid invocation: any caller passing a bare `--t2g` must now add `--legacy-adapter hst-v1`.
+
+See `docs/decisions.md` D062, D063, and D064 for the full mechanism, validation rules, and rationale.
+
 ## [0.5.0]
 
 ### Changed

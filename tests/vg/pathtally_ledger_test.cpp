@@ -19,6 +19,11 @@
 namespace {
 
 using pathtally::classify_ledger_group;
+using pathtally::classify_ex50_tier;
+using pathtally::classify_transcript_body_ledger_group;
+using pathtally::body_geometry_owns_splice_edge;
+using pathtally::Ex50Tier;
+using pathtally::index_body_paths;
 using pathtally::LedgerCall;
 using pathtally::splice_concordant_transcripts;
 using pathtally::SpliceEdgeMap;
@@ -52,6 +57,19 @@ bool calls_equal(std::vector<LedgerCall> calls, std::vector<LedgerCall> expected
 constexpr int64_t kFlank = 5;
 
 void run() {
+    // STARsolo 2.7.11b GeneFull_Ex50pAS uses exact reference-base overlap. E additionally requires
+    // splice-junction concordance; P is strictly greater than half, and exactly half is B.
+    check(classify_ex50_tier(20, 20, true) == Ex50Tier::FullyExonic,
+          "Ex50: fully exonic and SJ-concordant is E");
+    check(classify_ex50_tier(20, 20, false) == Ex50Tier::ExonicMajority,
+          "Ex50: fully exonic but SJ-discordant falls through to P");
+    check(classify_ex50_tier(10, 19, true) == Ex50Tier::ExonicMajority,
+          "Ex50: strict majority on an odd alignment length is P");
+    check(classify_ex50_tier(10, 20, true) == Ex50Tier::Body,
+          "Ex50: exactly half exonic is B");
+    check(classify_ex50_tier(9, 20, true) == Ex50Tier::Body,
+          "Ex50: less than half exonic is B");
+
     // Single isoform, purely exonic (genefull_smoke "exonread"): transcript 1 (gene 10) ties top via
     // its own exon path; the gene body also ties top (exon nodes are on-body) and transcript 1's span
     // brackets the touched range, but it is already spliced so the body pass adds nothing new.
@@ -134,6 +152,80 @@ void run() {
         std::unordered_map<uint32_t, std::vector<TranscriptSpan>> spans{};
         auto calls = classify_ledger_group(exon_score, body_score, body_range, spans, kFlank);
         check(calls.empty(), "empty tally: no calls emitted");
+    }
+
+    // D063 transcript-body mode: exon and body scores share the SAME transcript-id key space.
+    // Transcript 1 ties through both layers and is S (exon wins); transcript 2 ties through only
+    // its own body and is U. Lower-scoring transcripts do not inherit another isoform's body.
+    {
+        std::map<uint32_t, int64_t> exon_score{{1, 20}, {3, 10}};
+        std::map<uint32_t, int64_t> body_score{{1, 20}, {2, 20}, {4, 14}};
+        auto calls = classify_transcript_body_ledger_group(exon_score, body_score, kFlank);
+        check(calls_equal(calls, {{1, true}, {2, false}}),
+              "transcript bodies: exon wins S; matching body-only target is U; no cross-isoform inheritance");
+    }
+
+    // D063 retains D061's gate for both layers. Transcript 2's body ties top, but a read splice it
+    // does not own makes it incompatible rather than U; transcript 1 is the sole concordant S call.
+    {
+        std::map<uint32_t, int64_t> exon_score{{1, 20}, {2, 20}};
+        std::map<uint32_t, int64_t> body_score{{1, 20}, {2, 20}};
+        std::optional<std::set<uint32_t>> concordant{std::set<uint32_t>{1}};
+        auto calls =
+            classify_transcript_body_ledger_group(exon_score, body_score, kFlank, concordant);
+        check(calls_equal(calls, {{1, true}}),
+              "transcript bodies: splice-concordance gates both S and U");
+    }
+
+    {
+        std::map<uint32_t, int64_t> no_scores;
+        auto calls = classify_transcript_body_ledger_group(no_scores, no_scores, kFlank);
+        check(calls.empty(), "transcript bodies: empty tally emits no calls");
+    }
+
+    // D063 splice geometry follows body-path traversal order, never numeric node-id order, and
+    // joins evidence across body fragments for one canonical transcript. Any adjacent occurrence
+    // is a conservative veto, including ambiguous repeated-node geometry.
+    {
+        auto nonmonotonic = index_body_paths({{1, 4, 3}});
+        check(body_geometry_owns_splice_edge(nonmonotonic, 1, 3),
+              "transcript bodies: nonmonotonic path order finds internal body step");
+        check(body_geometry_owns_splice_edge(nonmonotonic, 3, 1),
+              "transcript bodies: body order is strand-blind");
+
+        auto adjacent = index_body_paths({{1, 3}});
+        check(!body_geometry_owns_splice_edge(adjacent, 1, 3),
+              "transcript bodies: adjacent body endpoints are not a splice");
+
+        auto separate_fragments = index_body_paths({{1, 2}, {2, 3}});
+        check(body_geometry_owns_splice_edge(separate_fragments, 1, 3),
+              "transcript bodies: endpoint evidence joins across body fragments");
+
+        auto disconnected_fragments = index_body_paths({{1, 9}, {8, 3}});
+        check(body_geometry_owns_splice_edge(disconnected_fragments, 1, 3),
+              "transcript bodies: canonical membership joins disconnected fragments");
+
+        auto reverse_fragments = index_body_paths({{2, 1}, {3, 2}});
+        check(body_geometry_owns_splice_edge(reverse_fragments, 3, 1),
+              "transcript bodies: reversed fragments join strand-independently");
+
+        auto missing_endpoint = index_body_paths({{1, 2}, {2, 4}});
+        check(!body_geometry_owns_splice_edge(missing_endpoint, 1, 3),
+              "transcript bodies: fragment union still requires both endpoints");
+
+        auto adjacent_veto = index_body_paths({{1, 4, 3}, {3, 1}});
+        check(!body_geometry_owns_splice_edge(adjacent_veto, 1, 3),
+              "transcript bodies: any adjacent occurrence vetoes separated evidence");
+
+        auto repeated_ambiguous = index_body_paths({{1, 4, 1, 3}});
+        check(!body_geometry_owns_splice_edge(repeated_ambiguous, 1, 3),
+              "transcript bodies: repeated adjacent occurrence is conservatively ordinary");
+
+        auto repeated_separated = index_body_paths({{1, 4, 1, 5, 3}});
+        check(body_geometry_owns_splice_edge(repeated_separated, 1, 3),
+              "transcript bodies: repeated nodes without adjacency retain separated evidence");
+        check(!body_geometry_owns_splice_edge(repeated_separated, 1, 1),
+              "transcript bodies: a repeated self-pair is never a splice");
     }
 
     // D061 (splice-junction concordance), gated on classify_ledger_group's new optional parameter --

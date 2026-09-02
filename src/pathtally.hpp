@@ -21,6 +21,9 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <optional>
+#include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -145,12 +148,148 @@ inline TallyMap tally_read_group(
 struct RadTarget {
     std::string transcript;
     bool forward = true;
+    // Populated by the explicit path-identity selector. Legacy t2g callers leave
+    // these empty so their historical result surface is unchanged.
+    std::vector<std::string> winning_paths;
+    std::vector<std::string> winning_parents;
 };
+
+struct ResolvedPathIdentity {
+    std::string unique_parent;
+    std::string canonical_transcript;
+};
+
+struct NumericPathIdentity {
+    std::string unique_parent;
+    uint32_t canonical_target_id = 0;
+};
+
+struct CollapsedIdentityTally {
+    int64_t score = std::numeric_limits<int64_t>::min();
+    int64_t forward_bases = 0;
+    int64_t reverse_bases = 0;
+    std::set<std::string> winning_paths;
+    std::set<std::string> winning_parents;
+};
+
+inline void retain_max_path_evidence(CollapsedIdentityTally& evidence,
+                                     const std::string& path_name,
+                                     const std::string& unique_parent,
+                                     const HstTally& tally) {
+    if (tally.score > evidence.score) {
+        evidence.score = tally.score;
+        evidence.forward_bases = tally.forward_bases;
+        evidence.reverse_bases = tally.reverse_bases;
+        evidence.winning_paths = {path_name};
+        evidence.winning_parents = {unique_parent};
+    } else if (tally.score == evidence.score) {
+        evidence.forward_bases += tally.forward_bases;
+        evidence.reverse_bases += tally.reverse_bases;
+        evidence.winning_paths.insert(path_name);
+        evidence.winning_parents.insert(unique_parent);
+    }
+}
+
+inline void retain_max_parent_evidence(CollapsedIdentityTally& evidence,
+                                       const std::string& unique_parent,
+                                       const CollapsedIdentityTally& parent) {
+    if (parent.score > evidence.score) {
+        evidence = parent;
+        evidence.winning_parents = {unique_parent};
+    } else if (parent.score == evidence.score) {
+        evidence.forward_bases += parent.forward_bases;
+        evidence.reverse_bases += parent.reverse_bases;
+        evidence.winning_paths.insert(parent.winning_paths.begin(), parent.winning_paths.end());
+        evidence.winning_parents.insert(unique_parent);
+    }
+}
+
+// Production identity collapse for one layer. Every exact path is resolved first,
+// paths MAX-collapse within unique_parent, then Parents MAX-collapse within canonical
+// transcript target. Missing paths are ignored so the caller can run this independently
+// for exon and body layers. Scores are never summed; all tied score-winning paths and
+// Parents are retained in sorted sets for BAM provenance.
+template <class IdentityResolver>
+inline std::map<uint32_t, CollapsedIdentityTally> collapse_identity_tallies(
+    const TallyMap& tallies, IdentityResolver&& resolve_identity) {
+    struct ParentEvidence {
+        uint32_t target_id = 0;
+        CollapsedIdentityTally evidence;
+    };
+    std::map<std::string, ParentEvidence> per_parent;
+    for (const auto& [path_name, tally] : tallies) {
+        const std::optional<NumericPathIdentity> identity = resolve_identity(path_name);
+        if (!identity.has_value()) {
+            continue;
+        }
+        auto [it, inserted] = per_parent.try_emplace(
+            identity->unique_parent, ParentEvidence{identity->canonical_target_id, {}});
+        if (!inserted && it->second.target_id != identity->canonical_target_id) {
+            throw std::runtime_error("unique Parent resolves to multiple canonical targets");
+        }
+        retain_max_path_evidence(it->second.evidence, path_name, identity->unique_parent, tally);
+    }
+
+    std::map<uint32_t, CollapsedIdentityTally> per_target;
+    for (const auto& [unique_parent, parent] : per_parent) {
+        retain_max_parent_evidence(per_target[parent.target_id], unique_parent, parent.evidence);
+    }
+    return per_target;
+}
+
+// Production score-mode selector. The explicit path -> Parent -> canonical MAX
+// hierarchy is observable through winning_paths/winning_parents. Only canonical
+// targets tied at the global top score are emitted, preserving D048 semantics.
+template <class IdentityResolver>
+inline std::vector<RadTarget> select_identity_targets(const TallyMap& tallies,
+                                                      IdentityResolver&& resolve_identity) {
+    struct ParentEvidence {
+        std::string canonical_transcript;
+        CollapsedIdentityTally evidence;
+    };
+    std::map<std::string, ParentEvidence> per_parent;
+    for (const auto& [path_name, tally] : tallies) {
+        const ResolvedPathIdentity identity = resolve_identity(path_name);
+        auto [it, inserted] = per_parent.try_emplace(
+            identity.unique_parent, ParentEvidence{identity.canonical_transcript, {}});
+        if (!inserted && it->second.canonical_transcript != identity.canonical_transcript) {
+            throw std::runtime_error("unique Parent resolves to multiple canonical transcripts");
+        }
+        retain_max_path_evidence(it->second.evidence, path_name, identity.unique_parent, tally);
+    }
+
+    std::map<std::string, CollapsedIdentityTally> per_transcript;
+    for (const auto& [unique_parent, parent] : per_parent) {
+        retain_max_parent_evidence(per_transcript[parent.canonical_transcript], unique_parent,
+                                   parent.evidence);
+    }
+    int64_t top = std::numeric_limits<int64_t>::min();
+    for (const auto& [transcript, evidence] : per_transcript) {
+        top = std::max(top, evidence.score);
+    }
+
+    std::vector<RadTarget> targets;
+    for (const auto& [transcript, evidence] : per_transcript) {
+        if (evidence.score != top) {
+            continue;
+        }
+        targets.push_back({transcript,
+                           evidence.forward_bases >= evidence.reverse_bases,
+                           {evidence.winning_paths.begin(), evidence.winning_paths.end()},
+                           {evidence.winning_parents.begin(), evidence.winning_parents.end()}});
+    }
+    return targets;
+}
 
 // Steps 3-4 (select): winners are the HSTs tied at the single top score; collapse
 // them to unique transcript IDs; per transcript, orientation is the majority of
-// aligned bases (forward on an exact tie); targets sorted by transcript id.
-inline std::vector<RadTarget> select_targets(const TallyMap& tallies) {
+// aligned bases (forward on an exact tie); targets sorted by transcript id. The raw
+// path top score is selected BEFORE transcript collapse. This order is essential when
+// several graph paths alias to one transcript: their scores are alternatives and must
+// never be summed to manufacture a winning transcript.
+template <class TranscriptResolver>
+inline std::vector<RadTarget> select_targets(const TallyMap& tallies,
+                                             TranscriptResolver&& resolve_transcript) {
     std::vector<RadTarget> targets;
     if (tallies.empty()) {
         return targets;
@@ -167,15 +306,21 @@ inline std::vector<RadTarget> select_targets(const TallyMap& tallies) {
         if (tally.score != top) {
             continue;
         }
-        auto& evidence = per_transcript[transcript_id_of(name)];
+        auto& evidence = per_transcript[resolve_transcript(name)];
         evidence.first += tally.forward_bases;
         evidence.second += tally.reverse_bases;
     }
 
     for (const auto& [transcript, evidence] : per_transcript) {
-        targets.push_back({transcript, evidence.first >= evidence.second});
+        targets.push_back({transcript, evidence.first >= evidence.second, {}, {}});
     }
     return targets;
+}
+
+// Backward-compatible two-column t2g behavior: derive transcript identity from the
+// conventional trailing haplotype-copy suffix.
+inline std::vector<RadTarget> select_targets(const TallyMap& tallies) {
+    return select_targets(tallies, [](const std::string& name) { return transcript_id_of(name); });
 }
 
 }  // namespace pathtally

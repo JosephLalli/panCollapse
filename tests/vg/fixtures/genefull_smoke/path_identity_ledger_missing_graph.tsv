@@ -1,0 +1,2 @@
+schema_version	vg_path_name	vg_path_length	vg_haplotype_origins	unique_parent	source_parent	input_parent	canonical_transcript	gene_id	source_path_or_contig	sample	haplotype	annotation_source	feature_layer	selection_status	fallback_status	exon_unique_parent	gene_locus	source_gene	source_transcript	transcript_class	strand	start	end
+panSC-path-identity-v1	NOT_IN_GRAPH	20	chr1	UP_MISSING	SRC_MISSING	IN_MISSING	CANON_MISSING	GENE_MISSING	chr1	REF	REF	CAT	exon	selected	none	UP_MISSING	chr1:1-20	GENE_MISSING	TX_MISSING	mapped	+	1	20

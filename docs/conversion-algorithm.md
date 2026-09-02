@@ -13,7 +13,9 @@ This document is the canonical algorithm, governed by decision D048.
 - Name-grouped GAMP: all records for one read name are contiguous.
 - The graph (`.xg` or equivalent) carrying the haplotype-specific transcript (HST) paths
   that `vg rna` embedded (`<transcript_id>_H<n>` / `_R<n>`).
-- A transcript-to-gene map (t2g) for `tx2gene.tsv`.
+- A production `--path-identity-ledger` in schema `panSC-path-identity-v1`, selecting exact graph
+  paths and mapping them through unique Parents to canonical transcripts/genes. Historical t2gs
+  are accepted only through `--legacy-adapter hst-v1`.
 
 A GTF and `vg rna` build the annotated graph during reference/fixture creation only; they
 are not runtime inputs, and there is no separate collapse manifest.
@@ -35,13 +37,14 @@ supplementary/secondary record):
    HST path visits the node. The HST path already encodes the transcript's spliced
    structure, so there is no exon/intron/junction test.
 
-3. **Pick winners across all alignments.** Pool the per-HST tallies over all of the read's
-   alignments. Take the single highest HST score. The winners are every HST tied at that
-   score, drawn from any alignment.
+3. **Collapse exact identity with MAX.** Pool exact path tallies over all alignments. Resolve
+   `vg_path_name -> unique_parent -> canonical_transcript`; MAX-collapse paths within a Parent and
+   Parents within a canonical transcript. Retain every path/Parent tied at either winning boundary.
+   Alternative evidence is never summed.
 
-4. **Collapse to transcript IDs.** Reduce the winning HSTs to their unique transcript IDs
-   (drop the `_H<n>` / `_R<n>` haplotype suffix). This unique set is the read's compatible
-   targets — RAD `refs`.
+4. **Pick canonical winners.** Take the global highest canonical-transcript score plus ties. This
+   unique canonical set is the read's compatible targets — RAD `refs`. Identity strings are opaque;
+   only the explicit `hst-v1` adapter applies D062's suffix/t2g rules.
 
 5. **Record orientation.** For each winning HST, the read is forward if it traverses the HST
    path's nodes in the path's direction, reverse if opposite. HST paths are stored 5'->3' of
@@ -77,7 +80,7 @@ fidelity to vg's quality-adjusted scores is wanted.
 
 - `map.rad` via a streaming seek-and-backpatch writer (D049: header + target dictionary and
   tags up front with a placeholder `num_chunks`, records streamed as groups flush, chunk and
-  `num_chunks` counts patched at finalize), `tx2gene.tsv` from the t2g, and a run summary with
+  `num_chunks` counts patched at finalize), `tx2gene.tsv` from the identity projection, and a run summary with
   stable counters. GAMP input streams from a file or stdin (`--gamp -`). RAD records
   stream to disk incrementally, but the converter also maintains an in-memory set of
   every completed read-group name to guarantee exact detection of unsorted
@@ -101,9 +104,8 @@ Build one testable behavior at a time:
 
 1. Reproduce vg's per-node alignment score from the `Mapping` edits; accept when per-node
    sums equal `Subpath.score` on real GAMP subpaths.
-2. Attribute each node's score to the HST paths crossing it; collapse HST names to unique
-   transcript IDs.
-3. Select winners: the single top HST score across all of a read's alignments, plus ties.
+2. Attribute each node's score to exact ledger paths; MAX-collapse path -> Parent -> canonical.
+3. Select canonical winners at the single top score across all alignments, plus ties.
 4. Record per-transcript orientation by the majority of aligned bases into RAD `dirs`.
 5. Emit `map.rad` (streaming writer) and `tx2gene.tsv`; verify alevin-fry consumption.
 6. Human-pangenome MHC fixture (`docs/testing_fixture_creation.md`): slice HPRC v1.1 GRCh38,

@@ -11,8 +11,12 @@ D048 and `docs/conversion-algorithm.md`.
 
 ## 2. Barcode and UMI cases
 
-- RNA GAMP name follows `<original_read_name>_<raw_CB>_<raw_UMI>`, parsed from the rightmost
-  two underscore-delimited fields (the original name may contain underscores);
+- RNA GAMP name follows
+  `<original_read_name>_<raw_CB>_<raw_UMI>_cy<hex(CY)>_uy<hex(UY)>`; CB/UMI and
+  optional quality suffixes are parsed from the right (the original name may contain
+  underscores). Legacy quality-free and CY-only names remain accepted;
+- decoded `CY`/`UY` is printable and exactly parallel to CB/UMI; malformed hex/length is a molecule
+  identity failure;
 - extracted values are written to RAD without correction;
 - parsed values must match the configured `--raw-cb-length` / `--raw-umi-length` (Phase 2
   defaults 16 and 12);
@@ -40,11 +44,47 @@ D048 and `docs/conversion-algorithm.md`.
 
 ## 5. Compatibility and collapse cases
 
+- production accepts only schema `panSC-path-identity-v1` through
+  `--path-identity-ledger`; old t2gs require explicit `--legacy-adapter hst-v1`, and supplying a
+  t2g without that adapter fails;
+- a production ledger count mode with `--bam-out` requires every exon Parent to have at least one
+  linked body row before graph traversal; score mode and non-BAM RAD conversion retain the general
+  ledger contract;
+- the strict reader requires the exact canonical header and column order, then checks every
+  required provenance field, numeric ordered coordinates and path
+  length, unique path identity, one annotation identity and layer per Parent, canonical-to-one-gene,
+  exon self-links, and matching body-to-exon crosslinks;
+- exact path names, Parents, and canonical transcripts include literal `_R1` strings unchanged;
+  hashed `panSCup1_<64 lowercase hex>` exon Parents and `panSCbody1_<64 lowercase hex>` body
+  Parents also survive byte-for-byte into BAM `XU`;
+  every ledger path exists in the XG at the recorded length, while missing paths and mismatched
+  lengths fail before GAMP processing;
+- tabs/newlines fail in every field; comma/semicolon fail where reserved by `XP`/`XU` grouping,
+  while commas in general provenance such as `vg_haplotype_origins` remain legal;
+- several exact paths may share one Parent, and several Parents may share one canonical transcript;
+  path→Parent→canonical uses MAX at both boundaries and retains all tied winners;
+- sequence-identical paths with different explicit canonical identities remain distinct targets;
 - a read whose aligned nodes lie on one HST path is compatible with that transcript;
 - a read whose aligned nodes lie on no HST path emits no target and is counted;
 - a node shared by two isoforms' HST paths makes the read compatible with both;
 - several HST paths of one transcript (haplotype copies) collapse to one transcript ID and
   do not inflate the transcript's score;
+- optional t2g column 3 can map arbitrary raw CAT path names to one canonical transcript;
+  raw top-score paths are selected before alias collapse, so two tied copies do not gain a
+  summed score and displace another tied transcript;
+- three-column aliases match exact raw graph paths only and cannot activate the legacy
+  suffix-stripped ledger fallback; only canonical targets introduced by two-column rows may do so;
+- conflicting raw-path-to-transcript aliases and conflicting canonical-transcript-to-gene
+  mappings are hard failures;
+- a three-column body t2g MAX-collapses raw body copies/fragments to canonical transcripts,
+  rejects mixed row widths, rejects body transcripts absent from the exon t2g, and rejects
+  exon/body gene disagreement or one raw graph path appearing in both layers;
+- transcript-body ledger classification calls a near-top exon score `S`, otherwise a near-top
+  body score for that same transcript `U`; another isoform cannot inherit body evidence;
+- transcript-specific splice ownership compares each canonical transcript's exon paths only
+  with its own body paths, not a pooled gene body; path-internal steps and endpoint evidence across
+  body fragments establish ownership, while any adjacent endpoint occurrence vetoes the splice;
+  load diagnostics distinguish all owned target-edges from fragment-only and adjacent-vetoed cases;
 - the winners are the HSTs tied at the single top score pooled across all of the read's
   alignments; lower-scoring HSTs are not emitted;
 - a read with a supplementary alignment contributes its winning HSTs to the same pooled
@@ -72,6 +112,19 @@ A tiny fixture must prove:
 8. streaming-to-disk framing (chunk headers and file-level `num_chunks` seek-and-backpatched
    to their final values, D049) decodes through the supported libradicl/alevin-fry path,
    including a forced multi-chunk split.
+
+Production BAM fixtures additionally prove `TX` is sorted and `XP`/`XU` are semicolon groups
+parallel to `TX`, with comma-sorted tied paths/Parents inside a group. This applies to production
+score and ledger count modes; score-mode `GX`/`GD` remain sorted gene-level fields. The explicit
+`hst-v1` suite proves the legacy feature-tag layout remains unchanged. BAM conservation tests also
+prove exactly one record per valid molecule group: feature records are mapped, while no-compatible,
+strand-filtered, and policy-omitted groups are unmapped `XB:Z:barcode_only` records with molecule
+tags (including decoded `CY`/`UY` when present) and no feature tags.
+Exact-Ex50 fixtures require the typed-union schema marker plus either
+`@CO\tpanCollapse-ex50-score-window:5` or `:disabled`. The default proves inclusive top-minus-five
+versus exclusive top-minus-six selection both within a MultipathAlignment DAG and across records
+in one read group. The opt-out must restore both top-minus-six alternatives, reject use outside a
+production-ledger count-mode BAM, and leave RAD byte-identical.
 
 ## 8. Failure and diagnostics
 

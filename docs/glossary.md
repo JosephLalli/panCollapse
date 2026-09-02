@@ -11,15 +11,17 @@ orientation.
 when one of its HST paths crosses a node the read aligns to. There is no runtime exon/intron
 or splice-junction test; the HST path already encodes splicing.
 
-**Transcript-copy collapse** — Reducing the winning HSTs to their unique transcript IDs
-(dropping the `_H<n>` / `_R<n>` suffix). Haplotype copies of one transcript collapse to one
-ID. Collapse is implicit in HST naming; there is no runtime collapse manifest.
+**Transcript-copy collapse** — Reducing the winning raw HST paths to their unique transcript
+IDs after raw-path winner selection. Two-column t2g rows drop the `_H<n>` / `_R<n>` suffix;
+optional column 3 explicitly aliases arbitrary paths. Haplotype copies of one transcript
+collapse to one ID without summing their scores.
 
 **Transcript target** — A transcript ID in the RAD dictionary: the collapse of a read's
 winning HST copies. Projected to a gene through the t2g.
 
-**Transcript-to-gene map (t2g)** — Two-column `transcript_id`/`gene_id` map; the runtime
-annotation input, used to write `tx2gene.tsv` and to project targets to genes.
+**Transcript-to-gene map (t2g)** — Runtime annotation input in the form
+`graph_path`/`gene_id`/optional `canonical_transcript_id`; used to select exon graph paths,
+collapse them to transcript targets, and write canonical two-column `tx2gene.tsv`.
 
 **Mapper-style RAD** — RAD produced by a mapper before alevin-fry collation and UMI
 resolution.

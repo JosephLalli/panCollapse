@@ -10,6 +10,11 @@ This file is intentionally short; load detailed documents only when relevant.
 - Verify external APIs and file-format assumptions from primary sources before designing.
 - Do not write production code until Gate Architecture Approved has passed.
 - Prefer using standard vg indexes; a custom lookup index is not part of V1.
+- Treat `--compact-exact-count-bam` as an exceptional, lossy opt-in. Never make it a
+  CLI, pipeline, configuration, or recipe default. Only the user may determine that it is
+  necessary and authorize a use; the current decision is that it is not necessary. If the
+  user later authorizes it, state a concrete case-specific reason and highlight the compact
+  evidence loss in the user-facing plan, run update, and result.
 - Update `PROGRESS.md` and `docs/decisions.md` before ending a substantive session.
 - Stop for human review wherever correctness depends on biological or product judgment.
 - If a design decision requires explicit user approval, ask the user directly. Do not

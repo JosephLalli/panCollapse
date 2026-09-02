@@ -1,0 +1,2 @@
+schema_version	vg_path_name	vg_path_length	vg_haplotype_origins	unique_parent	source_parent	input_parent	canonical_transcript	gene_id	source_path_or_contig	sample	haplotype	annotation_source	feature_layer	selection_status	fallback_status	exon_unique_parent	gene_locus	source_gene	source_transcript	transcript_class	strand	start	end
+panSC-path-identity-v1	NM_1.1_H1	21	chr1	UP_REF	SRC_UP_REF	IN_UP_REF	ENST_CANONICAL	GENE1	chr1	REF	REF	CAT	exon	selected	none	UP_REF	chr1:1-30	GENE1	NM_1.1	mapped	+	1	20

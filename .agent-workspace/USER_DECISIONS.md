@@ -11,6 +11,17 @@ sections below: V1 compatibility is now HST-path node membership (no GTF project
 no exon/intron/junction test at runtime), and transcript-copy collapse is implicit in HST
 naming (no explicit manifest). See `docs/conversion-algorithm.md`.
 
+D062 extends D048's naming-only collapse without restoring a separate manifest: optional t2g
+column 3 maps each raw graph path to a canonical transcript. Two-column rows retain D048's
+suffix behavior. Winner selection remains per raw path and precedes collapse; ledger scores
+use the maximum across paths mapped to the same transcript.
+
+D063 makes the optional third column apply to ledger bodies as well. With a consistently
+three-column body t2g, exon and body evidence share one canonical-transcript key space, raw
+body paths MAX-collapse, and panCollapse classifies S/U per transcript. Gene grouping and the
+count-mode rule belong to count_cr; transcript-first runs use `--bam-multigene all` so
+multi-gene evidence reaches it. Two-column body t2gs retain the legacy classifier.
+
 ## Outside-span compatibility anchor
 
 At least one aligned reference-consuming base must overlap an exon or implied intron of
@@ -88,3 +99,45 @@ are `raw_molecule_missing_groups`, `raw_molecule_malformed_groups`,
 ## License
 
 The project is licensed under Apache License 2.0.
+
+## 2026-07-28 PanCollapse/count_cr seam supersession
+
+- PanCollapse must emit one information-complete counting BAM for both Gene and
+  exact GeneFull_Ex50pAS; it is intended to reformat one GAMP into the BAM
+  needed for counting, not require per-count-mode BAMs.
+- Normal BAMs carry all production evidence. Audit-only splice-edge counts and
+  pre-flank exact-top candidates belong behind an explicit PanCollapse debug
+  mode.
+- Downstream source-gene normalization remains a `count_cr.py` responsibility
+  and must happen before the read-level `Unique` gate and all UMI correction.
+
+## 2026-08-02 Exact Ex50 score eligibility
+
+- Use complete transcript-compatible alignment scores to define the candidates
+  that may reach exact Ex50 ordering.
+- Retain every candidate within five score points of the read group's global
+  compatible top, inclusive. Five points is the intended one-mismatch fudge
+  factor under vg's default scoring.
+- Apply E/P/B plus library-orientation ordering only after that score filter.
+
+## 2026-08-02 Exact Ex50 score-window release policy
+
+- Keep the five-point exact-Ex50 score window as a valid improvement and the
+  default behavior.
+- Provide an explicit flag that turns the score filter off and restores all
+  compatible exact transcripts before Ex50 ordering.
+- Advance this optionalized behavior to panCollapse v0.8.0.
+
+## 2026-08-21 Compact exact-count output policy
+
+- The normal information-complete typed-union BAM is the production default.
+- `--compact-exact-count-bam` is an explicit, lossy research opt-in. It must never
+  become a CLI, pipeline, configuration, or example-recipe default.
+- Every proposed use must record a concrete case-specific reason before execution,
+  including the constraint being addressed, why the normal BAM is not being used, and
+  the evidence discarded by compact producer-side winner selection.
+- Every actual use must be highlighted in the user-facing run update and result and
+  labeled compact, lossy, and experimental. The flag must never be added silently.
+- Only the user determines whether compact output is necessary and authorizes its use.
+  The current decision is that it is not necessary, including for the next chr20 k32
+  pangenome-loss diagnostic.
