@@ -1,0 +1,1 @@
+{"name":"cyclicread_AAACCCAAGTTTGGGA_ACGTACGTACGT","sequence":"TTTTTTTTTTGGGGGGGGGG","start":[0],"subpath":[{"score":20,"path":{"mapping":[{"position":{"node_id":"4"},"edit":[{"from_length":10,"to_length":10}]},{"position":{"node_id":"6"},"edit":[{"from_length":10,"to_length":10}]}]}}]}

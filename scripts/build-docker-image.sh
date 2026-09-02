@@ -9,11 +9,11 @@
 #
 # Usage: scripts/build-docker-image.sh [--tag <image:tag>] [--binary <path>]
 #
-# Defaults: tag josephlalli/pancollapse:v0.8.0, binary build/src/panCollapse.
+# Defaults: tag josephlalli/pancollapse:v0.8.1, binary build/src/panCollapse.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TAG="josephlalli/pancollapse:v0.8.0"
+TAG="josephlalli/pancollapse:v0.8.1"
 BINARY="${REPO_ROOT}/build/src/panCollapse"
 
 while [ "$#" -gt 0 ]; do

@@ -3,6 +3,12 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.8.1]
+
+- A cyclic transcript-body path now degrades only its linked Parent to exon-layer evidence when
+  no unique oriented body occurrence exists. Clean sibling Parents remain body-capable; the run
+  reports the degraded-path counter and debug path names.
+
 ## [0.8.0]
 
 ### Changed

@@ -1445,7 +1445,9 @@ int run_convert(int argc, char** argv) {
     T2gData t2g;
     BodyT2gData body_t2g;
     if (production_identity) {
-        identity_ledger = path_identity::read(options.path_identity_ledger);
+        identity_ledger = path_identity::read(
+            options.path_identity_ledger,
+            options.count_mode == pathtally::CountMode::GeneFullEx50pAS);
         if (!strict_allowlisted_parents.empty()) {
             std::unordered_set<std::string> ledger_parents;
             for (const auto& [path_name, row] : identity_ledger->rows_by_path) {
@@ -1464,31 +1466,6 @@ int run_convert(int argc, char** argv) {
             !identity_ledger->has_body_layer) {
             throw std::runtime_error(
                 "ledger --count-mode gene/genefull/... requires body feature_layer rows");
-        }
-        if (options.count_mode != pathtally::CountMode::Score &&
-            !options.bam_out.empty()) {
-            std::set<std::string> exon_parents;
-            std::set<std::string> body_linked_exon_parents;
-            for (const auto& [path_name, row] : identity_ledger->rows_by_path) {
-                if (row.annotation.feature_layer == "exon") {
-                    exon_parents.insert(row.annotation.unique_parent);
-                } else {
-                    body_linked_exon_parents.insert(
-                        row.annotation.exon_unique_parent);
-                }
-            }
-            std::vector<std::string> missing;
-            std::set_difference(
-                exon_parents.begin(), exon_parents.end(),
-                body_linked_exon_parents.begin(), body_linked_exon_parents.end(),
-                std::back_inserter(missing));
-            if (!missing.empty()) {
-                throw std::runtime_error(
-                    "production typed-union count-mode BAM requires at least one linked body "
-                    "row for every exon Parent; missing " +
-                    std::to_string(missing.size()) + " exon Parent(s), first: " +
-                    missing.front());
-            }
         }
         for (const auto& entry : identity_ledger->rows_by_path) {
             const std::string& raw_path = entry.first;
@@ -1604,9 +1581,16 @@ int run_convert(int argc, char** argv) {
         uint64_t exon_path_handle = 0;
         uint64_t body_path_handle = 0;
         uint32_t target_id = 0;
+        bool body_exon_same = true;
+        std::map<int64_t, uint64_t> resolved_body_positions;
     };
     std::vector<ExactEx50Model> exact_ex50_models;
     std::unordered_map<uint64_t, std::vector<size_t>> exact_ex50_models_by_body_path;
+    // A body row is retained in the ledger even when it cannot support exact base geometry.  The
+    // Parent then remains countable from its exon evidence, but never contributes an Ex50 body
+    // model.  This is deliberately per Parent: a cyclic body path must not disable clean loci.
+    std::set<std::string> body_unresolvable_exon_parents;
+    std::set<std::string> body_unresolvable_paths;
     // Per-node ledger cache. ref_paths feeds the score tally (tally_read_group_into, reused verbatim
     // from score mode): every reference path crossing the node, exon or gene-body, un-collapsed, so
     // a read's per-reference score here is exactly what score mode would compute for that
@@ -1736,6 +1720,8 @@ int run_convert(int argc, char** argv) {
                 exon_rows_by_parent;
             std::map<std::string, std::vector<const path_identity::PathIdentityRow*>>
                 body_rows_by_exon_parent;
+            std::map<std::pair<std::string, std::string>,
+                     std::pair<bool, std::map<int64_t, uint64_t>>> resolved_body_occurrences;
             for (const auto& [path_name, row] : identity_ledger->rows_by_path) {
                 if (row.annotation.feature_layer == "exon") {
                     exon_rows_by_parent[row.annotation.unique_parent].push_back(&row);
@@ -1750,6 +1736,105 @@ int run_convert(int argc, char** argv) {
                         "genefull_ex50pas requires a linked body path for exon Parent " +
                         exon_parent);
                 }
+                bool parent_body_unresolvable = false;
+                for (const path_identity::PathIdentityRow* exon : exon_rows) {
+                    const handlegraph::path_handle_t exon_path =
+                        graph.get_path_handle(exon->vg_path_name);
+                    for (const path_identity::PathIdentityRow* body : bodies->second) {
+                        const handlegraph::path_handle_t body_path =
+                            graph.get_path_handle(body->vg_path_name);
+                        std::map<int64_t, std::vector<std::pair<bool, uint64_t>>> body_occurrences;
+                        graph.for_each_step_in_path(
+                            body_path, [&](const handlegraph::step_handle_t& step) {
+                                const handlegraph::handle_t handle = graph.get_handle_of_step(step);
+                                body_occurrences[graph.get_id(handle)].emplace_back(
+                                    graph.get_is_reverse(handle), graph.get_position_of_step(step));
+                            });
+
+                        // A repeated node is safe only when the exon path fixes one body occurrence.
+                        // The body/exon orientation relation is global for a model, so test both
+                        // possible relations and retain it only when exactly one relation gives one
+                        // oriented occurrence for every shared exon step.  This chooses a uniquely
+                        // positioned occurrence; multiple consistent positions remain ambiguous.
+                        bool repeated_exonic_node = false;
+                        int compatible_relations = 0;
+                        bool selected_relation = true;
+                        std::map<int64_t, uint64_t> selected_positions;
+                        for (const bool same_orientation : {false, true}) {
+                            bool compatible = true;
+                            bool shared = false;
+                            graph.for_each_step_in_path(
+                                exon_path, [&](const handlegraph::step_handle_t& step) {
+                                    const handlegraph::handle_t handle = graph.get_handle_of_step(step);
+                                    const auto occurrences = body_occurrences.find(graph.get_id(handle));
+                                    if (occurrences == body_occurrences.end()) {
+                                        return true;
+                                    }
+                                    shared = true;
+                                    if (occurrences->second.size() > 1) {
+                                        repeated_exonic_node = true;
+                                    }
+                                    const bool exon_reverse = graph.get_is_reverse(handle);
+                                    const size_t matching = static_cast<size_t>(std::count_if(
+                                        occurrences->second.begin(), occurrences->second.end(),
+                                        [&](const auto& occurrence) {
+                                            return (exon_reverse == occurrence.first) == same_orientation;
+                                        }));
+                                    if (matching != 1) {
+                                        compatible = false;
+                                    }
+                                    return true;
+                                });
+                            if (shared && compatible) {
+                                ++compatible_relations;
+                                selected_relation = same_orientation;
+                                selected_positions.clear();
+                                graph.for_each_step_in_path(exon_path, [&](const handlegraph::step_handle_t& step) {
+                                    const handlegraph::handle_t handle = graph.get_handle_of_step(step);
+                                    const int64_t id = graph.get_id(handle);
+                                    const auto occurrences = body_occurrences.find(id);
+                                    if (occurrences != body_occurrences.end()) {
+                                        const bool exon_reverse = graph.get_is_reverse(handle);
+                                        for (const auto& occurrence : occurrences->second) {
+                                            if ((exon_reverse == occurrence.first) == same_orientation) {
+                                                selected_positions[id] = occurrence.second;
+                                            }
+                                        }
+                                    }
+                                    return true;
+                                });
+                            }
+                        }
+                        if (repeated_exonic_node && compatible_relations != 1) {
+                            if (exon->annotation.gene_id != body->annotation.gene_id) {
+                                throw std::runtime_error(
+                                    "refusing body-path degradation because linked Parent " +
+                                    exon_parent + " changes counted gene from " +
+                                    exon->annotation.gene_id + " to " + body->annotation.gene_id);
+                            }
+                            parent_body_unresolvable = true;
+                            body_unresolvable_paths.insert(body->vg_path_name);
+                        } else if (compatible_relations == 0) {
+                            throw std::runtime_error(
+                                "genefull_ex50pas cannot establish body/exon orientation for linked paths " +
+                                body->vg_path_name + " and " + exon->vg_path_name);
+                        } else {
+                            if (exon->annotation.gene_id != body->annotation.gene_id) {
+                                throw std::runtime_error(
+                                    "path identity ledger body Parent " +
+                                    body->annotation.unique_parent +
+                                    " changes counted gene from " + exon->annotation.gene_id +
+                                    " to " + body->annotation.gene_id);
+                            }
+                            resolved_body_occurrences[{exon->vg_path_name, body->vg_path_name}] =
+                                {selected_relation, std::move(selected_positions)};
+                        }
+                    }
+                }
+                if (parent_body_unresolvable) {
+                    body_unresolvable_exon_parents.insert(exon_parent);
+                    continue;
+                }
                 for (const path_identity::PathIdentityRow* exon : exon_rows) {
                     const uint64_t exon_handle =
                         ledger_path_handles_by_name.at(exon->vg_path_name);
@@ -1759,11 +1844,41 @@ int run_convert(int argc, char** argv) {
                         const uint64_t body_handle =
                             ledger_path_handles_by_name.at(body->vg_path_name);
                         const size_t model_id = exact_ex50_models.size();
+                        const auto& resolved = resolved_body_occurrences.at(
+                            {exon->vg_path_name, body->vg_path_name});
                         exact_ex50_models.push_back(
-                            {exon, body, exon_handle, body_handle, target_id});
+                            {exon, body, exon_handle, body_handle, target_id,
+                             resolved.first, resolved.second});
                         exact_ex50_models_by_body_path[body_handle].push_back(model_id);
                     }
                 }
+            }
+
+            // This remains a fail-closed completeness invariant for accidental ledger omissions.
+            // A Parent marked above is an observed body-geometry failure, not a missing body row;
+            // it is accepted only because its exon and body identities proved the same counted gene.
+            std::set<std::string> exon_parents;
+            std::set<std::string> body_linked_exon_parents;
+            for (const auto& [path_name, row] : identity_ledger->rows_by_path) {
+                static_cast<void>(path_name);
+                if (row.annotation.feature_layer == "exon") {
+                    exon_parents.insert(row.annotation.unique_parent);
+                } else {
+                    body_linked_exon_parents.insert(row.annotation.exon_unique_parent);
+                }
+            }
+            body_linked_exon_parents.insert(body_unresolvable_exon_parents.begin(),
+                                            body_unresolvable_exon_parents.end());
+            std::vector<std::string> missing;
+            std::set_difference(exon_parents.begin(), exon_parents.end(),
+                                body_linked_exon_parents.begin(), body_linked_exon_parents.end(),
+                                std::back_inserter(missing));
+            if (!missing.empty()) {
+                throw std::runtime_error(
+                    "production typed-union count-mode BAM requires at least one linked body "
+                    "row for every exon Parent; missing " +
+                    std::to_string(missing.size()) + " exon Parent(s), first: " +
+                    missing.front());
             }
         }
 
@@ -1807,6 +1922,18 @@ int run_convert(int argc, char** argv) {
                     return;
                 }
 
+                // A degraded Parent cannot contribute body geometry, but its exon path remains
+                // valid evidence.  Preserve its own exon edges only when no clean sibling body
+                // for this canonical target remains; otherwise use only clean body geometry.
+                bool degraded_parent = false;
+                if (production_identity) {
+                    for (const auto& [path_name, target] : exon_name_transcript) {
+                        if (target == *target_id && body_unresolvable_exon_parents.count(
+                                t2g.path_unique_parent.at(path_name)) != 0) {
+                            degraded_parent = true;
+                        }
+                    }
+                }
                 // For the fragment-only audit, record whether both endpoints ever coexist on one
                 // raw body path. Index each candidate edge by its lower endpoint so each body path
                 // only probes candidates incident on nodes it actually contains.
@@ -1817,7 +1944,17 @@ int run_convert(int argc, char** argv) {
 
                 pathtally::BodyGeometryIndex body_geometry;
                 std::unordered_set<Edge, pathtally::NodePairHash> same_path_endpoint_edges;
+                bool has_usable_body_path = false;
                 for (const handlegraph::path_handle_t& body_path : body_paths) {
+                    if (production_identity) {
+                        const auto& annotation = identity_ledger->rows_by_path.at(
+                            graph.get_path_name(body_path)).annotation;
+                        if (body_unresolvable_exon_parents.count(
+                                annotation.exon_unique_parent) != 0) {
+                            continue;
+                        }
+                    }
+                    has_usable_body_path = true;
                     std::vector<int64_t> path_node_ids;
                     graph.for_each_step_in_path(
                         body_path, [&](const handlegraph::step_handle_t& step) {
@@ -1840,6 +1977,15 @@ int run_convert(int argc, char** argv) {
                             }
                         }
                     }
+                }
+
+                if (degraded_parent && !has_usable_body_path) {
+                    for (const Edge& edge : exon_edges) {
+                        ++d63_splice_target_edges_evaluated;
+                        ++d63_splice_target_edges_owned;
+                        splice_edges[edge].insert(*target_id);
+                    }
+                    return;
                 }
 
                 for (const Edge& edge : exon_edges) {
@@ -1925,7 +2071,15 @@ int run_convert(int argc, char** argv) {
                       << " fragment_only_target_edges="
                       << d63_splice_target_edges_fragment_only
                       << " adjacent_vetoed_target_edges="
-                      << d63_splice_target_edges_adjacent_vetoed << '\n';
+                      << d63_splice_target_edges_adjacent_vetoed
+                      << " body_paths_degraded=" << body_unresolvable_paths.size()
+                      << " body_path_degrade_reason=repeated_exonic_node" << '\n';
+            if (!options.debug_evidence_out.empty()) {
+                for (const std::string& path : body_unresolvable_paths) {
+                    std::cerr << "panCollapse: debug: degraded body path " << path
+                              << " (repeated_exonic_node)\n";
+                }
+            }
         } else {
             for (const auto& [gene_idx, exon_paths] : gene_exon_paths) {
                 const auto body = gene_body_paths.find(gene_idx);
@@ -2091,36 +2245,7 @@ int run_convert(int argc, char** argv) {
             return *cached;
         }
         const ExactEx50Model& model = exact_ex50_models.at(model_id);
-        std::optional<bool> relation;
-        const handlegraph::path_handle_t exon_path =
-            graph.get_path_handle(model.exon->vg_path_name);
-        graph.for_each_step_in_path(
-            exon_path, [&](const handlegraph::step_handle_t& exon_step) {
-                const handlegraph::handle_t exon_handle = graph.get_handle_of_step(exon_step);
-                const int64_t node_id = graph.get_id(exon_handle);
-                const bool exon_reverse = graph.get_is_reverse(exon_handle);
-                const NodeLedger& node = node_ledger_of(node_id);
-                const auto body_steps =
-                    exact_step_range(node.exact_body_steps, model.body_path_handle);
-                for (auto it = body_steps.first; it != body_steps.second; ++it) {
-                    const bool same = exon_reverse == it->path_is_reverse;
-                    if (relation.has_value() && *relation != same) {
-                        throw std::runtime_error(
-                            "genefull_ex50pas cannot resolve body/exon orientation for repeated "
-                            "node " +
-                            std::to_string(node_id) + " on paths " +
-                            model.body->vg_path_name + " and " + model.exon->vg_path_name);
-                    }
-                    relation = same;
-                }
-            });
-        if (!relation.has_value()) {
-            throw std::runtime_error(
-                "genefull_ex50pas cannot establish body/exon orientation because linked paths " +
-                model.body->vg_path_name + " and " + model.exon->vg_path_name +
-                " share no graph node");
-        }
-        cached = relation;
+        cached = model.body_exon_same;
         return *cached;
     };
 
@@ -2202,17 +2327,15 @@ int run_convert(int argc, char** argv) {
             const uint64_t hi = lo + reference_bases;
 
             const NodeLedger& node = node_ledger_of(node_id);
-            const auto body_occurrences =
-                exact_step_range(node.exact_body_steps, model.body_path_handle);
             const auto exon_occurrences =
                 exact_step_range(node.exact_exon_steps, model.exon_path_handle);
             const bool exonic = exon_occurrences.first != exon_occurrences.second;
-            if (exonic && std::distance(body_occurrences.first, body_occurrences.second) > 1) {
-                throw std::runtime_error(
-                    "genefull_ex50pas cannot assign an exonic base to a repeated body-path node "
-                    "occurrence: node " +
-                    std::to_string(node_id) + ", body path " + model.body->vg_path_name +
-                    ", exon path " + model.exon->vg_path_name);
+            if (exonic) {
+                const auto chosen = model.resolved_body_positions.find(node_id);
+                if (chosen != model.resolved_body_positions.end() &&
+                    graph.get_position_of_step(body_step.step) != chosen->second) {
+                    return std::nullopt;
+                }
             }
 
             State next = prior;
@@ -2717,6 +2840,11 @@ int run_convert(int argc, char** argv) {
                         if (body == body_name_transcript.end()) {
                             return std::nullopt;
                         }
+                        const auto& annotation = identity_ledger->rows_by_path.at(name).annotation;
+                        if (body_unresolvable_exon_parents.count(
+                                annotation.exon_unique_parent) != 0) {
+                            return std::nullopt;
+                        }
                         return pathtally::NumericPathIdentity{
                             body_t2g.path_unique_parent.at(name), body->second};
                     });
@@ -2760,6 +2888,10 @@ int run_convert(int argc, char** argv) {
                     }
                 }
             }
+
+            // Exact body evidence is intentionally unavailable for a degraded Parent.  Do not let
+            // its raw body tally turn the preserved exon call into U: that would retain the path
+            // but silently change its evidence tier.
 
             // D061: the read group's own splice-concordant transcript set -- nullopt (unconstrained)
             // unless its alignments actually cross a splice edge (collect_read_node_pairs), in which
@@ -3250,6 +3382,12 @@ int run_convert(int argc, char** argv) {
                         std::to_string(strict_allowlisted_parents.size()) +
                         "\nstrict_allowlisted_evidence_dropped\t" +
                         std::to_string(strict_allowlisted_evidence_dropped) +
+                        "\nbody_paths_degraded\t" +
+                        std::to_string(body_unresolvable_paths.size()) +
+                        "\nbody_path_degrade_reason\t" +
+                        (body_unresolvable_paths.empty()
+                             ? std::string("none")
+                             : std::string("repeated_exonic_node")) +
                         "\nemitted_target_count_histogram\t" + histogram_value + "\n");
     return 0;
 }

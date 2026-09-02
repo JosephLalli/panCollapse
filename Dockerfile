@@ -23,7 +23,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 LABEL org.opencontainers.image.title="panCollapse" \
-      org.opencontainers.image.version="0.8.0" \
+      org.opencontainers.image.version="0.8.1" \
       org.opencontainers.image.description="Convert vg mpmap GAMP alignments into RAD records or provenance-rich BAM evidence for exact GeneFull_Ex50pAS counting." \
       org.opencontainers.image.source="https://github.com/JosephLalli/panCollapse" \
       org.opencontainers.image.licenses="Apache-2.0"
@@ -32,6 +32,10 @@ LABEL org.opencontainers.image.title="panCollapse" \
 COPY lib/ /opt/pancollapse/lib/
 # Prebuilt, stripped panCollapse binary.
 COPY bin/panCollapse /opt/pancollapse/bin/panCollapse
+
+# The closure may originate from a group-restricted VG build. The image runs as an unprivileged
+# user, so normalize read/execute bits after COPY rather than relying on source-tree modes.
+RUN chmod -R a+rX /opt/pancollapse/lib /opt/pancollapse/bin
 
 # Launch wrapper: resolve every dependency from the bundled closure via the
 # bundled loader, independent of the base image's libc. Verify at build time.

@@ -180,7 +180,8 @@ inline uint64_t parse_positive_coordinate(const std::string& value, const std::s
     return result;
 }
 
-inline PathIdentityLedger read(const std::filesystem::path& filename) {
+inline PathIdentityLedger read(const std::filesystem::path& filename,
+                               bool defer_linked_body_gene_mismatch = false) {
     std::ifstream in(filename);
     if (!in) {
         throw std::runtime_error("cannot open path identity ledger " + filename.string());
@@ -351,11 +352,16 @@ inline PathIdentityLedger read(const std::filesystem::path& filename) {
             throw std::runtime_error("path identity ledger maps unique_parent " +
                                      annotation.unique_parent + " to multiple identities");
         }
-        auto [canonical, canonical_inserted] =
-            ledger.canonical_gene.emplace(annotation.canonical_transcript, annotation.gene_id);
-        if (!canonical_inserted && canonical->second != annotation.gene_id) {
-            throw std::runtime_error("path identity ledger maps canonical transcript " +
-                                     annotation.canonical_transcript + " to multiple genes");
+        // Exact Ex50 preflight has a more specific fail-closed diagnostic for a linked body that
+        // changes its exon Parent's counted gene. Defer only that body-side contradiction until
+        // the graph-aware preflight; exon and ordinary-mode validation remain strict here.
+        if (!(defer_linked_body_gene_mismatch && layer == "body")) {
+            auto [canonical, canonical_inserted] =
+                ledger.canonical_gene.emplace(annotation.canonical_transcript, annotation.gene_id);
+            if (!canonical_inserted && canonical->second != annotation.gene_id) {
+                throw std::runtime_error("path identity ledger maps canonical transcript " +
+                                         annotation.canonical_transcript + " to multiple genes");
+            }
         }
         ledger.has_body_layer = ledger.has_body_layer || layer == "body";
     }
@@ -386,7 +392,6 @@ inline PathIdentityLedger read(const std::filesystem::path& filename) {
         if (exon_identity.source_parent != annotation.source_parent ||
             exon_identity.input_parent != annotation.input_parent ||
             exon_identity.canonical_transcript != annotation.canonical_transcript ||
-            exon_identity.gene_id != annotation.gene_id ||
             exon_identity.source_path_or_contig != annotation.source_path_or_contig ||
             exon_identity.sample != annotation.sample ||
             exon_identity.haplotype != annotation.haplotype ||
@@ -398,6 +403,12 @@ inline PathIdentityLedger read(const std::filesystem::path& filename) {
             exon_identity.source_transcript != annotation.source_transcript ||
             exon_identity.transcript_class != annotation.transcript_class ||
             exon_identity.strand != annotation.strand) {
+            throw std::runtime_error("path identity ledger body Parent " +
+                                     annotation.unique_parent +
+                                     " disagrees with its exon Parent provenance");
+        }
+        if (exon_identity.gene_id != annotation.gene_id &&
+            !defer_linked_body_gene_mismatch) {
             throw std::runtime_error("path identity ledger body Parent " +
                                      annotation.unique_parent +
                                      " disagrees with its exon Parent provenance");

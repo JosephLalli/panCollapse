@@ -1,0 +1,3 @@
+schema_version	vg_path_name	vg_path_length	vg_haplotype_origins	unique_parent	source_parent	input_parent	canonical_transcript	gene_id	source_path_or_contig	sample	haplotype	annotation_source	feature_layer	selection_status	fallback_status	exon_unique_parent	gene_locus	source_gene	source_transcript	transcript_class	strand	start	end
+panSC-path-identity-v1	CYCLIC_EXON	20	H1	CYCLIC_EXON_PARENT	SRC1	IN1	SHARED_TX	SHARED_GENE	chr1	S1	H1	CAT	exon	selected	none	CYCLIC_EXON_PARENT	chr1:1-30	SHARED_GENE	TX1	mapped	+	1	30
+panSC-path-identity-v1	CYCLIC_BODY	40	H1	CYCLIC_BODY_PARENT	SRC1	IN1	SHARED_TX	OTHER_GENE	chr1	S1	H1	CAT	body	selected	none	CYCLIC_EXON_PARENT	chr1:1-30	SHARED_GENE	TX1	mapped	+	1	30

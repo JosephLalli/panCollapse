@@ -897,6 +897,53 @@ set_tests_properties(genefull_ex50pas_debug_rad_unchanged PROPERTIES
   LABELS "vg;pathtally;genefull;ledger;ex50;debug"
   FIXTURES_REQUIRED "genefull_ex50pas_exact_out;genefull_ex50pas_debug_out")
 
+# A cyclic transcript-body path may not abort the arm: its Parent keeps exon-layer evidence while
+# a clean Parent on the same graph retains byte-equivalent exact Ex50 evidence.
+set(CYCLIC_DIR "${CMAKE_CURRENT_BINARY_DIR}/cyclic_body_work")
+set(CYCLIC_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cyclic_body_smoke")
+add_test(NAME cyclic_body_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${CYCLIC_DIR}")
+set_tests_properties(cyclic_body_setup PROPERTIES LABELS "vg;pathtally;ledger;ex50;cyclic"
+  FIXTURES_SETUP cyclic_body_dir)
+add_test(NAME cyclic_body_inputs
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> convert -g '${CYCLIC_FIX}/graph.gfa' -x > '${CYCLIC_DIR}/graph.xg' && $<SHELL_PATH:${PT_VG}> view -J -K -k '${CYCLIC_FIX}/reads.gamp.json' > '${CYCLIC_DIR}/reads.gamp'")
+set_tests_properties(cyclic_body_inputs PROPERTIES LABELS "vg;pathtally;ledger;ex50;cyclic"
+  FIXTURES_REQUIRED cyclic_body_dir FIXTURES_SETUP cyclic_body_inputs_ready)
+add_test(NAME cyclic_body_degrades_and_preserves_clean
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/cyclic' --bam-out '${CYCLIC_DIR}/cyclic/reads.bam' --debug-evidence-out '${CYCLIC_DIR}/cyclic/debug.tsv' 2> '${CYCLIC_DIR}/cyclic.stderr' && '$<TARGET_FILE:panCollapse>' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_clean.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/clean' --bam-out '${CYCLIC_DIR}/clean/reads.bam' && grep -qP '^body_paths_degraded\\t1$' '${CYCLIC_DIR}/cyclic/summary.tsv' && grep -qP '^body_path_degrade_reason\\trepeated_exonic_node$' '${CYCLIC_DIR}/cyclic/summary.tsv' && grep -q 'debug: degraded body path CYCLIC_BODY' '${CYCLIC_DIR}/cyclic.stderr' && '${Python3_EXECUTABLE}' '${CMAKE_CURRENT_SOURCE_DIR}/cyclic_body_verify.py' '${CYCLIC_DIR}/cyclic/reads.bam' '${CYCLIC_DIR}/clean/reads.bam'")
+set_tests_properties(cyclic_body_degrades_and_preserves_clean PROPERTIES
+  LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
+  FIXTURES_REQUIRED cyclic_body_inputs_ready)
+
+add_test(NAME cyclic_body_gene_change_fails_closed
+  COMMAND /bin/sh -c "if '$<TARGET_FILE:panCollapse>' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_gene_mismatch.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/gene_change' --bam-out '${CYCLIC_DIR}/gene_change/reads.bam' 2> '${CYCLIC_DIR}/gene_change.stderr'; then exit 1; fi && grep -Fx 'panCollapse: refusing body-path degradation because linked Parent CYCLIC_EXON_PARENT changes counted gene from SHARED_GENE to OTHER_GENE' '${CYCLIC_DIR}/gene_change.stderr'")
+set_tests_properties(cyclic_body_gene_change_fails_closed PROPERTIES
+  LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
+  FIXTURES_REQUIRED cyclic_body_inputs_ready)
+
+add_test(NAME cyclic_body_resolvable_gene_change_fails_closed
+  COMMAND /bin/sh -c "if '$<TARGET_FILE:panCollapse>' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_clean_gene_mismatch.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/resolvable_gene_change' --bam-out '${CYCLIC_DIR}/resolvable_gene_change/reads.bam' 2> '${CYCLIC_DIR}/resolvable_gene_change.stderr'; then exit 1; fi && grep -Fx 'panCollapse: path identity ledger body Parent CLEAN_BODY_PARENT changes counted gene from SHARED_GENE to OTHER_GENE' '${CYCLIC_DIR}/resolvable_gene_change.stderr'")
+set_tests_properties(cyclic_body_resolvable_gene_change_fails_closed PROPERTIES
+  LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
+  FIXTURES_REQUIRED cyclic_body_inputs_ready)
+
+# A repeated body node is valid when exon orientation fixes one occurrence. The accepted model
+# must carry that exact occurrence through its base geometry and into the emitted direction.
+set(RESOLVED_BODY_DIR "${CMAKE_CURRENT_BINARY_DIR}/repeated_body_resolved_work")
+set(RESOLVED_BODY_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/repeated_body_resolved")
+add_test(NAME repeated_body_resolved_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOLVED_BODY_DIR}")
+set_tests_properties(repeated_body_resolved_setup PROPERTIES
+  LABELS "vg;pathtally;ledger;ex50;cyclic" FIXTURES_SETUP repeated_body_resolved_dir)
+add_test(NAME repeated_body_resolved_inputs
+  COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> convert -g '${RESOLVED_BODY_FIX}/graph.gfa' -x > '${RESOLVED_BODY_DIR}/graph.xg' && $<SHELL_PATH:${PT_VG}> view -J -K -k '${RESOLVED_BODY_FIX}/reads.gamp.json' > '${RESOLVED_BODY_DIR}/reads.gamp'")
+set_tests_properties(repeated_body_resolved_inputs PROPERTIES
+  LABELS "vg;pathtally;ledger;ex50;cyclic"
+  FIXTURES_REQUIRED repeated_body_resolved_dir FIXTURES_SETUP repeated_body_resolved_inputs_ready)
+add_test(NAME repeated_body_resolved_occurrence_and_orientation
+  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert --gamp '${RESOLVED_BODY_DIR}/reads.gamp' --xg '${RESOLVED_BODY_DIR}/graph.xg' --path-identity-ledger '${RESOLVED_BODY_FIX}/path_identity_ledger.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${RESOLVED_BODY_DIR}/out' --bam-out '${RESOLVED_BODY_DIR}/out/reads.bam' && grep -qP '^body_paths_degraded\\t0$' '${RESOLVED_BODY_DIR}/out/summary.tsv' && grep -qP '^body_path_degrade_reason\\tnone$' '${RESOLVED_BODY_DIR}/out/summary.tsv' && '${Python3_EXECUTABLE}' '${CMAKE_CURRENT_SOURCE_DIR}/repeated_body_resolved_verify.py' '${RESOLVED_BODY_DIR}/out/reads.bam'")
+set_tests_properties(repeated_body_resolved_occurrence_and_orientation PROPERTIES
+  LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
+  FIXTURES_REQUIRED repeated_body_resolved_inputs_ready)
+
 # D060 cross-isoform fixture: GENE1 has TWO exon isoforms over the SAME 3-node body -- NM_1.1 (exons
 # 1,3, skips node 2) and NM_1.2 (exons 1,2,3, a retained-intron isoform that keeps node 2 as exon).
 # genefull_smoke's GENE1 has only one isoform, so it cannot exercise a transcript spanning the read
