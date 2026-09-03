@@ -1,8 +1,9 @@
 # v0.8.2 joint chr20-22 geometry preload check
 
-Verified 2026-09-03 on branch `worktree-codex-v081-geometry-precompute`. This is a bounded
-performance/correctness gate for initialization only. It is not a read-assignment result and none
-of its partial RAD or BAM output is benchmark evidence.
+Verified 2026-09-03 at commit `8d3ba5800b6a6de7e2ceac46467e406a10f67dd9` on branch
+`worktree-codex-v081-geometry-precompute`. This is a bounded performance/correctness gate for
+initialization only. It is not a read-assignment result and none of its partial RAD or BAM output
+is benchmark evidence.
 
 ## Inputs
 
@@ -50,6 +51,10 @@ The only subsequent source changes were the patch-version string and documentati
 binary reports `panCollapse 0.8.2`, is 22,553,064 bytes, has SHA-256
 `f1bb013cb6ac3671f43d66a550b927327d73cdaa20a182c0bc153bad58acff85`, and passes the same 119/119
 CTest suite. The full graph was not rerun merely to change the embedded version string.
+
+The local container `josephlalli/pancollapse:v0.8.2` has immutable image ID
+`sha256:2ab89665e39a4be8a87ce13766f413090783034a52a3eac97abb7ec1eff0c02e`, OCI version label
+`0.8.2`, and reports `panCollapse 0.8.2` from inside the image.
 
 ## Interpretation and restart gate
 

@@ -3,8 +3,9 @@
 ## v0.8.2 geometry-initialization correction (verified 2026-09-03)
 
 This section supersedes the older reconciliation snapshot below as the current authority.
-The implementation is isolated on branch `worktree-codex-v081-geometry-precompute`, based on
-committed v0.8.1 revision `8fc0c0e85212d92b2203f7ca6106760547bc5724`.
+The implementation is committed as `8d3ba5800b6a6de7e2ceac46467e406a10f67dd9` on isolated
+branch `worktree-codex-v081-geometry-precompute`, based on committed v0.8.1 revision
+`8fc0c0e85212d92b2203f7ca6106760547bc5724`.
 
 - v0.8.1 correctly made ambiguous cyclic transcript-body degradation Parent-scoped, but its
   geometry worker rediscovered whether a canonical target contained a degraded Parent by scanning
@@ -30,11 +31,15 @@ committed v0.8.1 revision `8fc0c0e85212d92b2203f7ca6106760547bc5724`.
   authorization for a graceful service stop and checksum-pinned restart. No final-test assignment
   result has been opened, and this performance-only correction does not revise the frozen
   annotation/counting method.
+- The rebuilt binary SHA-256 is
+  `f1bb013cb6ac3671f43d66a550b927327d73cdaa20a182c0bc153bad58acff85`. The local runtime
+  `josephlalli/pancollapse:v0.8.2` has immutable image ID
+  `sha256:2ab89665e39a4be8a87ce13766f413090783034a52a3eac97abb7ec1eff0c02e`, carries OCI version
+  label `0.8.2`, and reports `panCollapse 0.8.2` from inside the container.
 
-Next: commit and checksum the v0.8.2 source, build and verify a distinct v0.8.2 runtime image, then
-restart the joint producer only after explicit authorization. Preserve the failed v0.8.1 attempt
-and use a corrected producer receipt that records both the 13 scan candidates and 12 degraded
-Parents.
+Next: restart the joint producer only after explicit authorization. Preserve the failed v0.8.1
+attempt and use a corrected producer receipt that records both the 13 scan candidates and 12
+degraded Parents.
 
 ## Historical reconciliation snapshot (verified 2026-08-21)
 
