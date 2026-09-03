@@ -8,6 +8,13 @@ All notable changes to panCollapse are recorded here. Versions follow the projec
 - Adds deterministic read-group parallelism through `--threads N`. One parser owns GAMP
   grouping and recurrence validation, workers use private per-group workspaces, and one ordered
   writer preserves the original RAD/BAM/debug record order and chunk boundaries.
+- Parallelizes exact Parent-model construction and canonical-target splice geometry (plus the
+  legacy gene-geometry compatibility path) with adaptive Parent blocks. Worker results commit in
+  stable order through a reduction window bounded at twice the worker count, preserving model IDs
+  and lexical failure order without retaining every temporary geometry result.
+- Replaces the three process-wide lazy-cache miss locks with 256-way sharded caches whose values
+  are immutable and address-stable. Caches remain demand-driven, so threading does not require an
+  eager whole-XG cache or additional disk I/O.
 - Reduces exact GeneFull initialization storage to the exceptional repeated-body occurrence
   geometry that actually needs disambiguation, rather than retaining ordinary per-model position
   maps.

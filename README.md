@@ -89,12 +89,15 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --out-dir out
   quality-adjusted mapping.
 - `--molecule-identity-failures skip|fail` — how to treat reads whose name has a missing,
   malformed, or wrong-length CB/UMI/CY/UY field (default `skip`, counted in the summary).
-- `--threads N` — number of complete read-group workers (default `1`). One parser owns GAMP
-  grouping and recurrence validation, and one ordered writer preserves original GAMP order.
-  `N` must be positive. Queued groups and worker scratch grow with `N`; lightweight groups can be
-  faster at the default because scheduling has a cost. Start with 8 or 16 on a bounded
-  representative slice, then increase only while measured throughput improves. Supported thread
-  counts produce byte-identical persisted artifacts.
+- `--threads N` — number of initialization and complete-read-group workers (default `1`). Exact
+  Parent models are built in adaptive lexical blocks; splice geometry is split by canonical target
+  (or legacy gene); and lazy node/exon-edge cache misses use 256 independent shards. Initialization
+  results commit in stable order through a bounded window, one parser still owns GAMP grouping and
+  recurrence validation, and one ordered writer preserves original GAMP order. `N` must be
+  positive. Queued groups, initialization scratch, and worker scratch grow with `N`; lightweight
+  inputs can be faster at the default because scheduling has a cost. Start with 8 or 16 on a
+  bounded representative slice, then increase only while measured throughput improves. Supported
+  thread counts produce byte-identical persisted artifacts.
 - `--strand both|forward|reverse` — target-relative orientation filter (default `both`, no
   filtering). `forward` keeps only targets the read aligns to in the same (sense) orientation;
   `reverse` keeps only antisense targets. Reads left with no matching target emit no record and

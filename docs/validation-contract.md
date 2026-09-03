@@ -114,6 +114,10 @@ A tiny fixture must prove:
 9. streaming-to-disk framing (chunk headers and file-level `num_chunks` seek-and-backpatched
    to their final values, D049) decodes through the supported libradicl/alevin-fry path,
    including a forced multi-chunk split.
+10. a multi-Parent/multi-target production ledger actually uses multiple initialization workers,
+    preserves all artifacts between one and eight workers, exercises concurrent lazy-cache misses,
+    and reports the lexical-first Parent error without creating partial outputs even when a later
+    failing Parent can finish first; multi-gene legacy geometry retains the same byte-identity gate.
 
 Production BAM fixtures additionally prove `TX` is sorted and `XP`/`XU` are semicolon groups
 parallel to `TX`, with comma-sorted tied paths/Parents inside a group. This applies to production

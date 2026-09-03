@@ -11,6 +11,7 @@
 #include "path_identity_ledger.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -23,6 +24,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -1497,12 +1499,12 @@ public:
             } else if (!coordinator_.aborted_) {
                 ++coordinator_.next_ordinal_;
             }
-            lock_.unlock();
             // During unwinding the worker catch records the original exception and then notifies.
             // Delaying this wake prevents another waiter from racing in with a generic abort error.
             if (!unwinding) {
                 coordinator_.cv_.notify_all();
             }
+            lock_.unlock();
         }
 
     private:
@@ -1537,6 +1539,212 @@ private:
     size_t next_ordinal_ = 0;
     bool aborted_ = false;
     std::exception_ptr failure_;
+};
+
+// Run contiguous index blocks in parallel, but retain failures by block ordinal and rethrow the
+// first one only after every worker has joined. A ring retains at most two result payloads per
+// worker and commits them in ordinal order, so scheduling cannot change identifiers, diagnostics,
+// or which invalid input is reported first.
+template<class Build, class Commit>
+void parallel_transform_ordered_blocks(size_t item_count, size_t requested_threads,
+                                       size_t block_size, Build&& build, Commit&& commit) {
+    if (item_count == 0) {
+        return;
+    }
+    if (block_size == 0) {
+        throw std::runtime_error("parallel block size must be positive");
+    }
+    if (requested_threads == 0) {
+        throw std::runtime_error("parallel worker count must be positive");
+    }
+    const size_t block_count = 1 + (item_count - 1) / block_size;
+    const size_t worker_count = std::min(requested_threads, block_count);
+    if (worker_count == 1) {
+        for (size_t block = 0; block < block_count; ++block) {
+            const size_t begin = block * block_size;
+            const size_t end = std::min(item_count, begin + block_size);
+            commit(block, begin, end, build(block, begin, end));
+        }
+        return;
+    }
+
+    using Result = std::decay_t<std::invoke_result_t<Build&, size_t, size_t, size_t>>;
+    struct ResultSlot {
+        std::optional<Result> result;
+        std::exception_ptr failure;
+        size_t ordinal = std::numeric_limits<size_t>::max();
+        bool ready = false;
+    };
+    std::mutex scheduler_mutex;
+    std::condition_variable scheduler_cv;
+    size_t next_block = 0;
+    size_t next_commit = 0;
+    bool stop = false;
+    const size_t result_window = std::min(
+        block_count,
+        worker_count > std::numeric_limits<size_t>::max() / 2
+            ? block_count
+            : worker_count * 2);
+    std::vector<ResultSlot> slots(result_window);
+
+    auto worker = [&]() {
+        while (true) {
+            size_t block = 0;
+            {
+                std::unique_lock<std::mutex> lock(scheduler_mutex);
+                scheduler_cv.wait(lock, [&] {
+                    return stop || next_block >= block_count ||
+                           next_block - next_commit < result_window;
+                });
+                if (stop || next_block >= block_count) {
+                    return;
+                }
+                block = next_block++;
+                ResultSlot& slot = slots[block % result_window];
+                slot.result.reset();
+                slot.failure = nullptr;
+                slot.ordinal = block;
+                slot.ready = false;
+            }
+            const size_t begin = block * block_size;
+            const size_t end = std::min(item_count, begin + block_size);
+            std::optional<Result> result;
+            std::exception_ptr failure;
+            try {
+                result.emplace(build(block, begin, end));
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            {
+                std::lock_guard<std::mutex> lock(scheduler_mutex);
+                ResultSlot& slot = slots[block % result_window];
+                if (result.has_value()) {
+                    slot.result.emplace(std::move(*result));
+                }
+                slot.failure = failure;
+                slot.ready = true;
+            }
+            scheduler_cv.notify_all();
+        }
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    try {
+        for (size_t i = 0; i < worker_count; ++i) {
+            workers.emplace_back(worker);
+        }
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lock(scheduler_mutex);
+            stop = true;
+        }
+        scheduler_cv.notify_all();
+        for (std::thread& thread : workers) {
+            thread.join();
+        }
+        throw;
+    }
+
+    std::exception_ptr ordered_failure;
+    for (size_t block = 0; block < block_count; ++block) {
+        std::optional<Result> result;
+        {
+            std::unique_lock<std::mutex> lock(scheduler_mutex);
+            scheduler_cv.wait(lock, [&] {
+                const ResultSlot& slot = slots[block % result_window];
+                return slot.ordinal == block && slot.ready;
+            });
+            ResultSlot& slot = slots[block % result_window];
+            if (slot.failure) {
+                ordered_failure = slot.failure;
+            } else {
+                result.emplace(std::move(*slot.result));
+                slot.result.reset();
+            }
+        }
+        if (ordered_failure) {
+            break;
+        }
+        const size_t begin = block * block_size;
+        const size_t end = std::min(item_count, begin + block_size);
+        try {
+            commit(block, begin, end, std::move(*result));
+        } catch (...) {
+            ordered_failure = std::current_exception();
+            break;
+        }
+        {
+            std::lock_guard<std::mutex> lock(scheduler_mutex);
+            next_commit = block + 1;
+        }
+        scheduler_cv.notify_all();
+    }
+    if (ordered_failure) {
+        std::lock_guard<std::mutex> lock(scheduler_mutex);
+        stop = true;
+    }
+    scheduler_cv.notify_all();
+    for (std::thread& thread : workers) {
+        thread.join();
+    }
+    if (ordered_failure) {
+        std::rethrow_exception(ordered_failure);
+    }
+}
+
+// A lazy cache remains demand-driven, but unrelated keys no longer serialize behind one global
+// miss lock. Construction is single-flight within a shard. Values live in separately allocated
+// immutable objects, so callers may retain the returned reference while a shard's map rehashes.
+template<class Key, class Value, size_t ShardCount = 256>
+class ShardedLazyCache {
+public:
+    explicit ShardedLazyCache(bool concurrent) : concurrent_(concurrent) {
+        static_assert(ShardCount > 0);
+    }
+
+    template<class Builder>
+    const Value& get_or_build(const Key& key, Builder&& builder) {
+        Shard& shard = shards_[std::hash<Key>{}(key) % ShardCount];
+        if (!concurrent_) {
+            auto cached = shard.values.find(key);
+            if (cached == shard.values.end()) {
+                cached = shard.values.emplace(
+                    key, std::make_unique<const Value>(builder())).first;
+                build_count_.fetch_add(1, std::memory_order_relaxed);
+            }
+            return *cached->second;
+        }
+        {
+            std::shared_lock<std::shared_mutex> lock(shard.mutex);
+            const auto cached = shard.values.find(key);
+            if (cached != shard.values.end()) {
+                return *cached->second;
+            }
+        }
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        auto cached = shard.values.find(key);
+        if (cached == shard.values.end()) {
+            cached = shard.values.emplace(
+                key, std::make_unique<const Value>(builder())).first;
+            build_count_.fetch_add(1, std::memory_order_relaxed);
+        }
+        return *cached->second;
+    }
+
+    size_t build_count() const {
+        return build_count_.load(std::memory_order_relaxed);
+    }
+
+private:
+    struct Shard {
+        std::shared_mutex mutex;
+        std::unordered_map<Key, std::unique_ptr<const Value>> values;
+    };
+
+    bool concurrent_;
+    std::atomic<size_t> build_count_{0};
+    std::array<Shard, ShardCount> shards_;
 };
 
 int run_convert(int argc, char** argv) {
@@ -1649,8 +1857,8 @@ int run_convert(int argc, char** argv) {
     // Only the one for the active mode is built. Both do the node-id-space validation on first
     // touch.
     std::unordered_map<uint64_t, std::string> hst_path_name;
-    std::unordered_map<int64_t, std::vector<std::pair<const std::string*, bool>>> node_hst_cache;
-    std::shared_mutex node_hst_cache_mutex;
+    ShardedLazyCache<int64_t, std::vector<std::pair<const std::string*, bool>>>
+        node_hst_cache(options.threads > 1);
     pathtally::PathLookup lookup;
 
     // Ledger-mode state. ledger_path_info covers every exon/body reference path by graph handle.
@@ -1728,8 +1936,7 @@ int run_convert(int argc, char** argv) {
         std::vector<ExactStep> exact_exon_steps;
         std::vector<ExactStep> exact_body_steps;
     };
-    std::unordered_map<int64_t, NodeLedger> node_ledger_cache;
-    std::shared_mutex node_ledger_cache_mutex;
+    ShardedLazyCache<int64_t, NodeLedger> node_ledger_cache(options.threads > 1);
     std::function<const NodeLedger&(int64_t)> node_ledger_of;
     pathtally::PathLookup ledger_lookup;
 
@@ -1741,41 +1948,26 @@ int run_convert(int argc, char** argv) {
             }
         });
         lookup = [&](int64_t node_id, const std::function<void(const std::string&, bool)>& emit) {
-            if (options.threads > 1) {
-                std::shared_lock<std::shared_mutex> lock(node_hst_cache_mutex);
-                const auto cached = node_hst_cache.find(node_id);
-                if (cached != node_hst_cache.end()) {
-                    for (const auto& [name_ptr, path_is_reverse] : cached->second) {
-                        emit(*name_ptr, path_is_reverse);
-                    }
-                    return;
-                }
-            }
-            std::unique_lock<std::shared_mutex> lock(node_hst_cache_mutex, std::defer_lock);
-            if (options.threads > 1) {
-                lock.lock();
-            }
-            auto cached = node_hst_cache.find(node_id);
-            if (cached == node_hst_cache.end()) {
+            const auto& entries = node_hst_cache.get_or_build(node_id, [&]() {
                 if (!graph.has_node(node_id)) {
                     throw std::runtime_error(
                         "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
                         " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
-                std::vector<std::pair<const std::string*, bool>> entries;
+                std::vector<std::pair<const std::string*, bool>> built;
                 const handlegraph::handle_t handle = graph.get_handle(node_id, false);
                 graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
                     const auto it =
                         hst_path_name.find(handlegraph::as_integer(graph.get_path_handle_of_step(step)));
                     if (it != hst_path_name.end()) {
-                        entries.emplace_back(&it->second,
-                                             graph.get_is_reverse(graph.get_handle_of_step(step)));
+                        built.emplace_back(&it->second,
+                                           graph.get_is_reverse(graph.get_handle_of_step(step)));
                     }
                     return true;
                 });
-                cached = node_hst_cache.emplace(node_id, std::move(entries)).first;
-            }
-            for (const auto& [name_ptr, path_is_reverse] : cached->second) {
+                return built;
+            });
+            for (const auto& [name_ptr, path_is_reverse] : entries) {
                 emit(*name_ptr, path_is_reverse);
             }
         };
@@ -1849,6 +2041,7 @@ int run_convert(int argc, char** argv) {
         });
 
         if (exact_ex50) {
+            const auto parent_geometry_started = std::chrono::steady_clock::now();
             std::map<std::string, std::vector<const path_identity::PathIdentityRow*>>
                 exon_rows_by_parent;
             std::map<std::string, std::vector<const path_identity::PathIdentityRow*>>
@@ -1860,6 +2053,13 @@ int run_convert(int argc, char** argv) {
                     body_rows_by_exon_parent[row.annotation.exon_unique_parent].push_back(&row);
                 }
             }
+            struct ParentTask {
+                const std::string* exon_parent = nullptr;
+                const std::vector<const path_identity::PathIdentityRow*>* exon_rows = nullptr;
+                const std::vector<const path_identity::PathIdentityRow*>* body_rows = nullptr;
+            };
+            std::vector<ParentTask> parent_tasks;
+            parent_tasks.reserve(exon_rows_by_parent.size());
             for (const auto& [exon_parent, exon_rows] : exon_rows_by_parent) {
                 const auto bodies = body_rows_by_exon_parent.find(exon_parent);
                 if (bodies == body_rows_by_exon_parent.end() || bodies->second.empty()) {
@@ -1867,122 +2067,211 @@ int run_convert(int argc, char** argv) {
                         "genefull_ex50pas requires a linked body path for exon Parent " +
                         exon_parent);
                 }
-                bool parent_body_unresolvable = false;
-                // Keep resolved geometry local to this exon Parent.  Positions only distinguish
-                // repeated body occurrences; ordinary exonic nodes have one unambiguous body
-                // occurrence and need no per-node storage.
-                std::vector<ExactEx50Model> parent_models;
-                for (const path_identity::PathIdentityRow* exon : exon_rows) {
-                    const handlegraph::path_handle_t exon_path =
-                        graph.get_path_handle(exon->vg_path_name);
-                    for (const path_identity::PathIdentityRow* body : bodies->second) {
-                        const handlegraph::path_handle_t body_path =
-                            graph.get_path_handle(body->vg_path_name);
-                        std::map<int64_t, std::vector<std::pair<bool, uint64_t>>> body_occurrences;
-                        graph.for_each_step_in_path(
-                            body_path, [&](const handlegraph::step_handle_t& step) {
-                                const handlegraph::handle_t handle = graph.get_handle_of_step(step);
-                                body_occurrences[graph.get_id(handle)].emplace_back(
-                                    graph.get_is_reverse(handle), graph.get_position_of_step(step));
-                            });
+                parent_tasks.push_back({&exon_parent, &exon_rows, &bodies->second});
+            }
 
-                        // A repeated node is safe only when the exon path fixes one body occurrence.
-                        // The body/exon orientation relation is global for a model, so test both
-                        // possible relations and retain it only when exactly one relation gives one
-                        // oriented occurrence for every shared exon step.  This chooses a uniquely
-                        // positioned occurrence; multiple consistent positions remain ambiguous.
-                        bool repeated_exonic_node = false;
-                        int compatible_relations = 0;
-                        bool selected_relation = true;
-                        std::map<int64_t, uint64_t> selected_positions;
-                        for (const bool same_orientation : {false, true}) {
-                            bool compatible = true;
-                            bool shared = false;
-                            graph.for_each_step_in_path(
-                                exon_path, [&](const handlegraph::step_handle_t& step) {
-                                    const handlegraph::handle_t handle = graph.get_handle_of_step(step);
-                                    const auto occurrences = body_occurrences.find(graph.get_id(handle));
-                                    if (occurrences == body_occurrences.end()) {
-                                        return true;
-                                    }
-                                    shared = true;
-                                    if (occurrences->second.size() > 1) {
-                                        repeated_exonic_node = true;
-                                    }
-                                    const bool exon_reverse = graph.get_is_reverse(handle);
-                                    const size_t matching = static_cast<size_t>(std::count_if(
-                                        occurrences->second.begin(), occurrences->second.end(),
-                                        [&](const auto& occurrence) {
-                                            return (exon_reverse == occurrence.first) == same_orientation;
-                                        }));
-                                    if (matching != 1) {
-                                        compatible = false;
-                                    }
-                                    return true;
-                                });
-                            if (shared && compatible) {
-                                ++compatible_relations;
-                                selected_relation = same_orientation;
-                                selected_positions.clear();
-                                graph.for_each_step_in_path(exon_path, [&](const handlegraph::step_handle_t& step) {
-                                    const handlegraph::handle_t handle = graph.get_handle_of_step(step);
-                                    const int64_t id = graph.get_id(handle);
-                                    const auto occurrences = body_occurrences.find(id);
-                                    if (occurrences != body_occurrences.end()) {
-                                        const bool exon_reverse = graph.get_is_reverse(handle);
-                                        for (const auto& occurrence : occurrences->second) {
-                                            if ((exon_reverse == occurrence.first) == same_orientation) {
-                                                if (occurrences->second.size() > 1) {
-                                                    selected_positions[id] = occurrence.second;
-                                                }
+            struct ParentBlockResult {
+                std::vector<ExactEx50Model> models;
+                std::vector<std::string> unresolvable_exon_parents;
+                std::vector<std::string> unresolvable_paths;
+                std::vector<uint32_t> unresolvable_targets;
+            };
+            // Keep enough dynamic blocks to absorb unequal Parent costs while capping scheduler
+            // overhead on whole-pangenome ledgers. A desired granularity of four blocks per
+            // requested worker also lets a chr20/21/22-sized run use a large host rather than
+            // stopping at one worker per fixed 32-Parent block.
+            constexpr size_t kMaxParentBlockSize = 32;
+            constexpr size_t kTargetBlocksPerWorker = 4;
+            const size_t desired_parent_blocks = parent_tasks.empty()
+                ? 0
+                : std::min(parent_tasks.size(),
+                           options.threads > std::numeric_limits<size_t>::max() /
+                                                     kTargetBlocksPerWorker
+                               ? parent_tasks.size()
+                               : options.threads * kTargetBlocksPerWorker);
+            const size_t parent_block_size = parent_tasks.empty()
+                ? 1
+                : std::min(kMaxParentBlockSize,
+                           1 + (parent_tasks.size() - 1) / desired_parent_blocks);
+            const size_t parent_block_count = parent_tasks.empty()
+                ? 0 : 1 + (parent_tasks.size() - 1) / parent_block_size;
+            const size_t parent_worker_count =
+                std::min(options.threads, parent_block_count);
+            parallel_transform_ordered_blocks(
+                parent_tasks.size(), options.threads, parent_block_size,
+                [&](size_t block, size_t begin, size_t end) {
+                    static_cast<void>(block);
+                    ParentBlockResult result;
+                    for (size_t task_index = begin; task_index < end; ++task_index) {
+                        const ParentTask& task = parent_tasks[task_index];
+                        const std::string& exon_parent = *task.exon_parent;
+                        bool parent_body_unresolvable = false;
+                        std::vector<ExactEx50Model> parent_models;
+                        std::vector<std::string> parent_unresolvable_paths;
+                        std::vector<uint32_t> parent_unresolvable_targets;
+                        // Keep resolved geometry local to this exon Parent. Positions only
+                        // distinguish repeated body occurrences; ordinary exonic nodes have one
+                        // unambiguous body occurrence and need no per-node storage.
+                        for (const path_identity::PathIdentityRow* exon : *task.exon_rows) {
+                            const handlegraph::path_handle_t exon_path =
+                                graph.get_path_handle(exon->vg_path_name);
+                            for (const path_identity::PathIdentityRow* body : *task.body_rows) {
+                                const handlegraph::path_handle_t body_path =
+                                    graph.get_path_handle(body->vg_path_name);
+                                std::map<int64_t, std::vector<std::pair<bool, uint64_t>>>
+                                    body_occurrences;
+                                graph.for_each_step_in_path(
+                                    body_path, [&](const handlegraph::step_handle_t& step) {
+                                        const handlegraph::handle_t handle =
+                                            graph.get_handle_of_step(step);
+                                        body_occurrences[graph.get_id(handle)].emplace_back(
+                                            graph.get_is_reverse(handle),
+                                            graph.get_position_of_step(step));
+                                    });
+
+                                // A repeated node is safe only when the exon path fixes one body
+                                // occurrence. Test both global body/exon orientation relations and
+                                // retain one only when every shared exon step has one oriented hit.
+                                bool repeated_exonic_node = false;
+                                int compatible_relations = 0;
+                                bool selected_relation = true;
+                                std::map<int64_t, uint64_t> selected_positions;
+                                for (const bool same_orientation : {false, true}) {
+                                    bool compatible = true;
+                                    bool shared = false;
+                                    graph.for_each_step_in_path(
+                                        exon_path, [&](const handlegraph::step_handle_t& step) {
+                                            const handlegraph::handle_t handle =
+                                                graph.get_handle_of_step(step);
+                                            const auto occurrences =
+                                                body_occurrences.find(graph.get_id(handle));
+                                            if (occurrences == body_occurrences.end()) {
+                                                return true;
                                             }
-                                        }
+                                            shared = true;
+                                            if (occurrences->second.size() > 1) {
+                                                repeated_exonic_node = true;
+                                            }
+                                            const bool exon_reverse = graph.get_is_reverse(handle);
+                                            const size_t matching = static_cast<size_t>(std::count_if(
+                                                occurrences->second.begin(), occurrences->second.end(),
+                                                [&](const auto& occurrence) {
+                                                    return (exon_reverse == occurrence.first) ==
+                                                           same_orientation;
+                                                }));
+                                            if (matching != 1) {
+                                                compatible = false;
+                                            }
+                                            return true;
+                                        });
+                                    if (shared && compatible) {
+                                        ++compatible_relations;
+                                        selected_relation = same_orientation;
+                                        selected_positions.clear();
+                                        graph.for_each_step_in_path(
+                                            exon_path,
+                                            [&](const handlegraph::step_handle_t& step) {
+                                                const handlegraph::handle_t handle =
+                                                    graph.get_handle_of_step(step);
+                                                const int64_t id = graph.get_id(handle);
+                                                const auto occurrences = body_occurrences.find(id);
+                                                if (occurrences != body_occurrences.end()) {
+                                                    const bool exon_reverse =
+                                                        graph.get_is_reverse(handle);
+                                                    for (const auto& occurrence :
+                                                         occurrences->second) {
+                                                        if ((exon_reverse == occurrence.first) ==
+                                                                same_orientation &&
+                                                            occurrences->second.size() > 1) {
+                                                            selected_positions[id] =
+                                                                occurrence.second;
+                                                        }
+                                                    }
+                                                }
+                                                return true;
+                                            });
                                     }
-                                    return true;
-                                });
+                                }
+                                const uint32_t target_id = std::as_const(t2g.target_ids).at(
+                                    exon->annotation.canonical_transcript);
+                                if (repeated_exonic_node && compatible_relations != 1) {
+                                    if (exon->annotation.gene_id != body->annotation.gene_id) {
+                                        throw std::runtime_error(
+                                            "refusing body-path degradation because linked Parent " +
+                                            exon_parent + " changes counted gene from " +
+                                            exon->annotation.gene_id + " to " +
+                                            body->annotation.gene_id);
+                                    }
+                                    parent_body_unresolvable = true;
+                                    parent_unresolvable_paths.push_back(body->vg_path_name);
+                                    parent_unresolvable_targets.push_back(target_id);
+                                } else if (compatible_relations == 0) {
+                                    throw std::runtime_error(
+                                        "genefull_ex50pas cannot establish body/exon orientation "
+                                        "for linked paths " + body->vg_path_name + " and " +
+                                        exon->vg_path_name);
+                                } else {
+                                    if (exon->annotation.gene_id != body->annotation.gene_id) {
+                                        throw std::runtime_error(
+                                            "path identity ledger body Parent " +
+                                            body->annotation.unique_parent +
+                                            " changes counted gene from " +
+                                            exon->annotation.gene_id + " to " +
+                                            body->annotation.gene_id);
+                                    }
+                                    parent_models.push_back(
+                                        {exon, body, handlegraph::as_integer(exon_path),
+                                         handlegraph::as_integer(body_path), target_id,
+                                         selected_relation, std::move(selected_positions)});
+                                }
                             }
                         }
-                        if (repeated_exonic_node && compatible_relations != 1) {
-                            if (exon->annotation.gene_id != body->annotation.gene_id) {
-                                throw std::runtime_error(
-                                    "refusing body-path degradation because linked Parent " +
-                                    exon_parent + " changes counted gene from " +
-                                    exon->annotation.gene_id + " to " + body->annotation.gene_id);
-                            }
-                            parent_body_unresolvable = true;
-                            body_unresolvable_paths.insert(body->vg_path_name);
-                            body_unresolvable_targets.insert(
-                                t2g.target_ids.at(exon->annotation.canonical_transcript));
-                        } else if (compatible_relations == 0) {
-                            throw std::runtime_error(
-                                "genefull_ex50pas cannot establish body/exon orientation for linked paths " +
-                                body->vg_path_name + " and " + exon->vg_path_name);
+                        if (parent_body_unresolvable) {
+                            result.unresolvable_exon_parents.push_back(exon_parent);
+                            result.unresolvable_paths.insert(
+                                result.unresolvable_paths.end(),
+                                std::make_move_iterator(parent_unresolvable_paths.begin()),
+                                std::make_move_iterator(parent_unresolvable_paths.end()));
+                            result.unresolvable_targets.insert(
+                                result.unresolvable_targets.end(),
+                                parent_unresolvable_targets.begin(),
+                                parent_unresolvable_targets.end());
                         } else {
-                            if (exon->annotation.gene_id != body->annotation.gene_id) {
-                                throw std::runtime_error(
-                                    "path identity ledger body Parent " +
-                                    body->annotation.unique_parent +
-                                    " changes counted gene from " + exon->annotation.gene_id +
-                                    " to " + body->annotation.gene_id);
-                            }
-                            parent_models.push_back(
-                                {exon, body, handlegraph::as_integer(exon_path),
-                                 handlegraph::as_integer(body_path),
-                                 t2g.target_ids.at(exon->annotation.canonical_transcript),
-                                 selected_relation, std::move(selected_positions)});
+                            result.models.insert(
+                                result.models.end(),
+                                std::make_move_iterator(parent_models.begin()),
+                                std::make_move_iterator(parent_models.end()));
                         }
                     }
-                }
-                if (parent_body_unresolvable) {
-                    body_unresolvable_exon_parents.insert(exon_parent);
-                    continue;
-                }
-                for (ExactEx50Model& model : parent_models) {
-                    const size_t model_id = exact_ex50_models.size();
-                    exact_ex50_models_by_body_path[model.body_path_handle].push_back(model_id);
-                    exact_ex50_models.push_back(std::move(model));
-                }
-            }
+                    return result;
+                },
+                [&](size_t block, size_t begin, size_t end, ParentBlockResult result) {
+                    static_cast<void>(block);
+                    static_cast<void>(begin);
+                    static_cast<void>(end);
+                    // Stable block reduction preserves the old lexical-Parent/exon/body model
+                    // numbering even when later blocks finish first.
+                    body_unresolvable_exon_parents.insert(
+                        result.unresolvable_exon_parents.begin(),
+                        result.unresolvable_exon_parents.end());
+                    body_unresolvable_paths.insert(result.unresolvable_paths.begin(),
+                                                   result.unresolvable_paths.end());
+                    body_unresolvable_targets.insert(result.unresolvable_targets.begin(),
+                                                     result.unresolvable_targets.end());
+                    for (ExactEx50Model& model : result.models) {
+                        const size_t model_id = exact_ex50_models.size();
+                        exact_ex50_models_by_body_path[model.body_path_handle].push_back(model_id);
+                        exact_ex50_models.push_back(std::move(model));
+                    }
+                });
+            const double parent_geometry_seconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - parent_geometry_started).count();
+            std::cerr << "panCollapse: initialization: phase=exact_parent_models workers="
+                      << parent_worker_count << " parents=" << parent_tasks.size()
+                      << " blocks=" << parent_block_count
+                      << " models=" << exact_ex50_models.size()
+                      << " degraded_parents=" << body_unresolvable_exon_parents.size()
+                      << " seconds=" << parent_geometry_seconds << '\n';
 
             // This remains a fail-closed completeness invariant for accidental ledger omissions.
             // A Parent marked above is an observed body-geometry failure, not a missing body row;
@@ -2012,10 +2301,21 @@ int run_convert(int argc, char** argv) {
             }
         }
 
+        const auto splice_geometry_started = std::chrono::steady_clock::now();
         size_t d63_splice_target_edges_evaluated = 0;
         size_t d63_splice_target_edges_owned = 0;
         size_t d63_splice_target_edges_fragment_only = 0;
         size_t d63_splice_target_edges_adjacent_vetoed = 0;
+
+        using GeometryEdge = std::pair<int64_t, int64_t>;
+        struct GeometryResult {
+            std::vector<std::pair<GeometryEdge, uint32_t>> splice_owners;
+            std::vector<pathtally::TranscriptSpan> spans;
+            size_t evaluated = 0;
+            size_t owned = 0;
+            size_t fragment_only = 0;
+            size_t adjacent_vetoed = 0;
+        };
 
         // Shared geometry worker. Legacy D060 records exon spans against a pooled gene body. D063
         // omits spans and derives splice ownership by comparing one canonical transcript's exon
@@ -2023,13 +2323,13 @@ int run_convert(int argc, char** argv) {
         auto record_geometry = [&](const std::vector<handlegraph::path_handle_t>& exon_paths,
                                    const std::vector<handlegraph::path_handle_t>& body_paths,
                                    const std::optional<uint32_t>& legacy_gene_idx) {
+            GeometryResult result;
             if (!legacy_gene_idx.has_value()) {
-                using Edge = std::pair<int64_t, int64_t>;
-                std::unordered_set<Edge, pathtally::NodePairHash> exon_edges;
+                std::unordered_set<GeometryEdge, pathtally::NodePairHash> exon_edges;
                 std::optional<uint32_t> target_id;
                 for (const handlegraph::path_handle_t& exon_path : exon_paths) {
-                    const uint32_t path_target =
-                        exon_name_transcript.at(graph.get_path_name(exon_path));
+                    const uint32_t path_target = std::as_const(exon_name_transcript).at(
+                        graph.get_path_name(exon_path));
                     if (!target_id.has_value()) {
                         target_id = path_target;
                     } else if (*target_id != path_target) {
@@ -2049,7 +2349,7 @@ int run_convert(int argc, char** argv) {
                     }
                 }
                 if (!target_id.has_value()) {
-                    return;
+                    return result;
                 }
 
                 // A degraded Parent cannot contribute body geometry, but its exon path remains
@@ -2060,17 +2360,18 @@ int run_convert(int argc, char** argv) {
                 // For the fragment-only audit, record whether both endpoints ever coexist on one
                 // raw body path. Index each candidate edge by its lower endpoint so each body path
                 // only probes candidates incident on nodes it actually contains.
-                std::unordered_map<int64_t, std::vector<Edge>> exon_edges_by_first;
-                for (const Edge& edge : exon_edges) {
+                std::unordered_map<int64_t, std::vector<GeometryEdge>> exon_edges_by_first;
+                for (const GeometryEdge& edge : exon_edges) {
                     exon_edges_by_first[edge.first].push_back(edge);
                 }
 
                 pathtally::BodyGeometryIndex body_geometry;
-                std::unordered_set<Edge, pathtally::NodePairHash> same_path_endpoint_edges;
+                std::unordered_set<GeometryEdge, pathtally::NodePairHash>
+                    same_path_endpoint_edges;
                 bool has_usable_body_path = false;
                 for (const handlegraph::path_handle_t& body_path : body_paths) {
                     if (production_identity) {
-                        const auto& annotation = identity_ledger->rows_by_path.at(
+                        const auto& annotation = std::as_const(identity_ledger->rows_by_path).at(
                             graph.get_path_name(body_path)).annotation;
                         if (body_unresolvable_exon_parents.count(
                                 annotation.exon_unique_parent) != 0) {
@@ -2094,7 +2395,7 @@ int run_convert(int argc, char** argv) {
                         if (candidates == exon_edges_by_first.end()) {
                             continue;
                         }
-                        for (const Edge& edge : candidates->second) {
+                        for (const GeometryEdge& edge : candidates->second) {
                             if (path_nodes.count(edge.second) != 0) {
                                 same_path_endpoint_edges.insert(edge);
                             }
@@ -2103,31 +2404,31 @@ int run_convert(int argc, char** argv) {
                 }
 
                 if (degraded_parent && !has_usable_body_path) {
-                    for (const Edge& edge : exon_edges) {
-                        ++d63_splice_target_edges_evaluated;
-                        ++d63_splice_target_edges_owned;
-                        splice_edges[edge].insert(*target_id);
+                    for (const GeometryEdge& edge : exon_edges) {
+                        ++result.evaluated;
+                        ++result.owned;
+                        result.splice_owners.emplace_back(edge, *target_id);
                     }
-                    return;
+                    return result;
                 }
 
-                for (const Edge& edge : exon_edges) {
-                    ++d63_splice_target_edges_evaluated;
+                for (const GeometryEdge& edge : exon_edges) {
+                    ++result.evaluated;
                     if (body_geometry.adjacent_edges.count(edge) != 0) {
-                        ++d63_splice_target_edges_adjacent_vetoed;
+                        ++result.adjacent_vetoed;
                         continue;
                     }
                     if (!pathtally::body_geometry_owns_splice_edge(
                             body_geometry, edge.first, edge.second)) {
                         continue;
                     }
-                    ++d63_splice_target_edges_owned;
+                    ++result.owned;
                     if (same_path_endpoint_edges.count(edge) == 0) {
-                        ++d63_splice_target_edges_fragment_only;
+                        ++result.fragment_only;
                     }
-                    splice_edges[edge].insert(*target_id);
+                    result.splice_owners.emplace_back(edge, *target_id);
                 }
-                return;
+                return result;
             }
 
             // Legacy D060 deliberately retains its historical numeric span/edge behavior.
@@ -2140,14 +2441,14 @@ int run_convert(int argc, char** argv) {
             std::vector<int64_t> body_sorted(body_nodes.begin(), body_nodes.end());
             std::sort(body_sorted.begin(), body_sorted.end());
 
-            std::vector<pathtally::TranscriptSpan>& spans = transcript_spans[*legacy_gene_idx];
-            spans.reserve(exon_paths.size());
+            result.spans.reserve(exon_paths.size());
             for (const handlegraph::path_handle_t& exon_path : exon_paths) {
                 std::vector<int64_t> node_ids;
                 graph.for_each_step_in_path(exon_path, [&](const handlegraph::step_handle_t& step) {
                     node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
                 });
-                const uint32_t target_id = exon_name_transcript.at(graph.get_path_name(exon_path));
+                const uint32_t target_id = std::as_const(exon_name_transcript).at(
+                    graph.get_path_name(exon_path));
 
                 int64_t lo = std::numeric_limits<int64_t>::max();
                 int64_t hi = std::numeric_limits<int64_t>::min();
@@ -2158,7 +2459,7 @@ int run_convert(int argc, char** argv) {
                     }
                 }
                 if (lo <= hi) {
-                    spans.push_back({lo, hi, target_id});
+                    result.spans.push_back({lo, hi, target_id});
                 }
 
                 // D061: a consecutive pair on this exon path is one of the transcript's own splice
@@ -2174,20 +2475,81 @@ int run_convert(int argc, char** argv) {
                         std::upper_bound(body_sorted.begin(), body_sorted.end(), edge_lo);
                     const bool is_splice = between != body_sorted.end() && *between < edge_hi;
                     if (is_splice) {
-                        splice_edges[edge].insert(target_id);
+                        result.splice_owners.emplace_back(edge, target_id);
                     }
                 }
             }
+            return result;
         };
 
+        struct GeometryTask {
+            uint32_t key = 0;
+            const std::vector<handlegraph::path_handle_t>* exon_paths = nullptr;
+            const std::vector<handlegraph::path_handle_t>* body_paths = nullptr;
+            std::optional<uint32_t> legacy_gene_idx;
+        };
+        std::vector<GeometryTask> geometry_tasks;
         if (body_t2g.transcript_specific) {
+            geometry_tasks.reserve(transcript_exon_paths.size());
             for (const auto& [target_id, exon_paths] : transcript_exon_paths) {
                 const auto body = transcript_body_paths.find(target_id);
-                const std::vector<handlegraph::path_handle_t> no_body;
-                record_geometry(exon_paths,
-                                body == transcript_body_paths.end() ? no_body : body->second,
-                                std::nullopt);
+                geometry_tasks.push_back(
+                    {target_id, &exon_paths,
+                     body == transcript_body_paths.end() ? nullptr : &body->second,
+                     std::nullopt});
             }
+        } else {
+            geometry_tasks.reserve(gene_exon_paths.size());
+            for (const auto& [gene_idx, exon_paths] : gene_exon_paths) {
+                const auto body = gene_body_paths.find(gene_idx);
+                geometry_tasks.push_back(
+                    {gene_idx, &exon_paths,
+                     body == gene_body_paths.end() ? nullptr : &body->second,
+                     gene_idx});
+            }
+        }
+        std::sort(geometry_tasks.begin(), geometry_tasks.end(),
+                  [](const GeometryTask& a, const GeometryTask& b) {
+                      return a.key < b.key;
+                  });
+        const size_t geometry_worker_count =
+            std::min(options.threads, geometry_tasks.size());
+        parallel_transform_ordered_blocks(
+            geometry_tasks.size(), options.threads, /*block_size=*/1,
+            [&](size_t block, size_t begin, size_t end) {
+                static_cast<void>(block);
+                static_cast<void>(end);
+                const GeometryTask& task = geometry_tasks[begin];
+                const std::vector<handlegraph::path_handle_t> no_body;
+                return record_geometry(
+                    *task.exon_paths, task.body_paths == nullptr ? no_body : *task.body_paths,
+                    task.legacy_gene_idx);
+            },
+            [&](size_t block, size_t begin, size_t end, GeometryResult result) {
+                static_cast<void>(block);
+                static_cast<void>(end);
+                const GeometryTask& task = geometry_tasks[begin];
+                // Results commit by stable numeric target/gene ID. Expensive graph traversal is
+                // lock-free; only this reduction mutates shared splice/counter structures.
+                if (task.legacy_gene_idx.has_value()) {
+                    transcript_spans[*task.legacy_gene_idx] = std::move(result.spans);
+                }
+                for (const auto& [edge, target_id] : result.splice_owners) {
+                    splice_edges[edge].insert(target_id);
+                }
+                d63_splice_target_edges_evaluated += result.evaluated;
+                d63_splice_target_edges_owned += result.owned;
+                d63_splice_target_edges_fragment_only += result.fragment_only;
+                d63_splice_target_edges_adjacent_vetoed += result.adjacent_vetoed;
+            });
+        const double splice_geometry_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - splice_geometry_started).count();
+        std::cerr << "panCollapse: initialization: phase=splice_geometry workers="
+                  << geometry_worker_count << " units=" << geometry_tasks.size()
+                  << " owned_edges=" << d63_splice_target_edges_owned
+                  << " seconds=" << splice_geometry_seconds << '\n';
+
+        if (body_t2g.transcript_specific) {
             std::cerr << "panCollapse: transcript-body splice geometry: evaluated_target_edges="
                       << d63_splice_target_edges_evaluated
                       << " owned_target_edges=" << d63_splice_target_edges_owned
@@ -2203,29 +2565,10 @@ int run_convert(int argc, char** argv) {
                               << " (repeated_exonic_node)\n";
                 }
             }
-        } else {
-            for (const auto& [gene_idx, exon_paths] : gene_exon_paths) {
-                const auto body = gene_body_paths.find(gene_idx);
-                const std::vector<handlegraph::path_handle_t> no_body;
-                record_geometry(exon_paths, body == gene_body_paths.end() ? no_body : body->second,
-                                gene_idx);
-            }
         }
 
         node_ledger_of = [&](int64_t node_id) -> const NodeLedger& {
-            if (options.threads > 1) {
-                std::shared_lock<std::shared_mutex> lock(node_ledger_cache_mutex);
-                const auto cached = node_ledger_cache.find(node_id);
-                if (cached != node_ledger_cache.end()) {
-                    return cached->second;
-                }
-            }
-            std::unique_lock<std::shared_mutex> lock(node_ledger_cache_mutex, std::defer_lock);
-            if (options.threads > 1) {
-                lock.lock();
-            }
-            auto cached = node_ledger_cache.find(node_id);
-            if (cached == node_ledger_cache.end()) {
+            return node_ledger_cache.get_or_build(node_id, [&]() {
                 if (!graph.has_node(node_id)) {
                     throw std::runtime_error(
                         "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
@@ -2287,9 +2630,8 @@ int run_convert(int argc, char** argv) {
                           by_path_handle);
                 std::sort(nl.exact_body_steps.begin(), nl.exact_body_steps.end(),
                           by_path_handle);
-                cached = node_ledger_cache.emplace(node_id, std::move(nl)).first;
-            }
-            return cached->second;
+                return nl;
+            });
         };
         ledger_lookup = [&](int64_t node_id, const std::function<void(const std::string&, bool)>& emit) {
             for (const auto& [name_ptr, path_is_reverse] : node_ledger_of(node_id).ref_paths) {
@@ -2344,8 +2686,8 @@ int run_convert(int argc, char** argv) {
     };
 
     using ExactEdge = std::tuple<int64_t, bool, int64_t, bool>;
-    std::map<uint64_t, std::set<ExactEdge>> exact_exon_edges;
-    std::shared_mutex exact_exon_edges_mutex;
+    ShardedLazyCache<uint64_t, std::set<ExactEdge>>
+        exact_exon_edges(options.threads > 1);
 
     auto exact_step_range = [](const std::vector<NodeLedger::ExactStep>& steps,
                                uint64_t path_handle) {
@@ -2363,22 +2705,10 @@ int run_convert(int argc, char** argv) {
     };
 
     auto exon_edges_for = [&](const ExactEx50Model& model) -> const std::set<ExactEdge>& {
-        if (options.threads > 1) {
-            std::shared_lock<std::shared_mutex> lock(exact_exon_edges_mutex);
-            const auto cached = exact_exon_edges.find(model.exon_path_handle);
-            if (cached != exact_exon_edges.end()) {
-                return cached->second;
-            }
-        }
-        std::unique_lock<std::shared_mutex> lock(exact_exon_edges_mutex, std::defer_lock);
-        if (options.threads > 1) {
-            lock.lock();
-        }
-        auto cached = exact_exon_edges.find(model.exon_path_handle);
-        if (cached == exact_exon_edges.end()) {
-            auto& edges = exact_exon_edges[model.exon_path_handle];
+        return exact_exon_edges.get_or_build(model.exon_path_handle, [&]() {
+            std::set<ExactEdge> edges;
             const handlegraph::path_handle_t exon_path =
-                graph.get_path_handle(model.exon->vg_path_name);
+                handlegraph::as_path_handle(model.exon_path_handle);
             std::optional<std::pair<int64_t, bool>> previous;
             graph.for_each_step_in_path(
                 exon_path, [&](const handlegraph::step_handle_t& step) {
@@ -2394,9 +2724,8 @@ int run_convert(int argc, char** argv) {
                     }
                     previous = current;
                 });
-            cached = exact_exon_edges.find(model.exon_path_handle);
-        }
-        return cached->second;
+            return edges;
+        });
     };
 
     auto body_exon_orientation_same = [&](size_t model_id) {
@@ -3741,6 +4070,11 @@ int run_convert(int argc, char** argv) {
               << " input_read_groups=" << input_read_groups
               << " groups_per_second="
               << (processing_seconds > 0.0 ? input_read_groups / processing_seconds : 0.0)
+              << " node_cache_entries="
+              << (options.count_mode == pathtally::CountMode::Score
+                      ? node_hst_cache.build_count()
+                      : node_ledger_cache.build_count())
+              << " exact_exon_edge_cache_entries=" << exact_exon_edges.build_count()
               << '\n';
 
     rad_writer.finalize();

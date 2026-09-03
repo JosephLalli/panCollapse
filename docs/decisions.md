@@ -1758,6 +1758,40 @@ existing biological fixtures plus cross-thread byte-identity and bounded-queue g
 19.88 s for v0.9.0 with one worker, 2.68 s with eight, and 1.83 s with sixteen. This establishes
 the targeted hot-path and threading gains, but is not a whole-pangenome projection.
 
+### D074 — Parallelize exact initialization without eager cache materialization
+
+**Decision source:** User, 2026-09-03 (asked to assign workers to blocks of genes while building
+the initialization cache).
+
+**Decision:** `--threads N` also governs the two expensive initialization barriers. Exact model
+construction is divided into adaptive contiguous blocks of lexically ordered exon Parents, with a
+maximum block size of 32 and a desired scheduling granularity of four blocks per requested worker
+(integer rounding generally yields about two to four). After every Parent result is committed,
+splice geometry is divided by canonical target in production or gene in the legacy compatibility
+path. The Parent barrier must complete before splice ownership begins, because target geometry
+depends on the complete degraded-Parent set.
+
+Workers read the already-deserialized XG and frozen ledger/catalog maps but return private models,
+degradation records, edges, spans, and counters. One coordinator reduces them in Parent or numeric
+target/gene order through at most `2 * effective_workers` in-flight blocks. Model IDs therefore
+retain their v0.8.2 lexical Parent/exon/body order, errors replay from the lowest failing block, and
+an initialization error occurs before an output directory is committed. This bounds temporary
+parallel result storage by worker count rather than total gene count.
+
+The score-node, ledger-node, and exact-exon-edge caches remain lazy. Each uses 256 shards with a
+separate read/write lock and stores each completed value in an independently allocated immutable
+object, so unrelated misses can build concurrently and references survive map rehashing. This
+choice avoids an eager whole-XG cache and adds no cache file or external-sort I/O. Concurrent XG
+path access is supported by inspection and Helgrind testing of the pinned implementation, not by an
+upstream portable thread-safety guarantee; changing the VG/XG revision requires a new audit.
+
+**Bounded evidence:** The 512-Parent fixture in
+`docs/research/v090-deterministic-parallelism.md` has 32 exon and 32 body paths per Parent (524,288
+exact models). Median Parent construction fell from 4.048 s at one worker to 0.116 s at 64 (34.8x),
+and total initialization fell from 4.848 s at one worker to 0.931 s at 32 (5.21x). The 32-worker
+candidate completed in 1.26 s versus 6.51 s for v0.8.2, with identical RAD, summary, and tx2gene
+bytes. This synthetic result is not a chr20-22 or whole-pangenome runtime/RAM guarantee.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

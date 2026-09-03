@@ -9,19 +9,22 @@ performance work as a 0.9.0 feature release. Work is isolated on branch
 untouched.
 
 The candidate combines sparse repeated-body geometry, removal of unused transcript-specific legacy
-passes, exact-state consolidation/prefiltering, cached XG lookups, and bounded ordinal-preserving
-read-group workers behind `--threads N`. Normal typed-union BAM and the five-point exact score
-window remain the production evidence surface; no alignment, index, Parent, or evidence semantics
-changed.
+passes, exact-state consolidation/prefiltering, adaptive Parent/target initialization workers,
+256-way sharded lazy XG lookup caches, and bounded ordinal-preserving read-group workers behind
+`--threads N`. Normal typed-union BAM and the five-point exact score window remain the production
+evidence surface; no alignment, index, Parent, or evidence semantics changed.
 
-- The optimized build passes 127/127 CTests. The new exact-mode gate requires byte-identical RAD,
+- The optimized build passes 128/128 CTests. The exact-mode gate requires byte-identical RAD,
   BAM, summary, tx2gene, and debug artifacts at one, two, four, and eight workers, including forced
   one-byte RAD chunks. An independent score-mode gate proves default/one/eight-worker artifact
-  identity. Zero and non-integer thread counts fail, and a recurrent closed read name still fails
-  without committed partial output under eight workers.
-- Helgrind completed the exact eight-worker fixture with no reported race diagnostics. The local
-  ThreadSanitizer runtime could not start because it rejected the host address layout, so it is not
-  counted as a passing code check.
+  identity. A generated 64-Parent/64-target gate proves production Parent/target and legacy
+  multi-gene initialization actually use eight workers, sharded cache misses remain deterministic,
+  and lexical-first parallel failures create no partial output. Zero and non-integer thread counts
+  fail, and a recurrent closed read name still fails without committed partial output under eight
+  workers.
+- Helgrind completed the generated exact eight-worker initialization/read fixture with zero error
+  contexts. The local ThreadSanitizer runtime could not start because it rejected the host address
+  layout, so it is not counted as a passing code check.
 - On the bounded adversarial 2,000-model, 5,000-group exact fixture, median wall time fell from
   24.86 s in v0.8.2 to 19.88 s with one v0.9.0 worker, 2.68 s with eight, and 1.83 s with sixteen:
   1.25x, 9.28x, and 13.58x faster than v0.8.2, respectively. RAD and summary hashes match v0.8.2.
@@ -29,12 +32,18 @@ changed.
   dominated; the default therefore remains one. Full inputs, replicates, hashes, and interpretation
   limits are recorded in
   [`docs/research/v090-deterministic-parallelism.md`](docs/research/v090-deterministic-parallelism.md).
+- On a separate 512-Parent startup fixture with 32 exon and 32 body paths per Parent (524,288
+  exact models), the Parent phase median fell from 4.048 s at one worker to 0.116 s at 64 (34.8x).
+  Total initialization was best at 32 workers: 0.931 s versus 4.848 s at one (5.21x). Median wall
+  time was 1.26 s at 32 workers versus 6.51 s for v0.8.2 (5.17x), while RAD, summary, and tx2gene
+  bytes matched. The ordered initialization result window is capped at twice the effective worker
+  count; lazy caches remain demand-driven and add no persistent or spill I/O.
 - The local runtime image `josephlalli/pancollapse:v0.9.0` has immutable image ID
-  `sha256:f7a73b5bd462e509a8aada9d6bff0ce5335098296a3d424e1e07857cb9cafd54`, OCI version label
-  `0.9.0`, and size 156,786,291 bytes. It reports `panCollapse 0.9.0`; an exact eight-worker
+  `sha256:22302c7617874f2259936dc1ad4d0797fb42646baecd1e83d1b04870c481d332`, OCI version label
+  `0.9.0`, and size 156,843,635 bytes. It reports `panCollapse 0.9.0`; an exact eight-worker
   container smoke run produced the host fixture's RAD and summary bytes and passed BAM quickcheck.
   The corresponding unstripped optimized executable SHA-256 is
-  `274313d1410076a549237e69a4abf62f410d7c7bf8faeea21fc154c501ce667e`.
+  `a2e157278871d96bebe7a42d6f6213885e5ffdd053696e0558f7c528ebc4bc72`.
 
 These bounded results establish the targeted algorithmic and parallel gains, not chr20-22 or
 whole-pangenome wall time, peak RAM, or the best worker count on a production graph. The next
