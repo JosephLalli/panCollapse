@@ -107,9 +107,11 @@ A tiny fixture must prove:
 4. the final cell-by-gene matrix matches expected UMI counts;
 5. RAD `cblen`/`ulen` match the configured lengths (Phase 2: 16, 12);
 6. no USA/splicing-state rows;
-7. Phase 2 uses one thread; D045 defers multithreading; any future mode must still prove
-   byte-identical output;
-8. streaming-to-disk framing (chunk headers and file-level `num_chunks` seek-and-backpatched
+7. `--threads 1`, `2`, `4`, and `8` produce byte-identical RAD, BAM, summary, tx2gene, and debug
+   artifacts; zero or malformed worker counts fail clearly;
+8. a completed name recurring while earlier groups remain in flight still fails, and queued plus
+   completed-but-unwritten work remains bounded behind a slow early ordinal;
+9. streaming-to-disk framing (chunk headers and file-level `num_chunks` seek-and-backpatched
    to their final values, D049) decodes through the supported libradicl/alevin-fry path,
    including a forced multi-chunk split.
 

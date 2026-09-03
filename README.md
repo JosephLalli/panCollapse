@@ -53,6 +53,7 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --out-dir out
                     [--count-mode score|gene|genefull|genefull_exonoverintron|genefull_ex50pas]
                     [--body-t2g body.t2g]
                     [--bam-out reads.bam] [--bam-multigene omit|first|all]
+                    [--threads N]
                     [--no-ex50-score-window]
 ```
 
@@ -88,6 +89,12 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --out-dir out
   quality-adjusted mapping.
 - `--molecule-identity-failures skip|fail` — how to treat reads whose name has a missing,
   malformed, or wrong-length CB/UMI/CY/UY field (default `skip`, counted in the summary).
+- `--threads N` — number of complete read-group workers (default `1`). One parser owns GAMP
+  grouping and recurrence validation, and one ordered writer preserves original GAMP order.
+  `N` must be positive. Queued groups and worker scratch grow with `N`; lightweight groups can be
+  faster at the default because scheduling has a cost. Start with 8 or 16 on a bounded
+  representative slice, then increase only while measured throughput improves. Supported thread
+  counts produce byte-identical persisted artifacts.
 - `--strand both|forward|reverse` — target-relative orientation filter (default `both`, no
   filtering). `forward` keeps only targets the read aligns to in the same (sense) orientation;
   `reverse` keeps only antisense targets. Reads left with no matching target emit no record and
@@ -151,6 +158,10 @@ existing RAD Unique policy and bytes are unchanged.
   barcode correction. Genes come from the graph, not a linear reference. See
   [`docs/bam-export.md`](docs/bam-export.md).
 
+Initialization time, processing time, effective group throughput, and periodic progress are
+reported on stderr only. The bounded v0.9 scaling evidence and its interpretation limits are in
+[`docs/research/v090-deterministic-parallelism.md`](docs/research/v090-deterministic-parallelism.md).
+
 ## Example
 
 ```sh
@@ -167,7 +178,7 @@ alevin-fry quant -i pl -m out/tx2gene.tsv -o quant -r cr-like --use-mtx
 
 ## Docker
 
-The current runtime image is built locally as `josephlalli/pancollapse:v0.8.2`;
+The current runtime image is built locally as `josephlalli/pancollapse:v0.9.0`;
 publish that tag before using it from a host that does not already have the
 validated local image. It bundles the panCollapse binary with the exact
 shared-library closure it was built against, so it does not need vg installed
@@ -177,14 +188,14 @@ pipeline steps). Mount your inputs and an output directory:
 ```sh
 docker run --rm \
   -v "$PWD":/work \
-  josephlalli/pancollapse:v0.8.2 convert \
+  josephlalli/pancollapse:v0.9.0 convert \
   --gamp /work/reads.gamp --xg /work/graph.spliced.xg \
   --path-identity-ledger /work/path_identity_ledger.tsv --out-dir /work/out
 ```
 
 It also reads a GAMP stream on stdin (`--gamp -`). To build the image locally after compiling
 the binary, run [`scripts/build-docker-image.sh`](scripts/build-docker-image.sh), which stages
-the binary and its library closure and tags `josephlalli/pancollapse:v0.8.2`.
+the binary and its library closure and tags `josephlalli/pancollapse:v0.9.0`.
 
 ## How it works
 

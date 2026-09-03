@@ -177,6 +177,26 @@ add_test(NAME pathtally_bam_rad_identical
 set_tests_properties(pathtally_bam_rad_identical PROPERTIES LABELS "vg;pathtally;bam"
   FIXTURES_REQUIRED "pathtally_bam_out;pathtally_smoke_out")
 
+# Score mode takes the legacy node_hst_cache path (separate from exact Ex50's node_ledger_cache).
+# Hold output options stable, force chunk merging, and snapshot default/1/8 worker results before
+# byte-comparing every persisted artifact that score mode emits.
+set(PT_SCORE_THREADS_DIR "${CMAKE_CURRENT_BINARY_DIR}/pathtally_score_thread_determinism_work")
+add_test(NAME pathtally_score_thread_determinism_setup
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${PT_SCORE_THREADS_DIR}")
+set_tests_properties(pathtally_score_thread_determinism_setup PROPERTIES
+  LABELS "vg;pathtally;score;threads"
+  FIXTURES_REQUIRED pathtally_smoke_inputs
+  FIXTURES_SETUP pathtally_score_thread_determinism_dir)
+
+add_test(NAME pathtally_score_thread_determinism
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/score_thread_determinism.sh"
+    "$<TARGET_FILE:panCollapse>" "${PT_SMOKE_DIR}/reads.gamp" "${PT_SMOKE_DIR}/graph.xg"
+    "${PT_FIX}/t2g.tsv" "${PT_SCORE_THREADS_DIR}")
+set_tests_properties(pathtally_score_thread_determinism PROPERTIES
+  LABELS "vg;pathtally;score;threads;multichunk;bam"
+  ENVIRONMENT "PANCOLLAPSE_MAX_CHUNK_BYTES=1"
+  FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_score_thread_determinism_dir")
+
 add_test(NAME pathtally_bam_parity
   COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/pathtally_bam_verify.py"
     "${PT_SMOKE_DIR}/out_bam/reads.bam" "${PT_FIX}/reads.gamp.json" "${PT_SMOKE_DIR}/paths.gfa"
@@ -381,6 +401,17 @@ add_test(NAME pathtally_recur_no_partial
     --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' --out-dir '${PT_SMOKE_DIR}/recur_no_partial_out' \
     && test ! -f '${PT_SMOKE_DIR}/recur_no_partial_out/map.rad'")
 set_tests_properties(pathtally_recur_no_partial PROPERTIES LABELS "vg;pathtally;grouping"
+  FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_recur_inputs")
+
+# Recurrence detection must remain fail-closed after records are dispatched to workers.
+add_test(NAME pathtally_recur_threaded_no_partial
+  COMMAND /bin/sh -c "! '$<TARGET_FILE:panCollapse>' convert \
+    --gamp '${PT_SMOKE_DIR}/reads_recur.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' \
+    --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' --threads 8 \
+    --out-dir '${PT_SMOKE_DIR}/recur_threaded_no_partial_out' \
+    && test ! -f '${PT_SMOKE_DIR}/recur_threaded_no_partial_out/map.rad'")
+set_tests_properties(pathtally_recur_threaded_no_partial PROPERTIES
+  LABELS "vg;pathtally;grouping;threads"
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_recur_inputs")
 
 # A GAMP aligned against a different graph (node IDs absent from the xg) must fail loudly.
@@ -896,6 +927,58 @@ add_test(NAME genefull_ex50pas_debug_rad_unchanged
 set_tests_properties(genefull_ex50pas_debug_rad_unchanged PROPERTIES
   LABELS "vg;pathtally;genefull;ledger;ex50;debug"
   FIXTURES_REQUIRED "genefull_ex50pas_exact_out;genefull_ex50pas_debug_out")
+
+# Threaded conversion must retain a deterministic persisted order. Use the exact Ex50 fixture
+# because it emits RAD, BAM, summary, tx2gene, and the evidence sidecar in one small pass. One
+# byte per chunk forces ordered RAD chunk merging without making the fixture appreciably larger.
+set(EX50_THREADS_DIR "${CMAKE_CURRENT_BINARY_DIR}/ex50_thread_determinism_work")
+add_test(NAME genefull_ex50pas_thread_determinism_setup
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${EX50_THREADS_DIR}")
+set_tests_properties(genefull_ex50pas_thread_determinism_setup PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;threads"
+  FIXTURES_REQUIRED genefull_ex50pas_inputs
+  FIXTURES_SETUP genefull_ex50pas_thread_determinism_dir)
+
+add_test(NAME genefull_ex50pas_thread_determinism
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/thread_determinism.sh"
+    "$<TARGET_FILE:panCollapse>" "${EX50_DIR}/reads.gamp" "${EX50_DIR}/graph.xg"
+    "${EX50_FIX}/path_identity_ledger.tsv" "${EX50_THREADS_DIR}")
+set_tests_properties(genefull_ex50pas_thread_determinism PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;threads;multichunk;bam;debug"
+  ENVIRONMENT "PANCOLLAPSE_MAX_CHUNK_BYTES=1"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;genefull_ex50pas_thread_determinism_dir"
+  FIXTURES_SETUP genefull_ex50pas_thread_determinism_out)
+
+# No --threads is the single-worker contract. The determinism runner snapshots both invocations
+# after using identical output paths and forced chunking; every cmp must be fail-fast.
+add_test(NAME genefull_ex50pas_default_threads_matches_one
+  COMMAND /bin/sh -c "set -eu; for artifact in map.rad reads.bam summary.tsv tx2gene.tsv evidence.tsv; do \
+    cmp '${EX50_THREADS_DIR}/threads_default/'\"\$artifact\" '${EX50_THREADS_DIR}/threads_1/'\"\$artifact\"; \
+  done")
+set_tests_properties(genefull_ex50pas_default_threads_matches_one PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;threads;bam"
+  FIXTURES_REQUIRED genefull_ex50pas_thread_determinism_out)
+
+# Validate the public thread-count contract independently of data processing.
+add_test(NAME genefull_ex50pas_threads_zero_rejected
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
+    --count-mode genefull_ex50pas --bam-multigene all --threads 0
+    --out-dir "${EX50_THREADS_DIR}/zero" --bam-out "${EX50_THREADS_DIR}/zero/reads.bam")
+set_tests_properties(genefull_ex50pas_threads_zero_rejected PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;threads"
+  WILL_FAIL TRUE FIXTURES_REQUIRED genefull_ex50pas_inputs)
+
+add_test(NAME genefull_ex50pas_threads_noninteger_rejected
+  COMMAND $<TARGET_FILE:panCollapse> convert
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
+    --count-mode genefull_ex50pas --bam-multigene all --threads nope
+    --out-dir "${EX50_THREADS_DIR}/noninteger" --bam-out "${EX50_THREADS_DIR}/noninteger/reads.bam")
+set_tests_properties(genefull_ex50pas_threads_noninteger_rejected PROPERTIES
+  LABELS "vg;pathtally;genefull;ledger;ex50;threads"
+  WILL_FAIL TRUE FIXTURES_REQUIRED genefull_ex50pas_inputs)
 
 # A cyclic transcript-body path may not abort the arm: its Parent keeps exon-layer evidence while
 # a clean Parent on the same graph retains byte-equivalent exact Ex50 evidence.

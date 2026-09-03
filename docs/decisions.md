@@ -1730,6 +1730,34 @@ candidates because one repeated path has a uniquely resolvable oriented occurren
 existing v0.8.1 semantic distinction, not an optimization effect. The preload was terminated after
 the geometry marker, and none of its partial output is benchmark evidence.
 
+### D073 — v0.9.0 reopens deterministic PanCollapse multithreading
+
+**Decision source:** User, 2026-09-03.
+
+**Decision:** The earlier D045 deferral is superseded for PanCollapse v0.9.0. Add an explicit
+`--threads N` complete-read-group worker surface. One parser remains the sole owner of binary GAMP
+parsing, complete-name grouping, and the exact closed-name set. Workers receive only complete
+groups and private scratch state. One ordered turn emits RAD, BAM, debug evidence, and warnings
+strictly by input-group ordinal through a bounded in-flight window. Read-group counters accumulate
+atomically; writer-owned record counts and histograms remain inside the ordered turn. The producer
+queues at most two complete groups per worker, with at most one active group per worker, and creates
+no per-group spill files.
+
+Thread count is operational rather than scientific configuration. It is omitted from BAM `@PG CL`,
+and all persisted artifacts must be byte-identical at supported thread counts. Normal typed-union
+BAM evidence remains required; this decision does not authorize compact output, evidence loss,
+chromosome/process sharding, a persistent custom index, or interruption of an active producer.
+
+**Performance scope:** v0.9.0 also removes unused legacy work from transcript-specific conversion,
+retains repeated-body occurrence maps only where repeated geometry requires them, and consolidates
+future-equivalent exact states while retaining their maximum score. All changes return to the
+existing biological fixtures plus cross-thread byte-identity and bounded-queue gates.
+
+**Bounded evidence:** On the adversarial 2,000-model, 5,000-group exact fixture recorded in
+`docs/research/v090-deterministic-parallelism.md`, median wall time was 24.86 s for v0.8.2,
+19.88 s for v0.9.0 with one worker, 2.68 s with eight, and 1.83 s with sixteen. This establishes
+the targeted hot-path and threading gains, but is not a whole-pangenome projection.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

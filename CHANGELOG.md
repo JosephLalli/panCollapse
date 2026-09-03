@@ -3,6 +3,24 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.9.0]
+
+- Adds deterministic read-group parallelism through `--threads N`. One parser owns GAMP
+  grouping and recurrence validation, workers use private per-group workspaces, and one ordered
+  writer preserves the original RAD/BAM/debug record order and chunk boundaries.
+- Reduces exact GeneFull initialization storage to the exceptional repeated-body occurrence
+  geometry that actually needs disambiguation, rather than retaining ordinary per-model position
+  maps.
+- Removes transcript-specific production work that was used only by the legacy two-column body
+  classifier.
+- Consolidates equivalent exact dynamic-programming states by complete future-relevant geometry
+  while retaining the maximum integer score, and prefilters impossible starting body paths within
+  a source subpath.
+- Reports initialization and processing time, effective group throughput, and five-minute or
+  one-million-group progress on stderr without changing persisted artifacts.
+- Keeps normal typed-union BAM evidence, the five-point exact score window, Parent identity,
+  degradation behavior, RAD schema, and output order unchanged.
+
 ## [0.8.2]
 
 - Exact GeneFull initialization now records the canonical targets containing an unresolvable

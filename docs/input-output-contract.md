@@ -130,8 +130,9 @@ them fatal.
   up front with a placeholder `num_chunks`; records stream to `map.rad` as groups flush; and
   the writer seeks back at finalize to patch the exact chunk byte/record counts and
   `num_chunks`. A run with no emitted record leaves a header-only file (`num_chunks = 0`).
-- Byte-identical output for identical inputs/configuration. The converter is single-threaded
-  under D045. This guarantee applies fully to the default flat scorer, which is integer
+- Byte-identical output for identical inputs/configuration at supported worker counts. Thread count
+  is operational and is omitted from BAM `@PG CL`; one parser owns complete-name grouping and one
+  writer preserves input order. This guarantee applies fully to the default flat scorer, which is integer
   arithmetic throughout and produces bit-for-bit identical RAD on any conforming platform.
   Under `--score qualadj`, the score matrix and full-length-bonus table are constructed with
   `std::exp`, `std::log`, `std::pow`, and `std::round` (`src/pathtally_qualadj.hpp`

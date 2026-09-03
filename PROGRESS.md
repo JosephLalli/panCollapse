@@ -1,5 +1,46 @@
 # Progress
 
+## v0.9.0 deterministic performance release (verified 2026-09-03)
+
+This section supersedes the v0.8.2 next action below. The user explicitly reopened PanCollapse
+performance work as a 0.9.0 feature release. Work is isolated on branch
+`worktree-codex-v090-performance` from the now-main provenance commit
+`f5b5cae74bd69ca44e39dbdba80d7f86c90cdf33`; the running v0.8.2 producer and partial outputs are
+untouched.
+
+The candidate combines sparse repeated-body geometry, removal of unused transcript-specific legacy
+passes, exact-state consolidation/prefiltering, cached XG lookups, and bounded ordinal-preserving
+read-group workers behind `--threads N`. Normal typed-union BAM and the five-point exact score
+window remain the production evidence surface; no alignment, index, Parent, or evidence semantics
+changed.
+
+- The optimized build passes 127/127 CTests. The new exact-mode gate requires byte-identical RAD,
+  BAM, summary, tx2gene, and debug artifacts at one, two, four, and eight workers, including forced
+  one-byte RAD chunks. An independent score-mode gate proves default/one/eight-worker artifact
+  identity. Zero and non-integer thread counts fail, and a recurrent closed read name still fails
+  without committed partial output under eight workers.
+- Helgrind completed the exact eight-worker fixture with no reported race diagnostics. The local
+  ThreadSanitizer runtime could not start because it rejected the host address layout, so it is not
+  counted as a passing code check.
+- On the bounded adversarial 2,000-model, 5,000-group exact fixture, median wall time fell from
+  24.86 s in v0.8.2 to 19.88 s with one v0.9.0 worker, 2.68 s with eight, and 1.83 s with sixteen:
+  1.25x, 9.28x, and 13.58x faster than v0.8.2, respectively. RAD and summary hashes match v0.8.2.
+  A cheap 900,000-group fixture instead slowed at multiple workers because synchronization
+  dominated; the default therefore remains one. Full inputs, replicates, hashes, and interpretation
+  limits are recorded in
+  [`docs/research/v090-deterministic-parallelism.md`](docs/research/v090-deterministic-parallelism.md).
+- The local runtime image `josephlalli/pancollapse:v0.9.0` has immutable image ID
+  `sha256:f7a73b5bd462e509a8aada9d6bff0ce5335098296a3d424e1e07857cb9cafd54`, OCI version label
+  `0.9.0`, and size 156,786,291 bytes. It reports `panCollapse 0.9.0`; an exact eight-worker
+  container smoke run produced the host fixture's RAD and summary bytes and passed BAM quickcheck.
+  The corresponding unstripped optimized executable SHA-256 is
+  `274313d1410076a549237e69a4abf62f410d7c7bf8faeea21fc154c501ce667e`.
+
+These bounded results establish the targeted algorithmic and parallel gains, not chr20-22 or
+whole-pangenome wall time, peak RAM, or the best worker count on a production graph. The next
+performance gate is an explicitly authorized bounded real-graph/read slice, starting at eight and
+sixteen workers. Do not stop or restart the active v0.8.2 producer from this evidence alone.
+
 ## v0.8.2 geometry-initialization correction (verified 2026-09-03)
 
 This section supersedes the older reconciliation snapshot below as the current authority.
@@ -225,9 +266,9 @@ bullets are retained as cumulative history.
 - GAMP-to-RAD output uses all-compatible-target assignment. `all` is the default and only
   active RAD assignment behavior; `unique-transcript`, `unique-gene`, and
   `starsolo-default` are deferred to-be-implemented modes outside active RAD conversion.
-- The active converter remains single-threaded for now. D045 defers panCollapse-side
-  multithreading and redirects future interface research toward streaming GAMP from
-  `vg mpmap` into panCollapse over stdin.
+- Historical D045 kept the active converter single-threaded. D073 supersedes that deferral for
+  v0.9.0 with deterministic complete-read-group workers behind `--threads N`; stdin streaming
+  remains supported and parsing/grouping remain single-owner.
 - RAD output should be written to disk with a streaming writer: `num_chunks = 0`, file
   tag values, then complete chunks emitted incrementally.
 - License: Apache-2.0.

@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(panCollapse VERSION 0.8.2 LANGUAGES CXX)
+project(panCollapse VERSION 0.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+find_package(Threads REQUIRED)
 
 # Default to an optimized build with debug info when the user did not pick a
 # configuration.  Single-config generators otherwise compile at -O0, which is

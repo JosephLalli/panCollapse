@@ -197,13 +197,13 @@ unmapped `XB:Z:barcode_only` records with `CB`/`CR`, `UB`/`UR`, and optional raw
 Legacy quality-free and CY-only names remain readable.
 
 The exact RAD header, record fields, orientation encoding, chunking, and metadata are
-defined by the supported alevin-fry/libradicl baseline. Current active V1 execution is
-single-threaded under D045, and `map.rad` is streamed to disk incrementally: records roll
+defined by the supported alevin-fry/libradicl baseline. Starting in v0.9, `--threads N`
+uses complete read-name groups as independent work units while one parser owns grouping and one
+ordered writer owns every artifact. `map.rad` is streamed to disk incrementally: records roll
 into complete, self-describing chunks, and the writer seeks back to backpatch each chunk
-header and the file-level `num_chunks` with their final values once known (D049). If future
-supported execution modes include multiple worker threads or direct `vg mpmap` stdin
-streaming, RAD and companion artifacts must remain byte-identical for identical inputs and
-configuration.
+header and the file-level `num_chunks` with their final values once known (D049). RAD, BAM,
+summary, tx2gene, and debug artifacts must remain byte-identical across supported thread counts
+for identical non-operational inputs and configuration.
 
 ## 12. Diagnostics
 
@@ -229,6 +229,12 @@ assignment model.
 V1 should be stream-oriented over name-grouped GAMP. It may build ordinary in-memory GTF
 structures and use existing VG indexes, but it must not introduce a new persistent custom
 index.
+
+Parallel execution must share graph and annotation state within one process, bound queued and
+out-of-order work, preserve exact completed-name validation, and serialize output by input-group
+ordinal. Worker count is operational provenance and must not change scientific output bytes.
+Initialization time, processing time, group throughput, and periodic progress are stderr-only
+diagnostics so performance regressions can be separated into startup and per-group phases.
 
 If direct lookup proves too slow, record profiling evidence and a proposed custom-index
 design as a future development item. Implementation of that index requires a separate

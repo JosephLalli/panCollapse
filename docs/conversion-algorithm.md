@@ -85,17 +85,23 @@ fidelity to vg's quality-adjusted scores is wanted.
   stream to disk incrementally, but the converter also maintains an in-memory set of
   every completed read-group name to guarantee exact detection of unsorted
   (non-contiguous) input; peak resident memory therefore grows with the number of
-  distinct read-group names seen and can reach many GB on a whole-genome run. Bounding
+  distinct read-group names seen and can reach many GB on a whole-genome run. It is an exact-name
+  hash set; bounding
   the set would risk silent mis-grouping of reads whose alignments are non-adjacent in
   the GAMP, so the tradeoff is accepted for v0.1.
-- Single-threaded; the RAD target dictionary is lexicographically ordered; output is
-  byte-reproducible across runs. Cross-platform byte identity is guaranteed only for the
+- Complete read-name groups may be classified by multiple workers. A single parser assigns
+  monotonically increasing group ordinals and owns recurrence validation; a single writer emits
+  completed results strictly by ordinal. The RAD target dictionary is lexicographically ordered,
+  and output is byte-reproducible across worker counts and runs. Cross-platform byte identity is guaranteed only for the
   default flat scorer (integer arithmetic). Under `--score qualadj`, the score matrix and
   full-length-bonus table are constructed with `std::exp`, `std::log`, `std::pow`, and
   `std::round` (`src/pathtally_qualadj.hpp` `build_matrix`/`build_bonuses`); last-bit
   rounding can differ across platforms or libm versions, so a score tie may resolve
   differently and RAD bytes can vary across machines. Within one machine and build, qualadj
   output is deterministic.
+- The producer queue holds at most two complete groups per worker; each worker owns one reusable
+  tally workspace. This bounds scheduling state by the requested worker count without adding
+  per-group spill files or extra output I/O.
 - alevin-fry consumes `map.rad` downstream (permit-list, collate, quant).
 
 ## Implementation increments

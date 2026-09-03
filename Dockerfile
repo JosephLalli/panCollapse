@@ -23,7 +23,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 LABEL org.opencontainers.image.title="panCollapse" \
-      org.opencontainers.image.version="0.8.2" \
+      org.opencontainers.image.version="0.9.0" \
       org.opencontainers.image.description="Convert vg mpmap GAMP alignments into RAD records or provenance-rich BAM evidence for exact GeneFull_Ex50pAS counting." \
       org.opencontainers.image.source="https://github.com/JosephLalli/panCollapse" \
       org.opencontainers.image.licenses="Apache-2.0"
