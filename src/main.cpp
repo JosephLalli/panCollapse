@@ -1591,6 +1591,11 @@ int run_convert(int argc, char** argv) {
     // model.  This is deliberately per Parent: a cyclic body path must not disable clean loci.
     std::set<std::string> body_unresolvable_exon_parents;
     std::set<std::string> body_unresolvable_paths;
+    // Geometry is grouped by canonical target, so cache the targets that contain at least one
+    // degraded Parent while the Parent-level failure is discovered.  Re-deriving this fact by
+    // scanning every exon path inside record_geometry makes initialization quadratic in the
+    // number of production paths on chromosome-scale graphs.
+    std::unordered_set<uint32_t> body_unresolvable_targets;
     // Per-node ledger cache. ref_paths feeds the score tally (tally_read_group_into, reused verbatim
     // from score mode): every reference path crossing the node, exon or gene-body, un-collapsed, so
     // a read's per-reference score here is exactly what score mode would compute for that
@@ -1814,6 +1819,8 @@ int run_convert(int argc, char** argv) {
                             }
                             parent_body_unresolvable = true;
                             body_unresolvable_paths.insert(body->vg_path_name);
+                            body_unresolvable_targets.insert(
+                                t2g.target_ids.at(exon->annotation.canonical_transcript));
                         } else if (compatible_relations == 0) {
                             throw std::runtime_error(
                                 "genefull_ex50pas cannot establish body/exon orientation for linked paths " +
@@ -1925,15 +1932,8 @@ int run_convert(int argc, char** argv) {
                 // A degraded Parent cannot contribute body geometry, but its exon path remains
                 // valid evidence.  Preserve its own exon edges only when no clean sibling body
                 // for this canonical target remains; otherwise use only clean body geometry.
-                bool degraded_parent = false;
-                if (production_identity) {
-                    for (const auto& [path_name, target] : exon_name_transcript) {
-                        if (target == *target_id && body_unresolvable_exon_parents.count(
-                                t2g.path_unique_parent.at(path_name)) != 0) {
-                            degraded_parent = true;
-                        }
-                    }
-                }
+                const bool degraded_parent =
+                    production_identity && body_unresolvable_targets.count(*target_id) != 0;
                 // For the fragment-only audit, record whether both endpoints ever coexist on one
                 // raw body path. Index each candidate edge by its lower endpoint so each body path
                 // only probes candidates incident on nodes it actually contains.

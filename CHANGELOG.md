@@ -3,6 +3,16 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.8.2]
+
+- Exact GeneFull initialization now records the canonical targets containing an unresolvable
+  transcript-body Parent while those Parents are identified. Geometry construction uses that
+  constant-time index instead of rescanning every exon path for every canonical target. This
+  removes an accidental quadratic pass without changing Parent degradation, clean-sibling,
+  exon/body geometry, RAD, or BAM evidence semantics. On the joint chr20-22 graph, the patched
+  binary reached the frozen `evaluated_target_edges=141543588` geometry boundary in 73 minutes;
+  v0.8.1 remained in the same pre-GAMP pass after more than 25 hours.
+
 ## [0.8.1]
 
 - A cyclic transcript-body path now degrades only its linked Parent to exon-layer evidence when

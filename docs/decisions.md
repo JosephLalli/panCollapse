@@ -1706,6 +1706,30 @@ required unless the user later makes a new explicit decision.
 its tests, and it does not change the notice/evidence-loss requirements that would apply to a
 future user-authorized run.
 
+### D072 — Precompute degraded-target membership during exact geometry initialization
+
+**Decision source:** Engineering correction, 2026-09-03. No biological or output-policy choice is
+changed.
+
+**Problem:** v0.8.1 identifies the small set of transcript-body Parents whose repeated-node
+geometry cannot be resolved, but `record_geometry` then rescans the complete exon-path-to-target
+map to answer whether each canonical target contains one of those Parents. On the joint chr20-22
+graph this turns a yes/no membership query into an accidental quadratic pass over 1,230,107 exon
+paths. The producer remained CPU-active before opening GAMP or output files for more than 25 hours.
+
+**Decision:** While Parent-level occurrence resolution is already identifying an unresolvable
+Parent, insert its canonical target ID into an in-memory set. The geometry worker uses one lookup
+in that set. Parent-level degradation, clean-sibling precedence, exact occurrence/orientation,
+splice ownership, score-window behavior, RAD bytes, BAM evidence, and all identifiers remain
+unchanged. No persistent custom index is introduced.
+
+**Verification:** The v0.8.2 source passes 119/119 CTests. The joint chr20-22 preload reaches the
+same frozen `evaluated_target_edges=141543588` boundary in 73 minutes, versus a nonterminal v0.8.1
+pass after more than 25 hours. It reports 12 degraded body paths from 13 directed-cycle scan
+candidates because one repeated path has a uniquely resolvable oriented occurrence; this is the
+existing v0.8.1 semantic distinction, not an optimization effect. The preload was terminated after
+the geometry marker, and none of its partial output is benchmark evidence.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

@@ -1,8 +1,44 @@
 # Progress
 
-## Reconciliation snapshot (verified 2026-08-21)
+## v0.8.2 geometry-initialization correction (verified 2026-09-03)
 
-This section is the current authority. The development narrative below is retained as
+This section supersedes the older reconciliation snapshot below as the current authority.
+The implementation is isolated on branch `worktree-codex-v081-geometry-precompute`, based on
+committed v0.8.1 revision `8fc0c0e85212d92b2203f7ca6106760547bc5724`.
+
+- v0.8.1 correctly made ambiguous cyclic transcript-body degradation Parent-scoped, but its
+  geometry worker rediscovered whether a canonical target contained a degraded Parent by scanning
+  all 1,230,107 exon-path mappings once per target. The joint chr20-22 producer remained CPU-active
+  in that pre-GAMP pass for more than 25 hours with no output writer open.
+- v0.8.2 caches the affected canonical target IDs at the moment an unresolvable Parent is found.
+  The geometry worker now performs one set lookup per target. No transcript/exon structure,
+  occurrence resolution, evidence tier, score, Parent identity, or output contract changes.
+- The exact source passes all 119 CTests, including the degraded-Parent/clean-sibling byte-parity,
+  gene-change fail-closed, and resolvable repeated-body fixtures. A bounded full-graph preload
+  reached `evaluated_target_edges=141543588`, `owned_target_edges=5937500`,
+  `fragment_only_target_edges=207`, and `adjacent_vetoed_target_edges=135606081` in 73 minutes,
+  then was deliberately terminated before its output was used.
+  Exact inputs, command surface, binary digest, and the geometry receipt are recorded in
+  [`docs/research/v082-joint-geometry-preload.md`](docs/research/v082-joint-geometry-preload.md).
+  The full-graph process used the corrected logic before its version-only 0.8.2 rebuild; the rebuilt
+  0.8.2 binary passed the complete fixture suite and the graph was not rerun for a string change.
+- The independent graph scan reports 13 directed-cyclic body paths; exact occurrence/orientation
+  resolution degrades 12 and retains one resolvable repeated path. These are intentionally
+  different quantities. A producer must validate `body_paths_degraded=12`, not equate degradation
+  with the scan's 13 directed-cycle candidates.
+- The original joint producer and its partial output remain untouched pending explicit user
+  authorization for a graceful service stop and checksum-pinned restart. No final-test assignment
+  result has been opened, and this performance-only correction does not revise the frozen
+  annotation/counting method.
+
+Next: commit and checksum the v0.8.2 source, build and verify a distinct v0.8.2 runtime image, then
+restart the joint producer only after explicit authorization. Preserve the failed v0.8.1 attempt
+and use a corrected producer receipt that records both the 13 scan candidates and 12 degraded
+Parents.
+
+## Historical reconciliation snapshot (verified 2026-08-21)
+
+This section was the current authority on 2026-08-21. The development narrative below is retained as
 history through D069 and must not be used to blur committed, validated-uncommitted, and
 later experimental state.
 
