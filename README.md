@@ -91,13 +91,15 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --out-dir out
   malformed, or wrong-length CB/UMI/CY/UY field (default `skip`, counted in the summary).
 - `--threads N` — number of initialization and complete-read-group workers (default `1`). Exact
   Parent models are built in adaptive lexical blocks; splice geometry is split by canonical target
-  (or legacy gene); and lazy node/exon-edge cache misses use 256 independent shards. Initialization
-  results commit in stable order through a bounded window, one parser still owns GAMP grouping and
-  recurrence validation, and one ordered writer preserves original GAMP order. `N` must be
-  positive. Queued groups, initialization scratch, and worker scratch grow with `N`; lightweight
-  inputs can be faster at the default because scheduling has a cost. Start with 8 or 16 on a
-  bounded representative slice, then increase only while measured throughput improves. Supported
-  thread counts produce byte-identical persisted artifacts.
+  (or legacy gene); exact exon-edge geometry is immutable and Parent-local; and demand-built
+  node/model-candidate cache misses use 256 independent shards. Initialization results commit in
+  stable order through a bounded window, one parser still owns GAMP grouping and recurrence
+  validation, and one ordered writer preserves original GAMP order. `N` must be positive. Exact
+  inputs with fewer than 32 models automatically use one active processing worker (the requested
+  ceiling is still reported), because queue handoff is measurably slower at that scale. Queued
+  groups, initialization scratch, and worker scratch otherwise grow with `N`. Start with 8 or 16
+  on a bounded representative slice, then increase only while measured throughput improves.
+  Supported requested thread counts produce byte-identical persisted artifacts.
 - `--strand both|forward|reverse` — target-relative orientation filter (default `both`, no
   filtering). `forward` keeps only targets the read aligns to in the same (sense) orientation;
   `reverse` keeps only antisense targets. Reads left with no matching target emit no record and
@@ -164,6 +166,10 @@ existing RAD Unique policy and bytes are unchanged.
 Initialization time, processing time, effective group throughput, and periodic progress are
 reported on stderr only. The bounded v0.9 scaling evidence and its interpretation limits are in
 [`docs/research/v090-deterministic-parallelism.md`](docs/research/v090-deterministic-parallelism.md).
+For a diagnostic run, setting `PANCOLLAPSE_PROFILE_TIMING=1` also reports queue high-water,
+producer admission wait, worker compute, ordered wait, and ordered-region time. These intervals
+overlap across workers and must not be added as though they were wall time; leave the variable
+unset for ordinary runs.
 
 ## Example
 

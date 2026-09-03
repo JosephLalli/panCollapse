@@ -15,7 +15,8 @@ def row(path, length, parent, target, gene, layer, exon_parent, provenance_paren
     ]
 
 
-def main(output, invalid=False, parent_count=64, paths_per_parent=1, read_count=None):
+def main(output, invalid=False, parent_count=64, paths_per_parent=1, read_count=None,
+         reverse_path_order=False, include_body_tier_read=False):
     if read_count is None:
         read_count = parent_count
     output.mkdir(parents=True, exist_ok=True)
@@ -79,11 +80,14 @@ def main(output, invalid=False, parent_count=64, paths_per_parent=1, read_count=
             gfa.extend(f"P\t{path}\t1+,{intron}+,{endpoint}+\t*" for path in body_paths)
         for exon_path in exon_paths:
             ledger.append(row(exon_path, exon_length, parent, target, gene, "exon", parent, parent))
-            t2g.append((exon_path, gene))
+            # Keep all raw exon/body paths of one Parent on the same canonical target. This
+            # makes the legacy transcript-body geometry path exercise the same reuse shape as
+            # the production identity ledger instead of multiplying geometry units by aliases.
+            t2g.append((exon_path, gene, target))
         for path_index, body_path in enumerate(body_paths):
             ledger.append(row(body_path, body_length, f"BODY_{index:03d}_{path_index:03d}",
                               target, gene, "body", parent, parent))
-            body_t2g.append((body_path, gene))
+            body_t2g.append((body_path, gene, target))
         if index < read_count:
             reads.append({
                 "name": f"read_{index:03d}_AAACCCAAGTTTGGGA_ACGTACGTACGT",
@@ -93,6 +97,23 @@ def main(output, invalid=False, parent_count=64, paths_per_parent=1, read_count=
                     {"position": {"node_id": str(endpoint)}, "edit": [{"from_length": 10, "to_length": 10}]},
                 ]}}],
             })
+    if include_body_tier_read:
+        if invalid:
+            raise ValueError("--include-body-tier-read is only valid for the clean fixture")
+        reads.append({
+            "name": "body_tier_AAACCCAAGTTTGGGA_ACGTACGTACGT",
+            "sequence": "CCCCCCCCCC", "start": [0],
+            "subpath": [{"score": 10, "path": {"mapping": [
+                {"position": {"node_id": "1000"},
+                 "edit": [{"from_length": 10, "to_length": 10}]},
+            ]}}],
+        })
+    if reverse_path_order:
+        # Deliberately make numeric XG path-handle order disagree with lexical path/Parent
+        # order. Deterministic output must derive from identity ranks, not graph insertion.
+        non_paths = [line for line in gfa if not line.startswith("P\t")]
+        paths = [line for line in gfa if line.startswith("P\t")]
+        gfa = non_paths + list(reversed(paths))
     (output / "graph.gfa").write_text("\n".join(gfa) + "\n")
     (output / "path_identity_ledger.tsv").write_text(
         "\n".join("\t".join(fields) for fields in ledger) + "\n")
@@ -111,7 +132,10 @@ if __name__ == "__main__":
     parser.add_argument("--parents", type=int, default=64)
     parser.add_argument("--paths-per-parent", type=int, default=1)
     parser.add_argument("--reads", type=int)
+    parser.add_argument("--reverse-path-order", action="store_true")
+    parser.add_argument("--include-body-tier-read", action="store_true")
     args = parser.parse_args()
     if args.parents < 1 or args.paths_per_parent < 1 or (args.reads is not None and args.reads < 1):
         parser.error("--parents, --paths-per-parent, and --reads must be positive")
-    main(args.output, args.invalid, args.parents, args.paths_per_parent, args.reads)
+    main(args.output, args.invalid, args.parents, args.paths_per_parent, args.reads,
+         args.reverse_path_order, args.include_body_tier_read)

@@ -35,6 +35,7 @@
 #include <unordered_map>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <type_traits>
@@ -1396,6 +1397,24 @@ std::string join_sorted(const std::set<std::string>& values, char delimiter) {
     return joined;
 }
 
+std::string join_sorted(std::vector<const std::string*> values, char delimiter) {
+    std::sort(values.begin(), values.end(),
+              [](const std::string* a, const std::string* b) { return *a < *b; });
+    values.erase(std::unique(values.begin(), values.end(),
+                             [](const std::string* a, const std::string* b) {
+                                 return *a == *b;
+                             }),
+                 values.end());
+    std::string joined;
+    for (const std::string* value : values) {
+        if (!joined.empty()) {
+            joined += delimiter;
+        }
+        joined += *value;
+    }
+    return joined;
+}
+
 // D061 (splice-junction concordance): every consecutive aligned node pair a read group's own
 // alignments make -- within one subpath's mapping list, or across a subpath next/connection link to
 // another subpath -- is a candidate splice edge, checked by the caller against the global
@@ -1452,14 +1471,15 @@ struct Group {
 struct GroupJob {
     size_t ordinal = 0;
     Group group;
+    std::chrono::steady_clock::time_point submitted_at;
 };
 
 // Workers perform read-local computation independently, while every externally visible write is
-// serialized by input ordinal.  A guard keeps the turn from its first write through the end of the
+// serialized by input ordinal. A guard keeps the turn from its first write through the end of the
 // group, so RAD chunks, BAM records, debug rows, warnings, and histograms retain the one-thread
-// order.  Debug output can acquire that turn before all computation for a group is complete, which
-// intentionally favors audit ordering over debug-mode throughput.  An exception aborts all waiters
-// instead of letting a later ordinal deadlock forever.
+// order. Read-local exact DP finishes before debug output acquires the turn, avoiding accidental
+// compute serialization while preserving audit order. An exception aborts all waiters instead of
+// letting a later ordinal deadlock forever.
 class OrderedOutputCoordinator {
 public:
     explicit OrderedOutputCoordinator(bool enabled) : enabled_(enabled) {}
@@ -1751,6 +1771,7 @@ int run_convert(int argc, char** argv) {
     const auto invocation_started = std::chrono::steady_clock::now();
     const Options options = parse_options(argc, argv);
     const bool production_identity = !options.path_identity_ledger.empty();
+    const auto metadata_started = std::chrono::steady_clock::now();
     const std::unordered_set<std::string> strict_allowlisted_parents =
         options.strict_allowlisted_parents.empty()
             ? std::unordered_set<std::string>{}
@@ -1765,13 +1786,8 @@ int run_convert(int argc, char** argv) {
             options.path_identity_ledger,
             options.count_mode == pathtally::CountMode::GeneFullEx50pAS);
         if (!strict_allowlisted_parents.empty()) {
-            std::unordered_set<std::string> ledger_parents;
-            for (const auto& [path_name, row] : identity_ledger->rows_by_path) {
-                static_cast<void>(path_name);
-                ledger_parents.insert(row.annotation.unique_parent);
-            }
             for (const std::string& parent : strict_allowlisted_parents) {
-                if (ledger_parents.count(parent) == 0) {
+                if (identity_ledger->identities_by_parent.count(parent) == 0) {
                     throw std::runtime_error(
                         "strict allowlisted Parent " + parent +
                         " is absent from --path-identity-ledger");
@@ -1787,16 +1803,13 @@ int run_convert(int argc, char** argv) {
             const std::string& raw_path = entry.first;
             const path_identity::AnnotationIdentity& annotation = entry.second.annotation;
             if (annotation.feature_layer == "exon") {
-                t2g.path_transcript.emplace(raw_path, annotation.canonical_transcript);
-                t2g.path_unique_parent.emplace(raw_path, annotation.unique_parent);
+                // Score mode resolves raw exon paths after tallying. Production count modes keep
+                // path identity numeric and need only the canonical target dictionary.
+                if (options.count_mode == pathtally::CountMode::Score) {
+                    t2g.path_transcript.emplace(raw_path, annotation.canonical_transcript);
+                    t2g.path_unique_parent.emplace(raw_path, annotation.unique_parent);
+                }
                 t2g.transcript_gene.emplace(annotation.canonical_transcript, annotation.gene_id);
-            } else {
-                body_t2g.paths.emplace(
-                    raw_path,
-                    BodyPathTarget{annotation.gene_id, annotation.canonical_transcript});
-                body_t2g.path_unique_parent.emplace(raw_path, annotation.unique_parent);
-                body_t2g.transcript_gene.emplace(annotation.canonical_transcript,
-                                                 annotation.gene_id);
             }
         }
         body_t2g.transcript_specific = true;
@@ -1827,14 +1840,27 @@ int run_convert(int argc, char** argv) {
         }
     }
 
+    const double metadata_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - metadata_started).count();
+    std::cerr << "panCollapse: initialization: phase=metadata_parse production_rows="
+              << (identity_ledger.has_value() ? identity_ledger->rows_by_path.size() : 0)
+              << " seconds=" << metadata_seconds << '\n';
+
+    const auto xg_deserialize_started = std::chrono::steady_clock::now();
     xg::XG graph;
     std::ifstream xg_in(options.xg, std::ios::binary);
     if (!xg_in) {
         throw std::runtime_error("cannot open XG");
     }
     graph.deserialize(xg_in);
+    const double xg_deserialize_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - xg_deserialize_started).count();
+    std::cerr << "panCollapse: initialization: phase=xg_deserialize seconds="
+              << xg_deserialize_seconds << '\n';
 
+    std::unordered_map<std::string, uint64_t> ledger_path_handles_by_name;
     if (production_identity) {
+        ledger_path_handles_by_name.reserve(identity_ledger->rows_by_path.size());
         for (const auto& entry : identity_ledger->rows_by_path) {
             const std::string& path_name = entry.first;
             if (!graph.has_path(path_name)) {
@@ -1850,6 +1876,8 @@ int run_convert(int argc, char** argv) {
                                          " but the XG path length is " +
                                          std::to_string(graph_length));
             }
+            ledger_path_handles_by_name.emplace(
+                path_name, handlegraph::as_integer(path_handle));
         }
     }
 
@@ -1866,15 +1894,25 @@ int run_convert(int argc, char** argv) {
     // transcript target; legacy two-column bodies collapse to a gene, while D063 three-column
     // bodies collapse to that same canonical transcript target.
     struct PathInfo {
-        std::string name;       // raw graph path name, fed to PathLookup
+        // Production names remain owned by the immutable identity ledger. Legacy adapters
+        // retain an owned copy because their parser has no stable row object.
+        std::string legacy_name;
         uint32_t gene_idx = 0;  // gene index (legacy geometry/orientation and BAM header)
         bool is_exon = false;   // spliced exon path vs unspliced body path
+        uint32_t target_id = 0;
+        uint32_t parent_rank = 0;
+        const path_identity::PathIdentityRow* identity = nullptr;
+        bool body_resolvable = true;
+
+        const std::string& path_name() const {
+            return identity == nullptr ? legacy_name : identity->vg_path_name;
+        }
     };
     std::unordered_map<uint64_t, PathInfo> ledger_path_info;
-    std::unordered_map<std::string, uint64_t> ledger_path_handles_by_name;
     std::unordered_map<std::string, uint32_t> exon_name_transcript;  // exon path name -> transcript target id
     std::unordered_map<std::string, uint32_t> body_name_gene;        // legacy body path -> gene idx
     std::unordered_map<std::string, uint32_t> body_name_transcript;  // D063 body path -> target id
+    std::unordered_map<std::string_view, uint32_t> ledger_parent_rank_by_name;
     // Per-transcript spans for the spliced/unspliced classification, built once at load. For each
     // gene, each exon transcript contributes (first_on_body_exon_node_id, last_on_body_exon_node_id,
     // transcript_target_id). At read time a transcript "spans" the read iff its [lo,hi] node-id
@@ -1892,17 +1930,26 @@ int run_convert(int argc, char** argv) {
     const bool exact_ex50 = production_identity &&
                            options.count_mode != pathtally::CountMode::Score &&
                            !options.bam_out.empty();
+    using ExactEdge = std::tuple<int64_t, bool, int64_t, bool>;
     struct ExactEx50Model {
         const path_identity::PathIdentityRow* exon = nullptr;
         const path_identity::PathIdentityRow* body = nullptr;
         uint64_t exon_path_handle = 0;
         uint64_t body_path_handle = 0;
         uint32_t target_id = 0;
+        uint32_t exon_path_rank = 0;
+        uint32_t body_path_rank = 0;
+        uint32_t exon_parent_rank = 0;
+        uint32_t body_parent_rank = 0;
+        std::shared_ptr<const std::set<ExactEdge>> exon_edges;
         bool body_exon_same = true;
-        std::map<int64_t, uint64_t> resolved_body_positions;
+        // Most models never need an occurrence override. Avoid carrying an allocated tree
+        // header in every model; only repeated-but-resolvable body nodes own this map.
+        std::unique_ptr<const std::map<int64_t, uint64_t>> resolved_body_positions;
     };
     std::vector<ExactEx50Model> exact_ex50_models;
     std::unordered_map<uint64_t, std::vector<size_t>> exact_ex50_models_by_body_path;
+    size_t exact_exon_edge_geometry_count = 0;
     // A body row is retained in the ledger even when it cannot support exact base geometry.  The
     // Parent then remains countable from its exon evidence, but never contributes an Ex50 body
     // model.  This is deliberately per Parent: a cyclic body path must not disable clean loci.
@@ -1922,7 +1969,12 @@ int run_convert(int argc, char** argv) {
     // path iteration order.
     struct NodeLedger {
         uint64_t node_length = 0;
-        std::vector<std::pair<const std::string*, bool>> ref_paths;
+        struct ReferenceStep {
+            uint64_t path_handle = 0;
+            const std::string* path_name = nullptr;
+            bool path_is_reverse = false;
+        };
+        std::vector<ReferenceStep> ref_paths;
         struct LegacyMetadata {
             std::vector<std::pair<uint32_t, bool>> gene_orient;
             std::vector<uint32_t> body_genes;
@@ -1940,6 +1992,35 @@ int run_convert(int argc, char** argv) {
     std::function<const NodeLedger&(int64_t)> node_ledger_of;
     pathtally::PathLookup ledger_lookup;
 
+    const auto path_catalog_started = std::chrono::steady_clock::now();
+    if (production_identity) {
+        const size_t ledger_rows = identity_ledger->rows_by_path.size();
+        ledger_path_info.reserve(ledger_rows);
+        std::vector<const std::string*> unique_parent_names;
+        unique_parent_names.reserve(ledger_rows);
+        for (const auto& [path_name, row] : identity_ledger->rows_by_path) {
+            static_cast<void>(path_name);
+            unique_parent_names.push_back(&row.annotation.unique_parent);
+        }
+        std::sort(unique_parent_names.begin(), unique_parent_names.end(),
+                  [](const std::string* a, const std::string* b) { return *a < *b; });
+        unique_parent_names.erase(
+            std::unique(unique_parent_names.begin(), unique_parent_names.end(),
+                        [](const std::string* a, const std::string* b) {
+                            return *a == *b;
+                        }),
+            unique_parent_names.end());
+        if (unique_parent_names.size() >
+            static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+            throw std::runtime_error(
+                "path identity ledger has too many unique Parents for 32-bit internal ranks");
+        }
+        ledger_parent_rank_by_name.reserve(unique_parent_names.size());
+        for (size_t rank = 0; rank < unique_parent_names.size(); ++rank) {
+            ledger_parent_rank_by_name.emplace(
+                *unique_parent_names[rank], static_cast<uint32_t>(rank));
+        }
+    }
     if (options.count_mode == pathtally::CountMode::Score) {
         graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
             std::string name = graph.get_path_name(path);
@@ -1997,48 +2078,100 @@ int run_convert(int argc, char** argv) {
             const std::string& gene = t2g.transcript_gene.at(transcript);
             const uint32_t gene_idx = gene_index_for(gene);
             const uint32_t target_id = t2g.target_ids.at(transcript);
-            ledger_path_info.emplace(handlegraph::as_integer(path),
-                                     PathInfo{name, gene_idx, true});
-            exon_name_transcript.emplace(name, target_id);
+            PathInfo path_info;
+            path_info.gene_idx = gene_idx;
+            path_info.is_exon = true;
+            if (production_identity) {
+                const auto& row = std::as_const(identity_ledger->rows_by_path).at(name);
+                path_info.target_id = target_id;
+                path_info.parent_rank =
+                    std::as_const(ledger_parent_rank_by_name).at(row.annotation.unique_parent);
+                path_info.identity = &row;
+            } else {
+                path_info.legacy_name = name;
+            }
+            ledger_path_info.emplace(handlegraph::as_integer(path), std::move(path_info));
+            if (!production_identity) {
+                exon_name_transcript.emplace(name, target_id);
+            }
             gene_exon_paths[gene_idx].push_back(path);
             transcript_exon_paths[target_id].push_back(path);
         };
 
-        graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
-            const std::string name = graph.get_path_name(path);
-            // Exact exon rows win first. Then exact body rows win over the legacy exon bare-name
-            // fallback, so an explicitly named transcript-body path cannot be mistaken for an exon.
-            const std::string* transcript = resolve_graph_transcript(t2g, name, false);
-            if (transcript != nullptr) {
-                record_exon_path(path, name, *transcript);
-                ledger_path_handles_by_name.emplace(name, handlegraph::as_integer(path));
-                return;
+        if (production_identity) {
+            // Validation above already resolved every ledger path to an XG handle. Reuse those
+            // handles instead of scanning every path in the graph and repeating string lookups.
+            // Handle order reproduces the relevant-path order of for_each_path_handle, preserving
+            // deterministic vector contents and invalid-input diagnostics.
+            std::vector<std::pair<uint64_t, const path_identity::PathIdentityRow*>> catalog_rows;
+            catalog_rows.reserve(identity_ledger->rows_by_path.size());
+            for (const auto& [name, row] : identity_ledger->rows_by_path) {
+                catalog_rows.emplace_back(ledger_path_handles_by_name.at(name), &row);
             }
-            const BodyPathTarget* body = resolve_body_graph_path(body_t2g, name);
-            if (body != nullptr) {
-                const uint32_t gene_idx = gene_index_for(body->gene);
-                if (body_t2g.transcript_specific) {
-                    const uint32_t target_id = t2g.target_ids.at(body->transcript);
-                    ledger_path_info.emplace(handlegraph::as_integer(path),
-                                             PathInfo{name, gene_idx, false});
-                    body_name_transcript.emplace(name, target_id);
-                    transcript_body_paths[target_id].push_back(path);
-                } else {
-                    ledger_path_info.emplace(handlegraph::as_integer(path),
-                                             PathInfo{name, gene_idx, false});
-                    body_name_gene.emplace(name, gene_idx);
-                    gene_body_paths[gene_idx].push_back(path);
+            std::sort(catalog_rows.begin(), catalog_rows.end(),
+                      [](const auto& a, const auto& b) { return a.first < b.first; });
+            for (const auto& [path_integer, row] : catalog_rows) {
+                const handlegraph::path_handle_t path =
+                    handlegraph::as_path_handle(path_integer);
+                const std::string& name = row->vg_path_name;
+                const auto& annotation = row->annotation;
+                if (annotation.feature_layer == "exon") {
+                    record_exon_path(path, name, annotation.canonical_transcript);
+                    continue;
                 }
-                ledger_path_handles_by_name.emplace(name, handlegraph::as_integer(path));
-                return;
+                const uint32_t gene_idx = gene_index_for(annotation.gene_id);
+                const uint32_t target_id = t2g.target_ids.at(annotation.canonical_transcript);
+                ledger_path_info.emplace(
+                    path_integer,
+                    PathInfo{std::string{}, gene_idx, false, target_id,
+                             std::as_const(ledger_parent_rank_by_name).at(
+                                 annotation.unique_parent),
+                             row, true});
+                transcript_body_paths[target_id].push_back(path);
             }
-            if (!production_identity) {
+        } else {
+            graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+                const std::string name = graph.get_path_name(path);
+                // Exact exon rows win first. Then exact body rows win over the legacy exon
+                // bare-name fallback, so an explicitly named transcript-body path cannot be
+                // mistaken for an exon.
+                const std::string* transcript = resolve_graph_transcript(t2g, name, false);
+                if (transcript != nullptr) {
+                    record_exon_path(path, name, *transcript);
+                    ledger_path_handles_by_name.emplace(name, handlegraph::as_integer(path));
+                    return;
+                }
+                const BodyPathTarget* body = resolve_body_graph_path(body_t2g, name);
+                if (body != nullptr) {
+                    const uint32_t gene_idx = gene_index_for(body->gene);
+                    if (body_t2g.transcript_specific) {
+                        const uint32_t target_id = t2g.target_ids.at(body->transcript);
+                        ledger_path_info.emplace(handlegraph::as_integer(path),
+                                                 PathInfo{name, gene_idx, false});
+                        body_name_transcript.emplace(name, target_id);
+                        transcript_body_paths[target_id].push_back(path);
+                    } else {
+                        ledger_path_info.emplace(handlegraph::as_integer(path),
+                                                 PathInfo{name, gene_idx, false});
+                        body_name_gene.emplace(name, gene_idx);
+                        gene_body_paths[gene_idx].push_back(path);
+                    }
+                    ledger_path_handles_by_name.emplace(name, handlegraph::as_integer(path));
+                    return;
+                }
                 transcript = resolve_graph_transcript(t2g, name, true);
                 if (transcript != nullptr) {
                     record_exon_path(path, name, *transcript);
                 }
-            }
-        });
+            });
+        }
+
+        const double path_catalog_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - path_catalog_started).count();
+        std::cerr << "panCollapse: initialization: phase=path_catalog production="
+                  << (production_identity ? 1 : 0)
+                  << " relevant_paths=" << ledger_path_info.size()
+                  << " seconds=" << path_catalog_seconds << '\n';
 
         if (exact_ex50) {
             const auto parent_geometry_started = std::chrono::steady_clock::now();
@@ -2070,11 +2203,29 @@ int run_convert(int argc, char** argv) {
                 parent_tasks.push_back({&exon_parent, &exon_rows, &bodies->second});
             }
 
+            // Exact evidence ordering is part of BAM byte determinism. Assign compact ranks in
+            // the same lexical order previously obtained by comparing copied strings per model.
+            std::unordered_map<const path_identity::PathIdentityRow*, uint32_t>
+                path_rank_by_row;
+            path_rank_by_row.reserve(identity_ledger->rows_by_path.size());
+            if (identity_ledger->rows_by_path.size() >
+                static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+                throw std::runtime_error(
+                    "path identity ledger has too many paths for 32-bit internal ranks");
+            }
+            uint32_t next_path_rank = 0;
+            for (const auto& [path_name, row] : identity_ledger->rows_by_path) {
+                static_cast<void>(path_name);
+                path_rank_by_row.emplace(&row, next_path_rank++);
+            }
+
             struct ParentBlockResult {
                 std::vector<ExactEx50Model> models;
                 std::vector<std::string> unresolvable_exon_parents;
                 std::vector<std::string> unresolvable_paths;
                 std::vector<uint32_t> unresolvable_targets;
+                size_t prepared_exon_paths = 0;
+                size_t prepared_body_paths = 0;
             };
             // Keep enough dynamic blocks to absorb unequal Parent costs while capping scheduler
             // overhead on whole-pangenome ledgers. A desired granularity of four blocks per
@@ -2097,6 +2248,9 @@ int run_convert(int argc, char** argv) {
                 ? 0 : 1 + (parent_tasks.size() - 1) / parent_block_size;
             const size_t parent_worker_count =
                 std::min(options.threads, parent_block_count);
+            size_t prepared_exon_path_count = 0;
+            size_t prepared_body_path_count = 0;
+            std::unordered_set<const std::set<ExactEdge>*> retained_exon_edge_geometries;
             parallel_transform_ordered_blocks(
                 parent_tasks.size(), options.threads, parent_block_size,
                 [&](size_t block, size_t begin, size_t end) {
@@ -2109,25 +2263,102 @@ int run_convert(int argc, char** argv) {
                         std::vector<ExactEx50Model> parent_models;
                         std::vector<std::string> parent_unresolvable_paths;
                         std::vector<uint32_t> parent_unresolvable_targets;
-                        // Keep resolved geometry local to this exon Parent. Positions only
-                        // distinguish repeated body occurrences; ordinary exonic nodes have one
-                        // unambiguous body occurrence and need no per-node storage.
+                        struct PreparedExon {
+                            const path_identity::PathIdentityRow* row = nullptr;
+                            uint64_t path_handle = 0;
+                            std::vector<std::pair<int64_t, bool>> steps;
+                            std::shared_ptr<const std::set<ExactEdge>> edges;
+                        };
+                        struct PreparedBody {
+                            const path_identity::PathIdentityRow* row = nullptr;
+                            uint64_t path_handle = 0;
+                            std::map<int64_t, std::vector<std::pair<bool, uint64_t>>>
+                                occurrences;
+                        };
+                        std::vector<PreparedExon> prepared_exons;
+                        prepared_exons.reserve(task.exon_rows->size());
+                        // Hashes only select exact-comparison buckets. Equal hashes never merge
+                        // unequal exon paths, while exact duplicate geometry shares one immutable
+                        // splice-edge set across every model for this Parent.
+                        std::unordered_map<size_t, std::vector<size_t>> exon_geometry_buckets;
                         for (const path_identity::PathIdentityRow* exon : *task.exon_rows) {
-                            const handlegraph::path_handle_t exon_path =
-                                graph.get_path_handle(exon->vg_path_name);
-                            for (const path_identity::PathIdentityRow* body : *task.body_rows) {
-                                const handlegraph::path_handle_t body_path =
-                                    graph.get_path_handle(body->vg_path_name);
-                                std::map<int64_t, std::vector<std::pair<bool, uint64_t>>>
-                                    body_occurrences;
-                                graph.for_each_step_in_path(
-                                    body_path, [&](const handlegraph::step_handle_t& step) {
-                                        const handlegraph::handle_t handle =
-                                            graph.get_handle_of_step(step);
-                                        body_occurrences[graph.get_id(handle)].emplace_back(
-                                            graph.get_is_reverse(handle),
-                                            graph.get_position_of_step(step));
-                                    });
+                            PreparedExon prepared;
+                            prepared.row = exon;
+                            prepared.path_handle =
+                                std::as_const(ledger_path_handles_by_name).at(exon->vg_path_name);
+                            graph.for_each_step_in_path(
+                                handlegraph::as_path_handle(prepared.path_handle),
+                                [&](const handlegraph::step_handle_t& step) {
+                                    const handlegraph::handle_t handle =
+                                        graph.get_handle_of_step(step);
+                                    prepared.steps.emplace_back(graph.get_id(handle),
+                                                                graph.get_is_reverse(handle));
+                                });
+                            prepared_exons.push_back(std::move(prepared));
+                            PreparedExon& current = prepared_exons.back();
+                            size_t geometry_hash = 0;
+                            for (const auto& [node_id, is_reverse] : current.steps) {
+                                const size_t node_hash = std::hash<int64_t>{}(node_id);
+                                geometry_hash ^= node_hash + 0x9e3779b9 +
+                                                 (geometry_hash << 6) + (geometry_hash >> 2);
+                                const size_t reverse_hash = std::hash<bool>{}(is_reverse);
+                                geometry_hash ^= reverse_hash + 0x9e3779b9 +
+                                                 (geometry_hash << 6) + (geometry_hash >> 2);
+                            }
+                            std::vector<size_t>& representatives =
+                                exon_geometry_buckets[geometry_hash];
+                            for (const size_t representative : representatives) {
+                                if (prepared_exons[representative].steps == current.steps) {
+                                    current.edges = prepared_exons[representative].edges;
+                                    break;
+                                }
+                            }
+                            if (!current.edges) {
+                                std::set<ExactEdge> edges;
+                                for (size_t step_index = 1;
+                                     step_index < current.steps.size(); ++step_index) {
+                                    const auto& previous = current.steps[step_index - 1];
+                                    const auto& next = current.steps[step_index];
+                                    edges.emplace(previous.first, previous.second,
+                                                  next.first, next.second);
+                                    // Reverse traversal reverses node order and flips handles.
+                                    edges.emplace(next.first, !next.second,
+                                                  previous.first, !previous.second);
+                                }
+                                current.edges =
+                                    std::make_shared<const std::set<ExactEdge>>(std::move(edges));
+                                representatives.push_back(prepared_exons.size() - 1);
+                            }
+                            ++result.prepared_exon_paths;
+                        }
+                        std::vector<PreparedBody> prepared_bodies;
+                        prepared_bodies.reserve(task.body_rows->size());
+                        for (const path_identity::PathIdentityRow* body : *task.body_rows) {
+                            PreparedBody prepared;
+                            prepared.row = body;
+                            prepared.path_handle =
+                                std::as_const(ledger_path_handles_by_name).at(body->vg_path_name);
+                            graph.for_each_step_in_path(
+                                handlegraph::as_path_handle(prepared.path_handle),
+                                [&](const handlegraph::step_handle_t& step) {
+                                    const handlegraph::handle_t handle =
+                                        graph.get_handle_of_step(step);
+                                    prepared.occurrences[graph.get_id(handle)].emplace_back(
+                                        graph.get_is_reverse(handle),
+                                        graph.get_position_of_step(step));
+                                });
+                            prepared_bodies.push_back(std::move(prepared));
+                            ++result.prepared_body_paths;
+                        }
+
+                        // Preserve the historical exon-major/body-minor pair order while reusing
+                        // each path's immutable geometry. Positions only distinguish repeated body
+                        // occurrences; ordinary exonic nodes need no per-node storage.
+                        for (const PreparedExon& prepared_exon : prepared_exons) {
+                            const path_identity::PathIdentityRow* exon = prepared_exon.row;
+                            for (const PreparedBody& prepared_body : prepared_bodies) {
+                                const path_identity::PathIdentityRow* body = prepared_body.row;
+                                const auto& body_occurrences = prepared_body.occurrences;
 
                                 // A repeated node is safe only when the exon path fixes one body
                                 // occurrence. Test both global body/exon orientation relations and
@@ -2139,57 +2370,45 @@ int run_convert(int argc, char** argv) {
                                 for (const bool same_orientation : {false, true}) {
                                     bool compatible = true;
                                     bool shared = false;
-                                    graph.for_each_step_in_path(
-                                        exon_path, [&](const handlegraph::step_handle_t& step) {
-                                            const handlegraph::handle_t handle =
-                                                graph.get_handle_of_step(step);
-                                            const auto occurrences =
-                                                body_occurrences.find(graph.get_id(handle));
-                                            if (occurrences == body_occurrences.end()) {
-                                                return true;
-                                            }
-                                            shared = true;
-                                            if (occurrences->second.size() > 1) {
-                                                repeated_exonic_node = true;
-                                            }
-                                            const bool exon_reverse = graph.get_is_reverse(handle);
-                                            const size_t matching = static_cast<size_t>(std::count_if(
-                                                occurrences->second.begin(), occurrences->second.end(),
-                                                [&](const auto& occurrence) {
-                                                    return (exon_reverse == occurrence.first) ==
-                                                           same_orientation;
-                                                }));
-                                            if (matching != 1) {
-                                                compatible = false;
-                                            }
-                                            return true;
-                                        });
+                                    for (const auto& [node_id, exon_reverse] :
+                                         prepared_exon.steps) {
+                                        const auto occurrences = body_occurrences.find(node_id);
+                                        if (occurrences == body_occurrences.end()) {
+                                            continue;
+                                        }
+                                        shared = true;
+                                        if (occurrences->second.size() > 1) {
+                                            repeated_exonic_node = true;
+                                        }
+                                        const size_t matching = static_cast<size_t>(std::count_if(
+                                            occurrences->second.begin(), occurrences->second.end(),
+                                            [&](const auto& occurrence) {
+                                                return (exon_reverse == occurrence.first) ==
+                                                       same_orientation;
+                                            }));
+                                        if (matching != 1) {
+                                            compatible = false;
+                                        }
+                                    }
                                     if (shared && compatible) {
                                         ++compatible_relations;
                                         selected_relation = same_orientation;
                                         selected_positions.clear();
-                                        graph.for_each_step_in_path(
-                                            exon_path,
-                                            [&](const handlegraph::step_handle_t& step) {
-                                                const handlegraph::handle_t handle =
-                                                    graph.get_handle_of_step(step);
-                                                const int64_t id = graph.get_id(handle);
-                                                const auto occurrences = body_occurrences.find(id);
-                                                if (occurrences != body_occurrences.end()) {
-                                                    const bool exon_reverse =
-                                                        graph.get_is_reverse(handle);
-                                                    for (const auto& occurrence :
-                                                         occurrences->second) {
-                                                        if ((exon_reverse == occurrence.first) ==
-                                                                same_orientation &&
-                                                            occurrences->second.size() > 1) {
-                                                            selected_positions[id] =
-                                                                occurrence.second;
-                                                        }
-                                                    }
+                                        for (const auto& [node_id, exon_reverse] :
+                                             prepared_exon.steps) {
+                                            const auto occurrences = body_occurrences.find(node_id);
+                                            if (occurrences == body_occurrences.end()) {
+                                                continue;
+                                            }
+                                            for (const auto& occurrence : occurrences->second) {
+                                                if ((exon_reverse == occurrence.first) ==
+                                                        same_orientation &&
+                                                    occurrences->second.size() > 1) {
+                                                    selected_positions[node_id] =
+                                                        occurrence.second;
                                                 }
-                                                return true;
-                                            });
+                                            }
+                                        }
                                     }
                                 }
                                 const uint32_t target_id = std::as_const(t2g.target_ids).at(
@@ -2219,10 +2438,23 @@ int run_convert(int argc, char** argv) {
                                             exon->annotation.gene_id + " to " +
                                             body->annotation.gene_id);
                                     }
+                                    std::unique_ptr<const std::map<int64_t, uint64_t>>
+                                        resolved_positions;
+                                    if (!selected_positions.empty()) {
+                                        resolved_positions =
+                                            std::make_unique<const std::map<int64_t, uint64_t>>(
+                                                std::move(selected_positions));
+                                    }
                                     parent_models.push_back(
-                                        {exon, body, handlegraph::as_integer(exon_path),
-                                         handlegraph::as_integer(body_path), target_id,
-                                         selected_relation, std::move(selected_positions)});
+                                        {exon, body, prepared_exon.path_handle,
+                                         prepared_body.path_handle, target_id,
+                                         path_rank_by_row.at(exon), path_rank_by_row.at(body),
+                                         ledger_parent_rank_by_name.at(
+                                             exon->annotation.unique_parent),
+                                         ledger_parent_rank_by_name.at(
+                                             body->annotation.unique_parent),
+                                         prepared_exon.edges, selected_relation,
+                                         std::move(resolved_positions)});
                                 }
                             }
                         }
@@ -2258,18 +2490,37 @@ int run_convert(int argc, char** argv) {
                                                    result.unresolvable_paths.end());
                     body_unresolvable_targets.insert(result.unresolvable_targets.begin(),
                                                      result.unresolvable_targets.end());
+                    prepared_exon_path_count += result.prepared_exon_paths;
+                    prepared_body_path_count += result.prepared_body_paths;
                     for (ExactEx50Model& model : result.models) {
                         const size_t model_id = exact_ex50_models.size();
+                        retained_exon_edge_geometries.insert(model.exon_edges.get());
                         exact_ex50_models_by_body_path[model.body_path_handle].push_back(model_id);
                         exact_ex50_models.push_back(std::move(model));
                     }
                 });
+            exact_exon_edge_geometry_count = retained_exon_edge_geometries.size();
+            retained_exon_edge_geometries.clear();
+            retained_exon_edge_geometries.rehash(0);
+            if (!body_unresolvable_exon_parents.empty()) {
+                for (auto& [path_handle, path_info] : ledger_path_info) {
+                    static_cast<void>(path_handle);
+                    if (!path_info.is_exon && path_info.identity != nullptr) {
+                        path_info.body_resolvable =
+                            body_unresolvable_exon_parents.count(
+                                path_info.identity->annotation.exon_unique_parent) == 0;
+                    }
+                }
+            }
             const double parent_geometry_seconds = std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - parent_geometry_started).count();
             std::cerr << "panCollapse: initialization: phase=exact_parent_models workers="
                       << parent_worker_count << " parents=" << parent_tasks.size()
                       << " blocks=" << parent_block_count
                       << " models=" << exact_ex50_models.size()
+                      << " prepared_exon_paths=" << prepared_exon_path_count
+                      << " exon_edge_geometries=" << exact_exon_edge_geometry_count
+                      << " prepared_body_paths=" << prepared_body_path_count
                       << " degraded_parents=" << body_unresolvable_exon_parents.size()
                       << " seconds=" << parent_geometry_seconds << '\n';
 
@@ -2317,6 +2568,16 @@ int run_convert(int argc, char** argv) {
             size_t adjacent_vetoed = 0;
         };
 
+        auto exon_target_id = [&](const handlegraph::path_handle_t& exon_path) {
+            if (production_identity) {
+                return std::as_const(ledger_path_info)
+                    .at(handlegraph::as_integer(exon_path))
+                    .target_id;
+            }
+            return std::as_const(exon_name_transcript).at(
+                graph.get_path_name(exon_path));
+        };
+
         // Shared geometry worker. Legacy D060 records exon spans against a pooled gene body. D063
         // omits spans and derives splice ownership by comparing one canonical transcript's exon
         // paths only with that transcript's own body paths.
@@ -2328,8 +2589,7 @@ int run_convert(int argc, char** argv) {
                 std::unordered_set<GeometryEdge, pathtally::NodePairHash> exon_edges;
                 std::optional<uint32_t> target_id;
                 for (const handlegraph::path_handle_t& exon_path : exon_paths) {
-                    const uint32_t path_target = std::as_const(exon_name_transcript).at(
-                        graph.get_path_name(exon_path));
+                    const uint32_t path_target = exon_target_id(exon_path);
                     if (!target_id.has_value()) {
                         target_id = path_target;
                     } else if (*target_id != path_target) {
@@ -2447,8 +2707,7 @@ int run_convert(int argc, char** argv) {
                 graph.for_each_step_in_path(exon_path, [&](const handlegraph::step_handle_t& step) {
                     node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
                 });
-                const uint32_t target_id = std::as_const(exon_name_transcript).at(
-                    graph.get_path_name(exon_path));
+                const uint32_t target_id = exon_target_id(exon_path);
 
                 int64_t lo = std::numeric_limits<int64_t>::max();
                 int64_t hi = std::numeric_limits<int64_t>::min();
@@ -2596,7 +2855,8 @@ int run_convert(int argc, char** argv) {
                     const bool path_is_reverse = graph.get_is_reverse(graph.get_handle_of_step(step));
                     // Every reference path crossing the node (exon transcript or gene body),
                     // un-collapsed, is a scoreable reference for tally_read_group_into.
-                    nl.ref_paths.emplace_back(&it->second.name, path_is_reverse);
+                    nl.ref_paths.push_back(
+                        {path_handle, &it->second.path_name(), path_is_reverse});
                     if (exact_ex50) {
                         NodeLedger::ExactStep exact_step{
                             path_handle, path_is_reverse,
@@ -2634,8 +2894,8 @@ int run_convert(int argc, char** argv) {
             });
         };
         ledger_lookup = [&](int64_t node_id, const std::function<void(const std::string&, bool)>& emit) {
-            for (const auto& [name_ptr, path_is_reverse] : node_ledger_of(node_id).ref_paths) {
-                emit(*name_ptr, path_is_reverse);
+            for (const NodeLedger::ReferenceStep& step : node_ledger_of(node_id).ref_paths) {
+                emit(*step.path_name, step.path_is_reverse);
             }
         };
     }
@@ -2648,9 +2908,12 @@ int run_convert(int argc, char** argv) {
     // no Parent -> canonical collapse before count_cr applies STAR's six-rank priority.
     struct ExactEx50Evidence {
         uint32_t target_id = 0;
-        std::string locus_parent;
-        std::string path;
-        std::string parent;
+        const std::string* locus_parent = nullptr;
+        const std::string* path = nullptr;
+        const std::string* parent = nullptr;
+        uint32_t locus_parent_rank = 0;
+        uint32_t path_rank = 0;
+        uint32_t parent_rank = 0;
         char direction = 'F';
         pathtally::Ex50Tier tier = pathtally::Ex50Tier::Body;
         int64_t score = std::numeric_limits<int64_t>::min();
@@ -2667,10 +2930,10 @@ int run_convert(int argc, char** argv) {
             }
             return 3;
         };
-        return std::make_tuple(a.target_id, a.locus_parent, a.direction, tier_rank(a.tier),
-                               a.path, a.parent) <
-               std::make_tuple(b.target_id, b.locus_parent, b.direction, tier_rank(b.tier),
-                               b.path, b.parent);
+        return std::make_tuple(a.target_id, a.locus_parent_rank, a.direction,
+                               tier_rank(a.tier), a.path_rank, a.parent_rank) <
+               std::make_tuple(b.target_id, b.locus_parent_rank, b.direction,
+                               tier_rank(b.tier), b.path_rank, b.parent_rank);
     };
     using ExactEx50EvidenceSet =
         std::set<ExactEx50Evidence, decltype(exact_evidence_less)>;
@@ -2685,9 +2948,8 @@ int run_convert(int argc, char** argv) {
         }
     };
 
-    using ExactEdge = std::tuple<int64_t, bool, int64_t, bool>;
-    ShardedLazyCache<uint64_t, std::set<ExactEdge>>
-        exact_exon_edges(options.threads > 1);
+    ShardedLazyCache<int64_t, std::vector<size_t>>
+        exact_model_candidates(options.threads > 1);
 
     auto exact_step_range = [](const std::vector<NodeLedger::ExactStep>& steps,
                                uint64_t path_handle) {
@@ -2704,28 +2966,38 @@ int run_convert(int argc, char** argv) {
         return std::make_pair(first, last);
     };
 
-    auto exon_edges_for = [&](const ExactEx50Model& model) -> const std::set<ExactEdge>& {
-        return exact_exon_edges.get_or_build(model.exon_path_handle, [&]() {
-            std::set<ExactEdge> edges;
-            const handlegraph::path_handle_t exon_path =
-                handlegraph::as_path_handle(model.exon_path_handle);
-            std::optional<std::pair<int64_t, bool>> previous;
-            graph.for_each_step_in_path(
-                exon_path, [&](const handlegraph::step_handle_t& step) {
-                    const handlegraph::handle_t handle = graph.get_handle_of_step(step);
-                    const std::pair<int64_t, bool> current{
-                        graph.get_id(handle), graph.get_is_reverse(handle)};
-                    if (previous.has_value()) {
-                        edges.emplace(previous->first, previous->second, current.first,
-                                      current.second);
-                        // The reverse traversal uses reversed node order and flipped handles.
-                        edges.emplace(current.first, !current.second, previous->first,
-                                      !previous->second);
-                    }
-                    previous = current;
-                });
-            return edges;
+    auto model_candidates_for_node = [&](int64_t node_id) -> const std::vector<size_t>& {
+        return exact_model_candidates.get_or_build(node_id, [&]() {
+            const NodeLedger& node = node_ledger_of(node_id);
+            std::vector<size_t> candidates;
+            std::optional<uint64_t> previous_path;
+            for (const NodeLedger::ExactStep& body_step : node.exact_body_steps) {
+                // A cyclic path can visit one node multiple times. Model compatibility is a
+                // property of the body path here, so append that path's models only once.
+                if (previous_path.has_value() &&
+                    body_step.path_handle == *previous_path) {
+                    continue;
+                }
+                previous_path = body_step.path_handle;
+                const auto models = exact_ex50_models_by_body_path.find(
+                    body_step.path_handle);
+                if (models != exact_ex50_models_by_body_path.end()) {
+                    candidates.insert(candidates.end(), models->second.begin(),
+                                      models->second.end());
+                }
+            }
+            std::sort(candidates.begin(), candidates.end());
+            candidates.erase(std::unique(candidates.begin(), candidates.end()),
+                             candidates.end());
+            return candidates;
         });
+    };
+
+    auto exon_edges_for = [](const ExactEx50Model& model) -> const std::set<ExactEdge>& {
+        if (!model.exon_edges) {
+            throw std::runtime_error("internal exact model is missing exon-edge geometry");
+        }
+        return *model.exon_edges;
     };
 
     auto body_exon_orientation_same = [&](size_t model_id) {
@@ -2849,9 +3121,9 @@ int run_convert(int argc, char** argv) {
             const auto exon_occurrences =
                 exact_step_range(node.exact_exon_steps, model.exon_path_handle);
             const bool exonic = exon_occurrences.first != exon_occurrences.second;
-            if (exonic) {
-                const auto chosen = model.resolved_body_positions.find(node_id);
-                if (chosen != model.resolved_body_positions.end() &&
+            if (exonic && model.resolved_body_positions) {
+                const auto chosen = model.resolved_body_positions->find(node_id);
+                if (chosen != model.resolved_body_positions->end() &&
                     body_step.path_position != chosen->second) {
                     return std::nullopt;
                 }
@@ -2964,36 +3236,53 @@ int run_convert(int argc, char** argv) {
                 states.begin(), states.end(), [&](const State& state) {
                     return state.model_id == kUnstarted;
                 });
-            std::optional<std::unordered_set<size_t>> unstarted_model_filter;
+            const std::vector<size_t>* first_mapping_models = nullptr;
+            std::vector<size_t> narrowed_mapping_models;
+            bool model_filter_narrowed = false;
+            size_t reference_mapping_count = 0;
             if (has_unstarted) {
-                bool first_reference_mapping = true;
+                for (const vg::Mapping& mapping : subpath.path().mapping()) {
+                    if (mapping_reference_bases(mapping) != 0 &&
+                        ++reference_mapping_count == 2) {
+                        break;
+                    }
+                }
+            }
+            // With one reference-consuming mapping, every model enumerated below already crosses
+            // that mapping. Building a set cannot remove anything and only adds allocation,
+            // hashing, and a membership probe for every candidate.
+            if (has_unstarted && reference_mapping_count >= 2) {
                 for (const vg::Mapping& mapping : subpath.path().mapping()) {
                     if (mapping_reference_bases(mapping) == 0) {
                         continue;
                     }
-                    const NodeLedger& node = node_ledger_of(mapping.position().node_id());
-                    std::unordered_set<size_t> mapping_models;
-                    for (const NodeLedger::ExactStep& body_step : node.exact_body_steps) {
-                        const auto models = exact_ex50_models_by_body_path.find(
-                            body_step.path_handle);
-                        if (models != exact_ex50_models_by_body_path.end()) {
-                            mapping_models.insert(models->second.begin(), models->second.end());
-                        }
-                    }
-                    if (first_reference_mapping) {
+                    const std::vector<size_t>& mapping_models =
+                        model_candidates_for_node(mapping.position().node_id());
+                    if (first_mapping_models == nullptr) {
+                        first_mapping_models = &mapping_models;
                         exact_unstarted_model_candidates_before_prefilter.fetch_add(
                             mapping_models.size(), std::memory_order_relaxed);
-                        unstarted_model_filter.emplace(std::move(mapping_models));
-                        first_reference_mapping = false;
-                    } else {
-                        std::erase_if(*unstarted_model_filter, [&](size_t model_id) {
-                            return mapping_models.count(model_id) == 0;
-                        });
+                        continue;
                     }
+                    const std::vector<size_t>& current = model_filter_narrowed
+                        ? narrowed_mapping_models : *first_mapping_models;
+                    if (std::includes(mapping_models.begin(), mapping_models.end(),
+                                      current.begin(), current.end())) {
+                        continue;
+                    }
+                    std::vector<size_t> intersection;
+                    intersection.reserve(std::min(current.size(), mapping_models.size()));
+                    std::set_intersection(
+                        current.begin(), current.end(), mapping_models.begin(),
+                        mapping_models.end(), std::back_inserter(intersection));
+                    narrowed_mapping_models = std::move(intersection);
+                    model_filter_narrowed = true;
                 }
-                if (unstarted_model_filter.has_value()) {
+                if (first_mapping_models != nullptr) {
                     exact_unstarted_model_candidates_after_prefilter.fetch_add(
-                        unstarted_model_filter->size(), std::memory_order_relaxed);
+                        model_filter_narrowed ? narrowed_mapping_models.size()
+                                              : first_mapping_models->size(),
+                        std::memory_order_relaxed);
                 }
             }
             for (const vg::Mapping& mapping : subpath.path().mapping()) {
@@ -3015,8 +3304,9 @@ int run_convert(int argc, char** argv) {
                                 continue;
                             }
                             for (const size_t model_id : models->second) {
-                                if (unstarted_model_filter.has_value() &&
-                                    unstarted_model_filter->count(model_id) == 0) {
+                                if (model_filter_narrowed &&
+                                    !std::binary_search(narrowed_mapping_models.begin(),
+                                                        narrowed_mapping_models.end(), model_id)) {
                                     continue;
                                 }
                                 const std::optional<State> projected =
@@ -3093,11 +3383,14 @@ int run_convert(int argc, char** argv) {
                 retain_best_exact_evidence(
                     evidence,
                     {model.target_id,
-                     model.exon->annotation.unique_parent,
-                     body_tier ? model.body->vg_path_name
-                               : model.exon->vg_path_name,
-                     body_tier ? model.body->annotation.unique_parent
-                               : model.exon->annotation.unique_parent,
+                     &model.exon->annotation.unique_parent,
+                     body_tier ? &model.body->vg_path_name
+                               : &model.exon->vg_path_name,
+                     body_tier ? &model.body->annotation.unique_parent
+                               : &model.exon->annotation.unique_parent,
+                     model.exon_parent_rank,
+                     body_tier ? model.body_path_rank : model.exon_path_rank,
+                     body_tier ? model.body_parent_rank : model.exon_parent_rank,
                      direction_forward ? 'F' : 'R', tier, state.score});
             }
         }
@@ -3121,6 +3414,41 @@ int run_convert(int argc, char** argv) {
             }
         };
     }
+
+    auto tally_numeric_ledger_group_into =
+        [&](pathtally::NumericTallyMap& tallies,
+            const std::vector<const vg::MultipathAlignment*>& records) {
+        tallies.clear();
+        std::vector<int64_t> per_node;
+        for (const vg::MultipathAlignment* record : records) {
+            const vg::MultipathAlignment& alignment = *record;
+            const std::vector<size_t> offsets = pathtally::subpath_read_offsets(alignment);
+            for (int subpath_index = 0; subpath_index < alignment.subpath_size();
+                 ++subpath_index) {
+                const vg::Subpath& subpath = alignment.subpath(subpath_index);
+                node_scorer(alignment, subpath_index,
+                            offsets[static_cast<size_t>(subpath_index)], per_node);
+                const vg::Path& path = subpath.path();
+                for (int mapping_index = 0; mapping_index < path.mapping_size();
+                     ++mapping_index) {
+                    const vg::Mapping& mapping = path.mapping(mapping_index);
+                    const bool read_is_reverse = mapping.position().is_reverse();
+                    const int64_t node_score = per_node[static_cast<size_t>(mapping_index)];
+                    const int64_t aligned_bases = pathtally::mapping_aligned_bases(mapping);
+                    for (const NodeLedger::ReferenceStep& reference :
+                         node_ledger_of(mapping.position().node_id()).ref_paths) {
+                        pathtally::HstTally& tally = tallies[reference.path_handle];
+                        tally.score += node_score;
+                        if (read_is_reverse == reference.path_is_reverse) {
+                            tally.forward_bases += aligned_bases;
+                        } else {
+                            tally.reverse_bases += aligned_bases;
+                        }
+                    }
+                }
+            }
+        }
+    };
 
     std::filesystem::create_directories(options.out_dir);
     uint64_t max_chunk_bytes = static_cast<uint64_t>(1) << 30;  // 1 GiB, well under the u32 chunk field
@@ -3230,18 +3558,67 @@ int run_convert(int argc, char** argv) {
     };
 
     const auto processing_started = std::chrono::steady_clock::now();
+    // A thread handoff plus deterministic output turn costs more than evaluating a tiny exact
+    // surface. Keep toy/small-reference conversions serial even when a larger ceiling was
+    // requested; chromosome/pangenome ledgers exceed this threshold by orders of magnitude.
+    constexpr size_t kMinExactModelsForWorkerPool = 32;
+    const size_t processing_threads =
+        exact_ex50 && exact_ex50_models.size() < kMinExactModelsForWorkerPool
+            ? 1 : options.threads;
+    if (processing_threads != options.threads) {
+        std::cerr << "panCollapse: processing workers: requested=" << options.threads
+                  << " active=" << processing_threads
+                  << " reason=small_exact_model_surface exact_models="
+                  << exact_ex50_models.size() << '\n';
+    }
+    const bool profile_runtime_timing =
+        std::getenv("PANCOLLAPSE_PROFILE_TIMING") != nullptr;
+    struct alignas(64) WorkerRuntimeTiming {
+        uint64_t groups = 0;
+        uint64_t queue_wait_ns = 0;
+        uint64_t compute_before_output_ns = 0;
+        uint64_t ordered_wait_ns = 0;
+        uint64_t ordered_region_ns = 0;
+    };
+    std::vector<WorkerRuntimeTiming> worker_runtime_timing(processing_threads);
+    uint64_t producer_admission_wait_ns = 0;
+    size_t queue_high_water = 0;
+    auto producer_finished = processing_started;
     auto next_progress_report = processing_started + std::chrono::minutes(5);
     size_t next_progress_group = 1000000;
     size_t completed_groups_for_progress = 0;  // touched only while holding the output turn
-    OrderedOutputCoordinator ordered_output(options.threads > 1);
+    OrderedOutputCoordinator ordered_output(processing_threads > 1);
     auto process_group = [&](Group group, size_t ordinal,
-                             pathtally::TallyMap& tally_workspace) {
+                             pathtally::TallyMap& tally_workspace,
+                             pathtally::NumericTallyMap& numeric_tally_workspace,
+                             WorkerRuntimeTiming& runtime_timing) {
         Group& current_group = group;
         const size_t current_read_group = ordinal + 1;
         OrderedOutputCoordinator::Guard output_guard(ordered_output, ordinal);
+        const auto group_started = profile_runtime_timing
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
+        bool output_phase_started = false;
+        std::chrono::steady_clock::time_point output_phase_started_at;
+        auto acquire_output = [&]() {
+            if (!profile_runtime_timing || output_phase_started) {
+                output_guard.acquire();
+                return;
+            }
+            const auto wait_started = std::chrono::steady_clock::now();
+            runtime_timing.compute_before_output_ns += static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    wait_started - group_started).count());
+            output_guard.acquire();
+            output_phase_started_at = std::chrono::steady_clock::now();
+            runtime_timing.ordered_wait_ns += static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    output_phase_started_at - wait_started).count());
+            output_phase_started = true;
+        };
         auto process = [&]() {
         if (current_group.skip_for_molecule_identity) {
-            output_guard.acquire();
+            acquire_output();
             if (debug_writer) {
                 debug_writer->write_read(current_read_group, current_group.name, ".", 0);
             }
@@ -3269,7 +3646,7 @@ int run_convert(int argc, char** argv) {
             if (!bam_writer || bam_record_written) {
                 return;
             }
-            output_guard.acquire();
+            acquire_output();
             const std::string empty;
             const vg::MultipathAlignment* read =
                 current_group.records.empty() ? nullptr : &current_group.records.front();
@@ -3333,7 +3710,12 @@ int run_convert(int argc, char** argv) {
             for (const vg::MultipathAlignment& record : current_group.records) {
                 record_ptrs.push_back(&record);
             }
-            pathtally::tally_read_group_into(tally_workspace, record_ptrs, ledger_lookup, node_scorer);
+            if (production_identity) {
+                tally_numeric_ledger_group_into(numeric_tally_workspace, record_ptrs);
+            } else {
+                pathtally::tally_read_group_into(
+                    tally_workspace, record_ptrs, ledger_lookup, node_scorer);
+            }
 
             // Score-independent aligned-base orientation and touched body ranges are retained for
             // the legacy two-column mode. D063 orientation is derived later from the winning raw
@@ -3389,8 +3771,10 @@ int run_convert(int argc, char** argv) {
             };
             std::map<uint32_t, TargetOrientationEvidence> exon_target_orient;
             std::map<uint32_t, TargetOrientationEvidence> body_target_orient;
-            std::map<uint32_t, pathtally::CollapsedIdentityTally> exon_identity_evidence;
-            std::map<uint32_t, pathtally::CollapsedIdentityTally> body_identity_evidence;
+            std::map<uint32_t, pathtally::CompactCollapsedIdentityTally>
+                exon_identity_evidence;
+            std::map<uint32_t, pathtally::CompactCollapsedIdentityTally>
+                body_identity_evidence;
             auto retain_max_orientation = [](TargetOrientationEvidence& evidence,
                                              const pathtally::HstTally& tally) {
                 if (tally.score > evidence.best_score) {
@@ -3403,33 +3787,28 @@ int run_convert(int argc, char** argv) {
                 }
             };
             if (production_identity) {
-                exon_identity_evidence = pathtally::collapse_identity_tallies(
-                    tally_workspace,
-                    [&](const std::string& name)
-                        -> std::optional<pathtally::NumericPathIdentity> {
-                        const auto ex = exon_name_transcript.find(name);
-                        if (ex == exon_name_transcript.end()) {
-                            return std::nullopt;
-                        }
-                        return pathtally::NumericPathIdentity{
-                            t2g.path_unique_parent.at(name), ex->second};
-                    });
-                body_identity_evidence = pathtally::collapse_identity_tallies(
-                    tally_workspace,
-                    [&](const std::string& name)
-                        -> std::optional<pathtally::NumericPathIdentity> {
-                        const auto body = body_name_transcript.find(name);
-                        if (body == body_name_transcript.end()) {
-                            return std::nullopt;
-                        }
-                        const auto& annotation = identity_ledger->rows_by_path.at(name).annotation;
-                        if (body_unresolvable_exon_parents.count(
-                                annotation.exon_unique_parent) != 0) {
-                            return std::nullopt;
-                        }
-                        return pathtally::NumericPathIdentity{
-                            body_t2g.path_unique_parent.at(name), body->second};
-                    });
+                pathtally::CompactIdentityLayers layers =
+                    pathtally::collapse_ranked_identity_tallies(
+                        numeric_tally_workspace,
+                        [&](uint64_t path_handle)
+                            -> std::optional<pathtally::RankedPathIdentity> {
+                            const auto found = ledger_path_info.find(path_handle);
+                            if (found == ledger_path_info.end()) {
+                                throw std::runtime_error(
+                                    "internal numeric path tally is absent from the ledger catalog");
+                            }
+                            const PathInfo& path_info = found->second;
+                            if (!path_info.is_exon && !path_info.body_resolvable) {
+                                return std::nullopt;
+                            }
+                            return pathtally::RankedPathIdentity{
+                                &path_info.path_name(),
+                                &path_info.identity->annotation.unique_parent,
+                                path_info.parent_rank, path_info.target_id,
+                                path_info.is_exon};
+                        });
+                exon_identity_evidence = std::move(layers.exon);
+                body_identity_evidence = std::move(layers.body);
                 for (const auto& [target_id, evidence] : exon_identity_evidence) {
                     exon_score.emplace(target_id, evidence.score);
                     exon_target_orient.emplace(
@@ -3483,8 +3862,45 @@ int run_convert(int argc, char** argv) {
             const std::optional<std::set<uint32_t>> splice_concordant =
                 pathtally::splice_concordant_transcripts(read_node_pairs, splice_edges);
 
+            ExactEx50EvidenceSet exact_group_evidence(exact_evidence_less);
+            if (exact_ex50) {
+                for (const vg::MultipathAlignment& record : current_group.records) {
+                    ExactEx50EvidenceSet record_evidence =
+                        exact_ex50_evidence_for(record);
+                    for (const ExactEx50Evidence& evidence : record_evidence) {
+                        retain_best_exact_evidence(exact_group_evidence, evidence);
+                    }
+                }
+                // Reference filtering changes the compatible transcript surface, so it must run
+                // before the top-score-minus-5 window and before the global E/P/B rank. Filtering
+                // a projected winner downstream cannot recover an allowed lower candidate.
+                if (!strict_allowlisted_parents.empty()) {
+                    const size_t before = exact_group_evidence.size();
+                    std::erase_if(
+                        exact_group_evidence,
+                        [&](const ExactEx50Evidence& evidence) {
+                            return strict_allowlisted_parents.count(*evidence.parent) == 0;
+                        });
+                    strict_allowlisted_evidence_dropped.fetch_add(
+                        before - exact_group_evidence.size(), std::memory_order_relaxed);
+                }
+                if (options.exact_ex50_score_window_enabled &&
+                    !exact_group_evidence.empty()) {
+                    int64_t top_score = std::numeric_limits<int64_t>::min();
+                    for (const ExactEx50Evidence& evidence : exact_group_evidence) {
+                        top_score = std::max(top_score, evidence.score);
+                    }
+                    std::erase_if(exact_group_evidence, [&](const ExactEx50Evidence& evidence) {
+                        return evidence.score < top_score - kExactEx50ScoreWindow;
+                    });
+                }
+            }
+
+            // Debug rows are ordered output, but exact Ex50 DP is read-local work. Delay taking
+            // the output turn until after that DP so requesting diagnostics does not silently
+            // serialize the dominant production computation.
             if (debug_writer) {
-                output_guard.acquire();
+                acquire_output();
                 std::set<std::pair<int64_t, int64_t>> crossed_splice_edges;
                 for (const auto& [a, b] : read_node_pairs) {
                     const auto edge = pathtally::undirected_node_pair(a, b);
@@ -3526,40 +3942,6 @@ int run_convert(int argc, char** argv) {
                 write_exact_top("body", body_score);
             }
 
-            ExactEx50EvidenceSet exact_group_evidence(exact_evidence_less);
-            if (exact_ex50) {
-                for (const vg::MultipathAlignment& record : current_group.records) {
-                    ExactEx50EvidenceSet record_evidence =
-                        exact_ex50_evidence_for(record);
-                    for (const ExactEx50Evidence& evidence : record_evidence) {
-                        retain_best_exact_evidence(exact_group_evidence, evidence);
-                    }
-                }
-                // Reference filtering changes the compatible transcript surface, so it must run
-                // before the top-score-minus-5 window and before the global E/P/B rank. Filtering
-                // a projected winner downstream cannot recover an allowed lower candidate.
-                if (!strict_allowlisted_parents.empty()) {
-                    const size_t before = exact_group_evidence.size();
-                    std::erase_if(
-                        exact_group_evidence,
-                        [&](const ExactEx50Evidence& evidence) {
-                            return strict_allowlisted_parents.count(evidence.parent) == 0;
-                        });
-                    strict_allowlisted_evidence_dropped.fetch_add(
-                        before - exact_group_evidence.size(), std::memory_order_relaxed);
-                }
-                if (options.exact_ex50_score_window_enabled &&
-                    !exact_group_evidence.empty()) {
-                    int64_t top_score = std::numeric_limits<int64_t>::min();
-                    for (const ExactEx50Evidence& evidence : exact_group_evidence) {
-                        top_score = std::max(top_score, evidence.score);
-                    }
-                    std::erase_if(exact_group_evidence, [&](const ExactEx50Evidence& evidence) {
-                        return evidence.score < top_score - kExactEx50ScoreWindow;
-                    });
-                }
-            }
-
             const std::vector<pathtally::LedgerCall> calls = body_t2g.transcript_specific
                 ? pathtally::classify_transcript_body_ledger_group(
                       exon_score, body_score, kIntronFlankBases, splice_concordant)
@@ -3596,7 +3978,7 @@ int run_convert(int argc, char** argv) {
             // '.' in GL. Repeated TX values are evidence rows, not a transcript->gene ambiguity:
             // TX->GX remains single-valued and only identical complete rows deduplicate.
             if (bam_writer) {
-                output_guard.acquire();
+                acquire_output();
             }
             if (bam_writer && options.compact_exact_count_strand.has_value() &&
                 !exact_group_evidence.empty()) {
@@ -3625,7 +4007,7 @@ int run_convert(int argc, char** argv) {
                     if (!xu.empty()) {
                         xu += ',';
                     }
-                    xu += evidence.parent;
+                    xu += *evidence.parent;
                     winning_gt = pathtally::ex50_tier_code(evidence.tier);
                     winning_gd = evidence.direction;
                 }
@@ -3682,8 +4064,8 @@ int run_convert(int argc, char** argv) {
                     gd += evidence.direction;
                     gl += '.';
                     gt += pathtally::ex50_tier_code(evidence.tier);
-                    xp += evidence.path;
-                    xu += evidence.parent;
+                    xp += *evidence.path;
+                    xu += *evidence.parent;
                     bam_genes.insert(gene);
                     if (primary_gene.empty()) {
                         primary_gene = gene;
@@ -3819,7 +4201,7 @@ int run_convert(int argc, char** argv) {
                 }
                 hits.push_back({target_id->second, target.forward});
             }
-            output_guard.acquire();
+            acquire_output();
             rad_writer.write_record(current_group.molecule, hits);
         }
         if (bam_writer && options.count_mode == pathtally::CountMode::Score) {
@@ -3883,7 +4265,7 @@ int run_convert(int argc, char** argv) {
         };
         process();
         // Even groups with no output must take and retire their ordinal so later writers progress.
-        output_guard.acquire();
+        acquire_output();
         ++completed_groups_for_progress;
         const bool group_report = completed_groups_for_progress >= next_progress_group;
         if (group_report || completed_groups_for_progress % 4096 == 0) {
@@ -3900,14 +4282,20 @@ int run_convert(int argc, char** argv) {
                 next_progress_group = completed_groups_for_progress + 1000000;
             }
         }
+        if (profile_runtime_timing) {
+            runtime_timing.ordered_region_ns += static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - output_phase_started_at).count());
+            ++runtime_timing.groups;
+        }
     };
 
-    // Keep at most two queued groups per worker.  Active groups add at most one more per worker,
+    // Keep at most two queued groups per worker. Active groups add at most one more per worker,
     // so scheduling memory is O(threads) and independent of the total GAMP length.
     const size_t max_queued_groups =
-        options.threads > std::numeric_limits<size_t>::max() / 2
+        processing_threads > std::numeric_limits<size_t>::max() / 2
             ? std::numeric_limits<size_t>::max()
-            : std::max<size_t>(1, options.threads * 2);
+            : std::max<size_t>(1, processing_threads * 2);
     std::mutex jobs_mutex;
     std::condition_variable jobs_ready;
     std::condition_variable jobs_have_space;
@@ -3916,9 +4304,12 @@ int run_convert(int argc, char** argv) {
     bool stop_workers = false;
     std::vector<std::thread> workers;
     pathtally::TallyMap serial_tally_workspace;
+    pathtally::NumericTallyMap serial_numeric_tally_workspace;
 
-    auto worker_loop = [&]() {
+    auto worker_loop = [&](size_t worker_id) {
         pathtally::TallyMap tally_workspace;
+        pathtally::NumericTallyMap numeric_tally_workspace;
+        WorkerRuntimeTiming& runtime_timing = worker_runtime_timing[worker_id];
         try {
             while (true) {
                 GroupJob job;
@@ -3933,8 +4324,14 @@ int run_convert(int argc, char** argv) {
                     job = std::move(jobs.front());
                     jobs.pop_front();
                 }
+                if (profile_runtime_timing) {
+                    runtime_timing.queue_wait_ns += static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - job.submitted_at).count());
+                }
                 jobs_have_space.notify_one();
-                process_group(std::move(job.group), job.ordinal, tally_workspace);
+                process_group(std::move(job.group), job.ordinal, tally_workspace,
+                              numeric_tally_workspace, runtime_timing);
             }
         } catch (...) {
             ordered_output.fail(std::current_exception());
@@ -3947,11 +4344,11 @@ int run_convert(int argc, char** argv) {
         }
     };
 
-    if (options.threads > 1) {
-        workers.reserve(options.threads);
+    if (processing_threads > 1) {
+        workers.reserve(processing_threads);
         try {
-            for (size_t i = 0; i < options.threads; ++i) {
-                workers.emplace_back(worker_loop);
+            for (size_t i = 0; i < processing_threads; ++i) {
+                workers.emplace_back(worker_loop, i);
             }
         } catch (...) {
             {
@@ -3973,17 +4370,25 @@ int run_convert(int argc, char** argv) {
         }
         const size_t ordinal = input_read_groups - 1;
         completed_names.insert(current_group.name);
-        GroupJob job{ordinal, std::move(current_group)};
+        GroupJob job{ordinal, std::move(current_group), {}};
         have_group = false;
-        if (options.threads == 1) {
-            process_group(std::move(job.group), job.ordinal, serial_tally_workspace);
+        if (processing_threads == 1) {
+            process_group(std::move(job.group), job.ordinal, serial_tally_workspace,
+                          serial_numeric_tally_workspace, worker_runtime_timing.front());
             return;
         }
-
         std::unique_lock<std::mutex> lock(jobs_mutex);
+        const auto admission_wait_started = profile_runtime_timing
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
         jobs_have_space.wait(lock, [&] {
             return stop_workers || jobs.size() < max_queued_groups;
         });
+        if (profile_runtime_timing) {
+            producer_admission_wait_ns += static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - admission_wait_started).count());
+        }
         if (stop_workers) {
             lock.unlock();
             const std::exception_ptr failure = ordered_output.failure();
@@ -3992,7 +4397,13 @@ int run_convert(int argc, char** argv) {
             }
             throw std::runtime_error("PanCollapse worker pool stopped without an exception");
         }
+        if (profile_runtime_timing) {
+            job.submitted_at = std::chrono::steady_clock::now();
+        }
         jobs.push_back(std::move(job));
+        if (profile_runtime_timing) {
+            queue_high_water = std::max(queue_high_water, jobs.size());
+        }
         lock.unlock();
         jobs_ready.notify_one();
     };
@@ -4021,14 +4432,16 @@ int run_convert(int argc, char** argv) {
             }
         });
         submit_group();
+        producer_finished = std::chrono::steady_clock::now();
     } catch (...) {
+        producer_finished = std::chrono::steady_clock::now();
         producer_failure = std::current_exception();
         ordered_output.fail(producer_failure);
         std::lock_guard<std::mutex> lock(jobs_mutex);
         stop_workers = true;
     }
 
-    if (options.threads > 1) {
+    if (processing_threads > 1) {
         {
             std::lock_guard<std::mutex> lock(jobs_mutex);
             jobs_closed = true;
@@ -4048,6 +4461,55 @@ int run_convert(int argc, char** argv) {
 
     const auto processing_finished = std::chrono::steady_clock::now();
 
+    if (profile_runtime_timing) {
+        WorkerRuntimeTiming sum;
+        WorkerRuntimeTiming maximum;
+        for (const WorkerRuntimeTiming& timing : worker_runtime_timing) {
+            sum.groups += timing.groups;
+            sum.queue_wait_ns += timing.queue_wait_ns;
+            sum.compute_before_output_ns += timing.compute_before_output_ns;
+            sum.ordered_wait_ns += timing.ordered_wait_ns;
+            sum.ordered_region_ns += timing.ordered_region_ns;
+            maximum.queue_wait_ns = std::max(maximum.queue_wait_ns, timing.queue_wait_ns);
+            maximum.compute_before_output_ns = std::max(
+                maximum.compute_before_output_ns, timing.compute_before_output_ns);
+            maximum.ordered_wait_ns = std::max(
+                maximum.ordered_wait_ns, timing.ordered_wait_ns);
+            maximum.ordered_region_ns = std::max(
+                maximum.ordered_region_ns, timing.ordered_region_ns);
+        }
+        constexpr double kNanosecondsPerSecond = 1e9;
+        const double producer_wall_seconds = std::chrono::duration<double>(
+            producer_finished - processing_started).count();
+        const double producer_admission_wait_seconds =
+            producer_admission_wait_ns / kNanosecondsPerSecond;
+        std::cerr << "panCollapse: runtime profile: groups=" << sum.groups
+                  << " queue_high_water=" << queue_high_water
+                  << " producer_wall_seconds=" << producer_wall_seconds
+                  << " producer_admission_wait_seconds="
+                  << producer_admission_wait_seconds
+                  << " producer_active_seconds="
+                  << std::max(0.0, producer_wall_seconds -
+                                       producer_admission_wait_seconds)
+                  << " worker_queue_wait_sum_seconds="
+                  << sum.queue_wait_ns / kNanosecondsPerSecond
+                  << " worker_queue_wait_max_seconds="
+                  << maximum.queue_wait_ns / kNanosecondsPerSecond
+                  << " worker_compute_before_output_sum_seconds="
+                  << sum.compute_before_output_ns / kNanosecondsPerSecond
+                  << " worker_compute_before_output_max_seconds="
+                  << maximum.compute_before_output_ns / kNanosecondsPerSecond
+                  << " worker_ordered_wait_sum_seconds="
+                  << sum.ordered_wait_ns / kNanosecondsPerSecond
+                  << " worker_ordered_wait_max_seconds="
+                  << maximum.ordered_wait_ns / kNanosecondsPerSecond
+                  << " worker_ordered_region_sum_seconds="
+                  << sum.ordered_region_ns / kNanosecondsPerSecond
+                  << " worker_ordered_region_max_seconds="
+                  << maximum.ordered_region_ns / kNanosecondsPerSecond
+                  << '\n';
+    }
+
     if (input_records == 0) {
         throw std::runtime_error("panCollapse convert expects at least one GAMP record");
     }
@@ -4063,7 +4525,8 @@ int run_convert(int argc, char** argv) {
         processing_started - invocation_started).count();
     const double processing_seconds = std::chrono::duration<double>(
         processing_finished - processing_started).count();
-    std::cerr << "panCollapse: performance: workers=" << options.threads
+    std::cerr << "panCollapse: performance: workers=" << processing_threads
+              << " requested_workers=" << options.threads
               << " initialization_seconds=" << initialization_seconds
               << " processing_seconds=" << processing_seconds
               << " input_records=" << input_records
@@ -4074,7 +4537,9 @@ int run_convert(int argc, char** argv) {
               << (options.count_mode == pathtally::CountMode::Score
                       ? node_hst_cache.build_count()
                       : node_ledger_cache.build_count())
-              << " exact_exon_edge_cache_entries=" << exact_exon_edges.build_count()
+              << " exact_exon_edge_geometries=" << exact_exon_edge_geometry_count
+              << " exact_model_candidate_cache_entries="
+              << exact_model_candidates.build_count()
               << '\n';
 
     rad_writer.finalize();

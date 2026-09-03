@@ -1778,12 +1778,14 @@ retain their v0.8.2 lexical Parent/exon/body order, errors replay from the lowes
 an initialization error occurs before an output directory is committed. This bounds temporary
 parallel result storage by worker count rather than total gene count.
 
-The score-node, ledger-node, and exact-exon-edge caches remain lazy. Each uses 256 shards with a
-separate read/write lock and stores each completed value in an independently allocated immutable
-object, so unrelated misses can build concurrently and references survive map rehashing. This
-choice avoids an eager whole-XG cache and adds no cache file or external-sort I/O. Concurrent XG
-path access is supported by inspection and Helgrind testing of the pinned implementation, not by an
-upstream portable thread-safety guarantee; changing the VG/XG revision requires a new audit.
+The score-node, ledger-node, and exact-model-candidate caches remain lazy. Each uses 256 shards with
+a separate read/write lock and stores each completed value in an independently allocated immutable
+object, so unrelated misses can build concurrently and references survive map rehashing. Exact exon
+edges were initially handled the same way, but D075 replaces that hot shared cache with immutable
+Parent-local geometry. This design avoids an eager whole-XG cache and adds no cache file or
+external-sort I/O. Concurrent XG path access is supported by inspection and Helgrind testing of the
+pinned implementation, not by an upstream portable thread-safety guarantee; changing the VG/XG
+revision requires a new audit.
 
 **Bounded evidence:** The 512-Parent fixture in
 `docs/research/v090-deterministic-parallelism.md` has 32 exon and 32 body paths per Parent (524,288
@@ -1791,6 +1793,41 @@ exact models). Median Parent construction fell from 4.048 s at one worker to 0.1
 and total initialization fell from 4.848 s at one worker to 0.931 s at 32 (5.21x). The 32-worker
 candidate completed in 1.26 s versus 6.51 s for v0.8.2, with identical RAD, summary, and tx2gene
 bytes. This synthetic result is not a chr20-22 or whole-pangenome runtime/RAM guarantee.
+
+### D075 — Remove production hot-path strings and exact-edge contention without merging evidence
+
+**Decision source:** User, 2026-09-03 (requested additional PanCollapse runtime improvements for
+v0.9.0).
+
+**Decision:** Keep XG path handles numeric through production tally and Parent/target collapse.
+Resolve names and lexical output ranks through immutable ledger-owned rows only at the evidence
+boundary. Use one layer-qualified Parent table, preserve the existing path-to-Parent-to-target MAX
+hierarchy, and keep tied evidence identities distinct and lexically ordered. Build exon/body step
+and occurrence geometry once per Parent. Exact models with identical ordered exon steps may share
+an immutable splice-edge set, but retain separate path, Parent, target, orientation, score, and
+terminal evidence identities. Repeated-body position maps remain model-local where occurrence
+resolution requires them.
+
+Debug-sidecar serialization begins only after read-local exact DP, so enabling diagnostics does not
+serialize worker computation. `PANCOLLAPSE_PROFILE_TIMING=1` reports queue, worker-compute,
+ordered-wait, and output-region timing to stderr without changing persisted artifacts. When an exact
+surface has fewer than 32 models, a request for multiple processing workers automatically uses one
+active worker to avoid synchronization regressions; initialization may still use the requested
+workers. Both requested and active processing counts are reported.
+
+**Non-decisions:** v0.9.0 does not merge distinct exact models merely because their geometry is
+equal; broader cross-model DP sharing remains deferred until it has randomized differential and
+representative biological-slice evidence. HTSlib/BGZF output threading is not enabled: bounded
+profiling found the ordered BAM/RAD region negligible on the adversarial compute fixture, while
+changing compression concurrency could weaken byte determinism.
+
+**Verification:** On the 2,000-model/5,000-group fixture, final median wall time was 3.76 s with one
+worker, 0.52 s with eight, 0.33 s with sixteen, and 0.25 s with thirty-two, versus 24.86 s for
+v0.8.2. The generated reversed-order 64-Parent fixture matched a clean `5769f11` baseline
+recursively at final one and eight workers, including BAM, RAD, summary, tx2gene, and debug evidence;
+cyclic degradation and repeated-resolvable occurrence fixtures also matched. These synthetic
+measurements validate the optimization and deterministic evidence contract, not whole-pangenome
+runtime or memory.
 
 ## Architecture questions and Phase 0 resolution map
 

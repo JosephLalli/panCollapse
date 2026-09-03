@@ -12,19 +12,27 @@ All notable changes to panCollapse are recorded here. Versions follow the projec
   legacy gene-geometry compatibility path) with adaptive Parent blocks. Worker results commit in
   stable order through a reduction window bounded at twice the worker count, preserving model IDs
   and lexical failure order without retaining every temporary geometry result.
-- Replaces the three process-wide lazy-cache miss locks with 256-way sharded caches whose values
-  are immutable and address-stable. Caches remain demand-driven, so threading does not require an
-  eager whole-XG cache or additional disk I/O.
-- Reduces exact GeneFull initialization storage to the exceptional repeated-body occurrence
-  geometry that actually needs disambiguation, rather than retaining ordinary per-model position
-  maps.
-- Removes transcript-specific production work that was used only by the legacy two-column body
-  classifier.
+- Replaces process-wide lazy-cache miss locks with 256-way sharded node/model-candidate caches
+  whose values are immutable and address-stable. Caches remain demand-driven, so threading does
+  not require an eager whole-XG cache or additional disk I/O.
+- Builds each exon/body path geometry once per Parent instead of once per exon/body model pair.
+  Exact exon splice-edge geometry is shared by exactly equal ordered step sequences and referenced
+  directly by the read DP, removing a highly contended cache lock without collapsing path/Parent
+  evidence identities. Ordinary models no longer allocate repeated-body position maps.
+- Keeps production count-mode tallies numeric from XG path handle through the path -> Parent ->
+  target MAX reduction. A single layered flat Parent table replaces duplicated string-keyed ordered
+  maps, while path and Parent names are recovered only for winning BAM provenance.
+- Removes duplicated production adapter maps and annotation strings: the validated ledger owns
+  stable row/Parent metadata, and compact indexes retain pointers plus lexical ranks.
 - Consolidates equivalent exact dynamic-programming states by complete future-relevant geometry
   while retaining the maximum integer score, and prefilters impossible starting body paths within
   a source subpath.
+- Defers debug-sidecar writes until after read-local exact DP, so requesting diagnostics no longer
+  serializes the dominant worker computation. Tiny exact surfaces (fewer than 32 models) use one
+  active worker automatically when thread handoff costs more than the work.
 - Reports initialization and processing time, effective group throughput, and five-minute or
-  one-million-group progress on stderr without changing persisted artifacts.
+  one-million-group progress on stderr without changing persisted artifacts. Setting
+  `PANCOLLAPSE_PROFILE_TIMING=1` adds queue, compute, ordered-wait, and ordered-region diagnostics.
 - Keeps normal typed-union BAM evidence, the five-point exact score window, Parent identity,
   degradation behavior, RAD schema, and output order unchanged.
 

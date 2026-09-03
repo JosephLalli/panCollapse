@@ -800,9 +800,10 @@ set_tests_properties(genefull_ex50pas_exact PROPERTIES
   FIXTURES_REQUIRED genefull_ex50pas_inputs
   FIXTURES_SETUP genefull_ex50pas_exact_out)
 
-# A generated production-ledger fixture has 64 lexical Parents and 64 canonical targets. This is
-# enough work for adaptive Parent blocks and transcript geometry to use multiple workers at
-# --threads 8. Unique paths make the lazy node and exact-edge caches miss.
+# A generated production-ledger fixture has 64 lexical Parents and canonical targets. Three exon
+# and three body paths per Parent produce 576 exact models but only 64 immutable exon-edge
+# geometries. This gives adaptive Parent blocks and reused geometry enough work to use multiple
+# workers at --threads 8 while explicit exon/body-tier reads prove aliases remain distinct evidence.
 # The driver clears its work root before rebuilding inputs, compares every persisted artifact from
 # --threads 1 and 8 byte-for-byte in both production and legacy geometry, and proves parallel
 # failures retain lexical Parent ordering without committing a partial output directory.
@@ -811,7 +812,7 @@ add_test(NAME genefull_ex50pas_parallel_init_determinism
   COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/parallel_exact_init_determinism.sh"
     "$<TARGET_FILE:panCollapse>" "${PT_VG}" "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/make_parallel_exact_init_fixture.py" "${CMAKE_COMMAND}"
-    "${PT_PARALLEL_EXACT_INIT_DIR}")
+    "${PT_PARALLEL_EXACT_INIT_DIR}" "${PANCOLLAPSE_SAMTOOLS}")
 set_tests_properties(genefull_ex50pas_parallel_init_determinism PROPERTIES
   LABELS "vg;pathtally;genefull;ledger;ex50;threads;initialization")
 

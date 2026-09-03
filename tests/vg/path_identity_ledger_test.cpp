@@ -97,12 +97,17 @@ void run() {
         row("body", "BODY_A", "UP_A", "CANON", "GENE1", "body_A"),
     };
     const auto valid_path = write_ledger("valid", valid);
-    const auto ledger = path_identity::read(valid_path);
-    check(ledger.rows_by_path.size() == 5, "valid: all exact paths retained");
-    check(ledger.identities_by_parent.size() == 4,
+    auto ledger = path_identity::read(valid_path);
+    path_identity::PathIdentityLedger moved_ledger = std::move(ledger);
+    check(moved_ledger.rows_by_path.size() == 5, "valid: all exact paths retained");
+    check(moved_ledger.identities_by_parent.size() == 4,
           "valid: repeated emitted paths share one Parent identity");
-    check(ledger.canonical_gene.at("literal_R1") == "GENE2",
+    check(moved_ledger.canonical_gene.at("literal_R1") == "GENE2",
           "valid: literal _R1 identity preserved");
+    for (const auto& [parent, identity] : moved_ledger.identities_by_parent) {
+        check(identity != nullptr && identity->unique_parent == parent,
+              "valid: representative Parent pointers survive ledger move");
+    }
     std::filesystem::remove(valid_path);
 
     {

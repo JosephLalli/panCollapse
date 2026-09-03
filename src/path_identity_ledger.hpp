@@ -13,6 +13,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace path_identity {
@@ -81,9 +82,18 @@ struct PathIdentityRow {
 
 struct PathIdentityLedger {
     std::map<std::string, PathIdentityRow> rows_by_path;
-    std::map<std::string, AnnotationIdentity> identities_by_parent;
+    // std::map nodes are stable: index each Parent by a representative owned row instead of
+    // duplicating its 21-string annotation. The ledger is move-only so these internal pointers
+    // cannot be invalidated by an accidental deep copy.
+    std::map<std::string, const AnnotationIdentity*> identities_by_parent;
     std::map<std::string, std::string> canonical_gene;
     bool has_body_layer = false;
+
+    PathIdentityLedger() = default;
+    PathIdentityLedger(const PathIdentityLedger&) = delete;
+    PathIdentityLedger& operator=(const PathIdentityLedger&) = delete;
+    PathIdentityLedger(PathIdentityLedger&&) = default;
+    PathIdentityLedger& operator=(PathIdentityLedger&&) = default;
 };
 
 inline std::vector<std::string> split_tab(const std::string& line) {
@@ -332,35 +342,43 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
         require_group_component_safe(annotation.canonical_transcript, "canonical_transcript",
                                      line_number, false);
         require_group_component_safe(annotation.gene_id, "gene_id", line_number, false);
-        PathIdentityRow row{annotation, path_name,
+        PathIdentityRow row{std::move(annotation), path_name,
                             parse_positive_length(field(fields, "vg_path_length"), line_number),
                             field(fields, "vg_haplotype_origins")};
-        if (!ledger.rows_by_path.emplace(path_name, row).second) {
+        auto [stored_row, row_inserted] =
+            ledger.rows_by_path.emplace(path_name, std::move(row));
+        if (!row_inserted) {
             throw std::runtime_error("path identity ledger repeats vg_path_name " + path_name);
         }
+        const AnnotationIdentity& stored_annotation = stored_row->second.annotation;
 
-        const auto prior_parent = ledger.identities_by_parent.find(annotation.unique_parent);
+        const auto prior_parent = ledger.identities_by_parent.find(
+            stored_annotation.unique_parent);
         if (prior_parent != ledger.identities_by_parent.end() &&
-            prior_parent->second.feature_layer != annotation.feature_layer) {
+            prior_parent->second->feature_layer != stored_annotation.feature_layer) {
             throw std::runtime_error("path identity ledger unique_parent " +
-                                     annotation.unique_parent +
+                                     stored_annotation.unique_parent +
                                      " appears in both exon and body layers");
         }
         auto [parent, parent_inserted] =
-            ledger.identities_by_parent.emplace(annotation.unique_parent, annotation);
-        if (!parent_inserted && !(parent->second == annotation)) {
+            ledger.identities_by_parent.emplace(stored_annotation.unique_parent,
+                                                &stored_annotation);
+        if (!parent_inserted && !(*parent->second == stored_annotation)) {
             throw std::runtime_error("path identity ledger maps unique_parent " +
-                                     annotation.unique_parent + " to multiple identities");
+                                     stored_annotation.unique_parent +
+                                     " to multiple identities");
         }
         // Exact Ex50 preflight has a more specific fail-closed diagnostic for a linked body that
         // changes its exon Parent's counted gene. Defer only that body-side contradiction until
         // the graph-aware preflight; exon and ordinary-mode validation remain strict here.
         if (!(defer_linked_body_gene_mismatch && layer == "body")) {
             auto [canonical, canonical_inserted] =
-                ledger.canonical_gene.emplace(annotation.canonical_transcript, annotation.gene_id);
-            if (!canonical_inserted && canonical->second != annotation.gene_id) {
+                ledger.canonical_gene.emplace(stored_annotation.canonical_transcript,
+                                              stored_annotation.gene_id);
+            if (!canonical_inserted && canonical->second != stored_annotation.gene_id) {
                 throw std::runtime_error("path identity ledger maps canonical transcript " +
-                                         annotation.canonical_transcript + " to multiple genes");
+                                         stored_annotation.canonical_transcript +
+                                         " to multiple genes");
             }
         }
         ledger.has_body_layer = ledger.has_body_layer || layer == "body";
@@ -383,12 +401,12 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
                                      annotation.unique_parent + " links to missing exon Parent " +
                                      annotation.exon_unique_parent);
         }
-        if (exon->second.feature_layer != "exon") {
+        if (exon->second->feature_layer != "exon") {
             throw std::runtime_error("path identity ledger body Parent " +
                                      annotation.unique_parent + " links to non-exon Parent " +
                                      annotation.exon_unique_parent);
         }
-        const AnnotationIdentity& exon_identity = exon->second;
+        const AnnotationIdentity& exon_identity = *exon->second;
         if (exon_identity.source_parent != annotation.source_parent ||
             exon_identity.input_parent != annotation.input_parent ||
             exon_identity.canonical_transcript != annotation.canonical_transcript ||

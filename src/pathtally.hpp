@@ -43,6 +43,10 @@ struct HstTally {
 // does not matter: accumulation is commutative and select_targets re-derives the top
 // score and re-sorts.
 using TallyMap = absl::flat_hash_map<std::string, HstTally>;
+// Production ledgers already assign every relevant graph path a stable numeric handle. Keeping
+// that handle through the hot tally avoids hashing and copying long vg path names per read; names
+// are recovered only for winning BAM provenance.
+using NumericTallyMap = absl::flat_hash_map<uint64_t, HstTally>;
 
 // For a graph node id, emit(path_name, path_is_reverse) once per HST path step on
 // that node.
@@ -163,6 +167,114 @@ struct NumericPathIdentity {
     std::string unique_parent;
     uint32_t canonical_target_id = 0;
 };
+
+struct RankedPathIdentity {
+    const std::string* path_name = nullptr;
+    const std::string* unique_parent = nullptr;
+    uint32_t parent_rank = 0;
+    uint32_t canonical_target_id = 0;
+    bool is_exon = false;
+};
+
+// Compact production-only collapse result. Pointer vectors can be accumulated without allocating
+// one ordered-tree node per winning path/Parent. The caller lexically sorts them only if that
+// target/layer is ultimately emitted.
+struct CompactCollapsedIdentityTally {
+    int64_t score = std::numeric_limits<int64_t>::min();
+    int64_t forward_bases = 0;
+    int64_t reverse_bases = 0;
+    std::vector<const std::string*> winning_paths;
+    std::vector<const std::string*> winning_parents;
+};
+
+struct CompactIdentityLayers {
+    std::map<uint32_t, CompactCollapsedIdentityTally> exon;
+    std::map<uint32_t, CompactCollapsedIdentityTally> body;
+};
+
+template <class IdentityResolver>
+inline CompactIdentityLayers collapse_ranked_identity_tallies(
+    const NumericTallyMap& tallies, IdentityResolver&& resolve_identity) {
+    struct ParentEvidence {
+        uint32_t target_id = 0;
+        const std::string* unique_parent = nullptr;
+        bool is_exon = false;
+        int64_t score = std::numeric_limits<int64_t>::min();
+        int64_t forward_bases = 0;
+        int64_t reverse_bases = 0;
+        const std::string* first_winning_path = nullptr;
+        std::vector<const std::string*> additional_winning_paths;
+    };
+    // A layer bit keeps exon/body evidence independent without reserving two
+    // full-size flat hash tables for every read group. Parent ranks are only
+    // 32 bits, so the combined key remains collision-free.
+    using ParentMap = absl::flat_hash_map<uint64_t, ParentEvidence>;
+    ParentMap parents;
+    parents.reserve(tallies.size());
+
+    for (const auto& [path_handle, tally] : tallies) {
+        const std::optional<RankedPathIdentity> identity = resolve_identity(path_handle);
+        if (!identity.has_value()) {
+            continue;
+        }
+        const uint64_t layered_parent_key =
+            (static_cast<uint64_t>(identity->parent_rank) << 1U) |
+            static_cast<uint64_t>(identity->is_exon);
+        auto [it, inserted] = parents.try_emplace(layered_parent_key);
+        if (inserted) {
+            it->second.target_id = identity->canonical_target_id;
+            it->second.unique_parent = identity->unique_parent;
+            it->second.is_exon = identity->is_exon;
+        }
+        if (!inserted && it->second.target_id != identity->canonical_target_id) {
+            throw std::runtime_error("unique Parent resolves to multiple canonical targets");
+        }
+        ParentEvidence& evidence = it->second;
+        if (inserted || tally.score > evidence.score) {
+            evidence.score = tally.score;
+            evidence.forward_bases = tally.forward_bases;
+            evidence.reverse_bases = tally.reverse_bases;
+            evidence.first_winning_path = identity->path_name;
+            evidence.additional_winning_paths.clear();
+        } else if (tally.score == evidence.score) {
+            evidence.forward_bases += tally.forward_bases;
+            evidence.reverse_bases += tally.reverse_bases;
+            evidence.additional_winning_paths.push_back(identity->path_name);
+        }
+    }
+
+    CompactIdentityLayers result;
+    for (const auto& [layered_parent_key, parent] : parents) {
+        static_cast<void>(layered_parent_key);
+        auto& targets = parent.is_exon ? result.exon : result.body;
+        CompactCollapsedIdentityTally& target = targets[parent.target_id];
+        if (parent.score > target.score) {
+            target.score = parent.score;
+            target.forward_bases = parent.forward_bases;
+            target.reverse_bases = parent.reverse_bases;
+            target.winning_paths.clear();
+            target.winning_paths.reserve(
+                1 + parent.additional_winning_paths.size());
+            target.winning_paths.push_back(parent.first_winning_path);
+            target.winning_paths.insert(
+                target.winning_paths.end(),
+                parent.additional_winning_paths.begin(),
+                parent.additional_winning_paths.end());
+            target.winning_parents.assign(1, parent.unique_parent);
+        } else if (parent.score == target.score) {
+            target.forward_bases += parent.forward_bases;
+            target.reverse_bases += parent.reverse_bases;
+            target.winning_paths.push_back(parent.first_winning_path);
+            target.winning_paths.insert(
+                target.winning_paths.end(),
+                parent.additional_winning_paths.begin(),
+                parent.additional_winning_paths.end());
+            target.winning_parents.push_back(parent.unique_parent);
+        }
+    }
+
+    return result;
+}
 
 struct CollapsedIdentityTally {
     int64_t score = std::numeric_limits<int64_t>::min();
