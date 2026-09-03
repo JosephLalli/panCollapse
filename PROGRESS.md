@@ -3,47 +3,59 @@
 ## v0.9.0 deterministic performance release (verified 2026-09-03)
 
 This section supersedes the v0.8.2 next action below. The user explicitly reopened PanCollapse
-performance work as a 0.9.0 feature release. Work is isolated on branch
-`worktree-codex-v090-performance` from the now-main provenance commit
-`f5b5cae74bd69ca44e39dbdba80d7f86c90cdf33`; the running v0.8.2 producer and partial outputs are
-untouched.
+performance work as a 0.9.0 feature release. The final implementation is committed as
+`b128919293f11f5d1528d9bd8feadde806717582` and promoted to `main`; it descends from the v0.8.2
+provenance commit `f5b5cae74bd69ca44e39dbdba80d7f86c90cdf33`. The running v0.8.2 producer and partial outputs
+remain untouched.
 
-The candidate combines sparse repeated-body geometry, removal of unused transcript-specific legacy
-passes, exact-state consolidation/prefiltering, adaptive Parent/target initialization workers,
-256-way sharded lazy XG lookup caches, and bounded ordinal-preserving read-group workers behind
-`--threads N`. Normal typed-union BAM and the five-point exact score window remain the production
-evidence surface; no alignment, index, Parent, or evidence semantics changed.
+The release combines sparse repeated-body geometry, exact-state consolidation/prefiltering,
+adaptive Parent/target initialization workers, 256-way sharded lazy node/model-candidate caches,
+numeric production tally/collapse, immutable Parent-local exon-edge sharing, and bounded
+ordinal-preserving read-group workers behind `--threads N`. Normal typed-union BAM and the
+five-point exact score window remain the production evidence surface; no alignment, index, Parent,
+or evidence semantics changed.
 
 - The optimized build passes 128/128 CTests. The exact-mode gate requires byte-identical RAD,
   BAM, summary, tx2gene, and debug artifacts at one, two, four, and eight workers, including forced
   one-byte RAD chunks. An independent score-mode gate proves default/one/eight-worker artifact
-  identity. A generated 64-Parent/64-target gate proves production Parent/target and legacy
-  multi-gene initialization actually use eight workers, sharded cache misses remain deterministic,
-  and lexical-first parallel failures create no partial output. Zero and non-integer thread counts
-  fail, and a recurrent closed read name still fails without committed partial output under eight
-  workers.
-- Helgrind completed the generated exact eight-worker initialization/read fixture with zero error
-  contexts. The local ThreadSanitizer runtime could not start because it rejected the host address
-  layout, so it is not counted as a passing code check.
+  identity. A generated 64-Parent/64-target gate with three exon and three body aliases per Parent
+  proves production Parent/target and legacy multi-gene initialization actually use eight workers,
+  numeric XG handle order cannot alter lexical output, shared geometry retains distinct exon/body
+  evidence identities, repeated runs are byte-identical, and lexical-first parallel failures create
+  no partial output. Zero and non-integer thread counts fail, and a recurrent closed read name still
+  fails without committed partial output under eight workers.
+- Three repeat Helgrind runs of the generated exact eight-worker fixture completed with zero error
+  contexts. One earlier run exposed a condition-mutex warning whose stack originated entirely in
+  glibc 2.39's internal `pthread_cond_wait` broadcast; a focused source audit and a recheck with
+  Helgrind's condition-signal heuristic disabled found no PanCollapse race or API misuse. The local
+  ThreadSanitizer runtime still cannot start because it rejects the host address layout, so TSan is
+  not counted as a passing code check.
 - On the bounded adversarial 2,000-model, 5,000-group exact fixture, median wall time fell from
-  24.86 s in v0.8.2 to 19.88 s with one v0.9.0 worker, 2.68 s with eight, and 1.83 s with sixteen:
-  1.25x, 9.28x, and 13.58x faster than v0.8.2, respectively. RAD and summary hashes match v0.8.2.
-  A cheap 900,000-group fixture instead slowed at multiple workers because synchronization
-  dominated; the default therefore remains one. Full inputs, replicates, hashes, and interpretation
-  limits are recorded in
+  24.86 s in v0.8.2 to 3.76 s with one final v0.9.0 worker, 0.52 s with eight, 0.33 s with sixteen,
+  and 0.25 s with thirty-two: 6.61x, 47.81x, 75.33x, and 99.44x faster than v0.8.2, respectively.
+  Sixty-four and 128 workers regressed from the 32-worker optimum on this fixture. RAD and summary
+  hashes match v0.8.2. A separate clean `5769f11` baseline matched the final one/eight-worker
+  generated-alias, cyclic-degradation, and repeated-resolvable artifacts recursively. Full inputs,
+  replicates, hashes, and interpretation limits are recorded in
   [`docs/research/v090-deterministic-parallelism.md`](docs/research/v090-deterministic-parallelism.md).
+- A cheap two-model/900,000-group fixture automatically reduced eight requested processing workers
+  to one active worker. It took 9.40 s with one requested and 9.34 s with eight requested, avoiding
+  the earlier queue-overhead regression while leaving initialization under the requested ceiling.
 - On a separate 512-Parent startup fixture with 32 exon and 32 body paths per Parent (524,288
-  exact models), the Parent phase median fell from 4.048 s at one worker to 0.116 s at 64 (34.8x).
-  Total initialization was best at 32 workers: 0.931 s versus 4.848 s at one (5.21x). Median wall
-  time was 1.26 s at 32 workers versus 6.51 s for v0.8.2 (5.17x), while RAD, summary, and tx2gene
-  bytes matched. The ordered initialization result window is capped at twice the effective worker
-  count; lazy caches remain demand-driven and add no persistent or spill I/O.
+  exact models), final one-worker wall time was 1.12 s and median peak RSS was 131.1 MiB, versus
+  6.51 s and 463.0 MiB for v0.8.2. The final Parent phase was 0.291 s at one and 0.120 s at 64; total
+  initialization was already dominated by ledger/XG loading and ranged from 0.881 to 1.068 s at
+  8-64 workers. The 16,384 exon aliases share 512 exact edge geometries. RAD, summary, and tx2gene
+  bytes match v0.8.2; the ordered result window remains capped at twice the effective worker count
+  and adds no persistent or spill I/O.
 - The local runtime image `josephlalli/pancollapse:v0.9.0` has immutable image ID
-  `sha256:22302c7617874f2259936dc1ad4d0797fb42646baecd1e83d1b04870c481d332`, OCI version label
-  `0.9.0`, and size 156,843,635 bytes. It reports `panCollapse 0.9.0`; an exact eight-worker
-  container smoke run produced the host fixture's RAD and summary bytes and passed BAM quickcheck.
-  The corresponding unstripped optimized executable SHA-256 is
-  `a2e157278871d96bebe7a42d6f6213885e5ffdd053696e0558f7c528ebc4bc72`.
+  `sha256:3886de3476a9ed0553ac49147bccf61740f68dacd8603d4c5c283a0185baa211`, OCI version label
+  `0.9.0`, and size 156,933,811 bytes. It reports `panCollapse 0.9.0`. An exact eight-worker
+  container smoke matched host RAD, summary, tx2gene, debug evidence, and BAM records; a second run
+  with forced one-byte RAD chunks reproduced the baseline differential `map.rad` SHA-256
+  `cc1b3fa2ececf7de5c1a67defdd4c715f83531a39572652ea48dc7dfd83dc19b`. The corresponding
+  unstripped optimized executable SHA-256 is
+  `d91f2bfaddb65d137fc766a3e003fa81e9a670b931e7a7ad3592ef4b49b1b227`.
 
 These bounded results establish the targeted algorithmic and parallel gains, not chr20-22 or
 whole-pangenome wall time, peak RAM, or the best worker count on a production graph. The next

@@ -98,9 +98,9 @@ sidecar, BAM, RAD, summary, and tx2gene artifacts were byte-identical.
 The release transition was also checked directly against a separately built, clean `5769f11`
 binary. Both binaries were copied in turn to one common invocation path so BAM `@PG CL` text was
 identical. The generated 64-Parent fixture used three exon and three body aliases per Parent,
-reversed GFA path insertion relative to lexical names, and explicit exon- and body-tier reads.
-Baseline one-worker output matched final one- and eight-worker output recursively. Its artifact
-SHA-256 values were:
+reversed GFA path insertion relative to lexical names, explicit exon- and body-tier reads, and
+forced one-byte RAD chunks. Baseline one-worker output matched final one- and eight-worker output
+recursively. Its artifact SHA-256 values were:
 
 | Artifact | SHA-256 |
 |---|---|
