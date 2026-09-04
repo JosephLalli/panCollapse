@@ -1829,6 +1829,26 @@ cyclic degradation and repeated-resolvable occurrence fixtures also matched. The
 measurements validate the optimization and deterministic evidence contract, not whole-pangenome
 runtime or memory.
 
+### D076 — Keep the one-million-read HG002 evaluation off the product release branch
+
+**Decision source:** User, 2026-09-04 (directed that speedup work remain merged in `main` and
+the 1M subset tooling, tests, and provenance occupy their own PanCollapse branch).
+
+**Decision:** `main` ends the v0.9.0 performance work at
+`5f4daffff17e503c63bb0d58dbd0e779573621a0`. The deterministic subsetter, selected-read
+correction helper, frozen benchmark runner, integration tests, and terminal result receipts
+live on `benchmark/hg002-joint-million-subset`, based directly on that commit. The branch is
+an evaluation surface and is not merged back into `main` as part of v0.9.0.
+
+panSC continues to own barcode correction, annotation/counting policy, and assignment scoring.
+Their checksum-pinned implementations and immutable data roots remain external dependencies;
+copying them into PanCollapse would create a second policy authority. Small receipts and hashes
+are tracked here, while large BAM and result artifacts remain in their immutable external root.
+
+**Rationale:** This gives the release a clean product history while making the exact study
+reviewable and resumable in a PanCollapse branch. It also prevents downstream evaluation policy
+changes from being mistaken for PanCollapse runtime or assignment-algorithm changes.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

@@ -1,5 +1,20 @@
 # Progress
 
+## HG002 joint one-million-read benchmark branch (verified 2026-09-04)
+
+This section applies only to `benchmark/hg002-joint-million-subset`. The branch starts from
+the completed v0.9.0 speedup/performance-receipt `main` commit `5f4daff`; none of the subset,
+downstream correction, counting, scoring, or result receipts are part of `main`.
+
+The deterministic assignment-blind sample and frozen integrated count/scoring run completed
+over exactly 1,000,000 HG002 chr20/21/22 reads. The primary eligibility-aware open-set result
+is precision 0.983341393, recall 0.949932893, and F1 0.966348480 (TP 945,586; FP 16,019;
+FN 49,838; TN 3,322). Score checksums pass, all scope denominators reconcile, and zero truth
+reads were excluded. The run remains an authorized partial unblinding rather than the completed
+full final test. See
+[`benchmarks/hg002-joint-million-subset/README.md`](benchmarks/hg002-joint-million-subset/README.md)
+for exact scope, branch provenance, diagnostic metrics, limitations, and terminal receipts.
+
 ## v0.9.0 deterministic performance release (verified 2026-09-03)
 
 This section supersedes the v0.8.2 next action below. The user explicitly reopened PanCollapse

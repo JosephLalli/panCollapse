@@ -1,0 +1,87 @@
+{
+  "inputs": [
+    {
+      "bytes": 42906,
+      "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_strict_membership_final_method_freeze_v8_v090_20260904T055700Z/provenance/scripts/score_count_cr_read_classification.py",
+      "sha256": "0382efb093cc750a96a6e7a9542f5d8c41a2390ee3ed5dad439b948f1b943bca"
+    },
+    {
+      "bytes": 2975651,
+      "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_q100_simulation_full_v1_20260831T131151-0500/template_truth.tsv",
+      "sha256": "0387959ceb4f99ddb7ff442959d33918c064c048655ca71117b926390b8f7606"
+    },
+    {
+      "bytes": 43482863,
+      "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_pancollapse_v090_gene_assignment_1m_v1_20260904T171055Z/subset/R2.subset.fastq.gz",
+      "sha256": "63aa8775f2bd7a6ecf4adae50f6728abb52e3e1891bc86141625bc62f2c12ca6"
+    },
+    {
+      "bytes": 21197020,
+      "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_pancollapse_v090_gene_assignment_1m_v1_20260904T171055Z/count/read_classification.tsv.gz",
+      "sha256": "74fe7b158b1b1d5d95f21b2ec39e8a71e21d4e5772e41f5b98c5c50d6fa235c6"
+    },
+    {
+      "bytes": 285639,
+      "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_strict_membership_final_v082_v1_20260903T153417Z/direct_policy/gene_policy.tsv.gz",
+      "sha256": "2c90861aa6259c2aa04e15730bf9d28bd479e6cfa27d540f0f62ab7acbde623f"
+    }
+  ],
+  "parameters": {
+    "classifications": [
+      {
+        "label": "pancollapse",
+        "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_pancollapse_v090_gene_assignment_1m_v1_20260904T171055Z/count/read_classification.tsv.gz"
+      }
+    ],
+    "denominator": "all FASTQ reads with mapped template truth",
+    "eligibility_gene_policy": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_strict_membership_final_v082_v1_20260903T153417Z/direct_policy/gene_policy.tsv.gz",
+    "eligibility_scoring": {
+      "all_mapped_origin_diagnostic": "metrics.tsv all_mapped_origin_* columns retain legacy scoring",
+      "background_truth": "abstention or nonassignment is TN; any eligible singleton is FP only",
+      "eligible_competition_class": "PRIMARY",
+      "eligible_truth": "correct eligible singleton is TP; abstention is FN; wrong eligible singleton is FP plus FN"
+    },
+    "gene_unit_weighting": "each truth gene represented in scored FASTQ reads has total weight one; each read has weight reciprocal to that gene's truth-read count within the reported scope",
+    "gene_unit_zero_support_policy": "annotation genes with no scored truth reads are outside the accuracy denominator and are not represented",
+    "scope_column": "scope_chromosome",
+    "wrong_assignment": "one FP plus one FN"
+  },
+  "results": {
+    "background_truth_genes_by_scope": {
+      "chr20": 17,
+      "chr21": 5,
+      "chr22": 25,
+      "overall": 47
+    },
+    "background_truth_reads_by_scope": {
+      "chr20": 2234,
+      "chr21": 330,
+      "chr22": 2012,
+      "overall": 4576
+    },
+    "eligible_truth_genes_by_scope": {
+      "chr20": 435,
+      "chr21": 164,
+      "chr22": 378,
+      "overall": 977
+    },
+    "eligible_truth_reads_by_scope": {
+      "chr20": 446361,
+      "chr21": 151249,
+      "chr22": 397814,
+      "overall": 995424
+    },
+    "excluded_unknown_truth": 0,
+    "fastq_reads": 1000000,
+    "scored_truth_reads": 1000000,
+    "scored_truth_reads_by_scope": {
+      "chr20": 448595,
+      "chr21": 151579,
+      "chr22": 399826,
+      "overall": 1000000
+    }
+  },
+  "schema": "panSC-count-cr-read-classification-open-set-score-v4",
+  "script": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_strict_membership_final_method_freeze_v8_v090_20260904T055700Z/provenance/scripts/score_count_cr_read_classification.py",
+  "script_version": "1.3.1"
+}

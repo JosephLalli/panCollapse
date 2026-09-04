@@ -1,0 +1,12 @@
+schema	pansc-correction-wrapper-resume-v1
+reason	samtools_quickcheck_short_option_compatibility
+prior_benchmark_status	benchmark_failed	stage=correct_barcodes	exit_code=1	utc=2026-09-04T19:07:04Z
+producer_exit_status	0
+source_records	11881577
+selected_filter_records	1000000
+emitted_records	999759
+corrected_bam_bytes	12704972504
+quickcheck	pass
+record_count_check	pass
+runner_version	1.3.1
+resumed_utc	2026-09-04T19:10:29Z

@@ -2,17 +2,29 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pysam
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/subset_bam_by_fastq_hash.py"
-CORRECT_CB = ROOT / "bin/correct_cb.py"
 CORRECT_CB_SELECTED = ROOT / "scripts/correct_cb_selected.py"
+CORRECT_CB = Path(
+    os.environ.get(
+        "PANCOLLAPSE_BENCHMARK_CORRECT_CB",
+        "/mnt/ssd/lalli/"
+        "hg002_chr20_chr21_chr22_strict_membership_final_method_freeze_v8_v090_"
+        "20260904T055700Z/provenance/bin/correct_cb.py",
+    )
+)
+CORRECT_CB_SHA256 = (
+    "a54ac84bf757e779e9591792f6e387d241acbbdd0f8d40be1590ae3c6a83b526"
+)
 
 
 def digest(path: Path) -> str:
@@ -147,6 +159,13 @@ def test_exact_hash_subset_is_assignment_blind_and_order_preserving(tmp_path: Pa
 
 
 def test_frozen_barcode_correction_can_be_stream_filtered(tmp_path: Path) -> None:
+    if not CORRECT_CB.is_file():
+        pytest.skip(
+            "set PANCOLLAPSE_BENCHMARK_CORRECT_CB to the checksum-pinned "
+            "panSC correct_cb.py integration oracle"
+        )
+    assert digest(CORRECT_CB) == CORRECT_CB_SHA256
+
     bam = tmp_path / "raw.bam"
     whitelist = tmp_path / "whitelist.txt"
     whitelist.write_text("AAAAAAAAAAAAAAAA\nCCCCCCCCCCCCCCCC\n")
