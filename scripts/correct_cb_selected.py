@@ -10,6 +10,7 @@ work, emitting selected non-transport records in source order.
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -129,11 +130,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-source-records", type=int)
     parser.add_argument("--expected-selected-records", type=int)
     parser.add_argument("--progress-every", type=int, default=1_000_000)
+    parser.add_argument("--filter-threads", type=int, default=4)
     args = parser.parse_args()
     if not 0.0 <= args.threshold <= 1.0:
         parser.error("--threshold must be between zero and one")
     if args.progress_every < 0:
         parser.error("--progress-every must be nonnegative")
+    if args.filter_threads < 1:
+        parser.error("--filter-threads must be positive")
     for path in (args.in_bam, args.whitelist, args.qname_file):
         if not path.is_file():
             parser.error(f"missing input file: {path}")
@@ -141,6 +145,41 @@ def parse_args() -> argparse.Namespace:
         parser.error(f"refusing existing output: {args.out_bam}")
     args.out_bam.parent.mkdir(parents=True, exist_ok=True)
     return args
+
+
+def selected_bam_process(args: argparse.Namespace) -> subprocess.Popen[bytes]:
+    # pysam ships the samtools dispatcher even when no standalone samtools
+    # executable is installed in the runtime image. catch_stdout=False makes
+    # the child write its uncompressed BAM stream directly to this pipe.
+    program = """
+import pysam
+import sys
+
+pysam.view(
+    "--no-PG",
+    "--qname-file",
+    sys.argv[1],
+    "--uncompressed",
+    "--threads",
+    sys.argv[2],
+    sys.argv[3],
+    catch_stdout=False,
+)
+"""
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            program,
+            str(args.qname_file),
+            str(args.filter_threads),
+            str(args.in_bam),
+        ],
+        stdout=subprocess.PIPE,
+    )
+    if process.stdout is None:
+        raise RuntimeError("failed to open selected-BAM filter pipe")
+    return process
 
 
 def main() -> int:
@@ -179,58 +218,68 @@ def main() -> int:
         )
 
     corrector = Corrector(whitelist, abundance, args.threshold)
-    pass_two_records = 0
+    selected_input_records = 0
     selected_seen: set[str] = set()
     emitted = corrected = dropped = with_quality = barcode_only = 0
     started = time.monotonic()
-    with pysam.AlignmentFile(args.in_bam, "rb", check_sq=False) as source:
-        with pysam.AlignmentFile(args.out_bam, "wb", template=source) as output:
-            for record in source:
-                pass_two_records += 1
-                read_name = record.query_name
-                if read_name not in selected_names:
+    filter_process = selected_bam_process(args)
+    filter_completed = False
+    try:
+        with pysam.AlignmentFile(
+            filter_process.stdout, "rb", check_sq=False
+        ) as source:
+            with pysam.AlignmentFile(args.out_bam, "wb", template=source) as output:
+                for record in source:
+                    selected_input_records += 1
+                    read_name = record.query_name
+                    if read_name not in selected_names:
+                        raise RuntimeError(
+                            f"QNAME filter emitted an unselected record: {read_name!r}"
+                        )
+                    if read_name in selected_seen:
+                        raise RuntimeError(
+                            f"selected QNAME has multiple BAM records: {read_name!r}"
+                        )
+                    selected_seen.add(read_name)
+                    if record.has_tag("XB") and record.get_tag("XB") == "barcode_only":
+                        barcode_only += 1
+                        if record.has_tag("CY"):
+                            with_quality += 1
+                        continue
+                    barcode = record.get_tag("CB") if record.has_tag("CB") else None
+                    quality = record.get_tag("CY") if record.has_tag("CY") else None
+                    if quality is not None:
+                        with_quality += 1
+                    corrected_barcode = (
+                        corrector.correct(barcode, quality)
+                        if barcode is not None
+                        else None
+                    )
+                    if corrected_barcode is None:
+                        dropped += 1
+                        continue
+                    if corrected_barcode != barcode:
+                        record.set_tag("CB", corrected_barcode)
+                        corrected += 1
+                    output.write(record)
+                    emitted += 1
                     if (
                         args.progress_every
-                        and pass_two_records % args.progress_every == 0
+                        and selected_input_records % args.progress_every == 0
                     ):
-                        progress("selected-output", pass_two_records, started)
-                    continue
-                if read_name in selected_seen:
-                    raise RuntimeError(
-                        f"selected QNAME has multiple BAM records: {read_name!r}"
-                    )
-                selected_seen.add(read_name)
-                if record.has_tag("XB") and record.get_tag("XB") == "barcode_only":
-                    barcode_only += 1
-                    if record.has_tag("CY"):
-                        with_quality += 1
-                    continue
-                barcode = record.get_tag("CB") if record.has_tag("CB") else None
-                quality = record.get_tag("CY") if record.has_tag("CY") else None
-                if quality is not None:
-                    with_quality += 1
-                corrected_barcode = (
-                    corrector.correct(barcode, quality) if barcode is not None else None
-                )
-                if corrected_barcode is None:
-                    dropped += 1
-                    continue
-                if corrected_barcode != barcode:
-                    record.set_tag("CB", corrected_barcode)
-                    corrected += 1
-                output.write(record)
-                emitted += 1
-                if (
-                    args.progress_every
-                    and pass_two_records % args.progress_every == 0
-                ):
-                    progress("selected-output", pass_two_records, started)
-
-    if pass_two_records != pass_one_records:
-        raise RuntimeError(
-            f"BAM changed between passes: {pass_one_records:,} then "
-            f"{pass_two_records:,} records"
-        )
+                        progress("selected-output", selected_input_records, started)
+        filter_process.stdout.close()
+        filter_returncode = filter_process.wait()
+        filter_completed = True
+        if filter_returncode != 0:
+            raise RuntimeError(
+                f"pysam QNAME filter failed with exit code {filter_returncode}"
+            )
+    finally:
+        if not filter_completed:
+            filter_process.stdout.close()
+            filter_process.terminate()
+            filter_process.wait()
     missing = selected_names - selected_seen
     if missing:
         examples = ", ".join(repr(name) for name in sorted(missing)[:5])
@@ -247,7 +296,8 @@ def main() -> int:
         )
 
     print(
-        f"source_records={pass_two_records} selected_records={len(selected_seen)} "
+        f"source_records={pass_one_records} selected_records={len(selected_seen)} "
+        f"selected_filter_records={selected_input_records} "
         f"emitted={emitted} corrected={corrected} dropped_uncorrectable={dropped} "
         f"barcode_only={barcode_only} "
         f"whitelist_barcodes_with_exact_reads={len(abundance)} "

@@ -207,7 +207,10 @@ def test_frozen_barcode_correction_can_be_stream_filtered(tmp_path: Path) -> Non
         text=True,
         check=True,
     )
-    assert "source_records=3 selected_records=2 emitted=2" in selected_run.stderr
+    assert (
+        "source_records=3 selected_records=2 selected_filter_records=2 emitted=2"
+        in selected_run.stderr
+    )
     with pysam.AlignmentFile(corrected, "rb") as observed:
         records = list(observed.fetch(until_eof=True))
     with pysam.AlignmentFile(corrected_selected, "rb") as observed:
