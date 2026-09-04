@@ -11,7 +11,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly SCRIPT_DIR
-readonly SCRIPT_VERSION="1.2.0"
+readonly SCRIPT_VERSION="1.3.0"
 readonly SCHEMA="pansc-hg002-joint-v090-assignment-benchmark-1m-v1"
 readonly SAMPLE_SIZE="1000000"
 readonly SEED="pansc-hg002-joint-v090-gene-assignment-1m-v1"
@@ -38,7 +38,7 @@ readonly CORRECT_CB_SELECTED="${SCRIPT_DIR}/correct_cb_selected.py"
 readonly CORRECT_CB_SHA256="a54ac84bf757e779e9591792f6e387d241acbbdd0f8d40be1590ae3c6a83b526"
 readonly COUNT_CR_SHA256="4d9707ef7c62b2b7db8741ffe824949904fbffc5c03268e496ced4b4a9ab5104"
 readonly SCORE_READS_SHA256="0382efb093cc750a96a6e7a9542f5d8c41a2390ee3ed5dad439b948f1b943bca"
-readonly CORRECT_CB_SELECTED_SHA256="336af8f826344496e1be5819051031b4c1fa66c01b9c38878a08f9d5c0793ef5"
+readonly CORRECT_CB_SELECTED_SHA256="487aa67d191523e63bb94d0e04e7f32e497ca7ec170f5ceaa8539b7326302e0a"
 
 readonly ANNOTATION_ROOT="/mnt/ssd/lalli/hg002_chr20_chr21_chr22_strict_membership_annotation_v1_20260903T063000Z"
 readonly PATH_LEDGER="${ANNOTATION_ROOT}/path_identity_ledger.corrected.tsv"
@@ -267,6 +267,7 @@ run_correction() {
         --expected-selected-records "${SAMPLE_SIZE}"
         --progress-every 1000000
         --filter-threads 8
+        --output-threads 8
     )
     record_command "${COMMAND_ROOT}/correct_barcodes.txt" "${correction_command[@]}"
     started=$(timestamp)
@@ -423,6 +424,7 @@ payload = {
     "barcode_correction": {
         "prior_universe": "all 11881577 producer BAM records",
         "pass2_prefilter": "compiled htslib selected-QNAME filter to uncompressed pipe",
+        "output_threads": 8,
         "full_corrected_bam_written": False,
     },
     "metric_contract": {

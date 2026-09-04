@@ -131,6 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-selected-records", type=int)
     parser.add_argument("--progress-every", type=int, default=1_000_000)
     parser.add_argument("--filter-threads", type=int, default=4)
+    parser.add_argument("--output-threads", type=int, default=4)
     args = parser.parse_args()
     if not 0.0 <= args.threshold <= 1.0:
         parser.error("--threshold must be between zero and one")
@@ -138,6 +139,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--progress-every must be nonnegative")
     if args.filter_threads < 1:
         parser.error("--filter-threads must be positive")
+    if args.output_threads < 1:
+        parser.error("--output-threads must be positive")
     for path in (args.in_bam, args.whitelist, args.qname_file):
         if not path.is_file():
             parser.error(f"missing input file: {path}")
@@ -228,7 +231,12 @@ def main() -> int:
         with pysam.AlignmentFile(
             filter_process.stdout, "rb", check_sq=False
         ) as source:
-            with pysam.AlignmentFile(args.out_bam, "wb", template=source) as output:
+            with pysam.AlignmentFile(
+                args.out_bam,
+                "wb",
+                template=source,
+                threads=args.output_threads,
+            ) as output:
                 for record in source:
                     selected_input_records += 1
                     read_name = record.query_name
