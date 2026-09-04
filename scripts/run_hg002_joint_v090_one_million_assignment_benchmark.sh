@@ -11,7 +11,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly SCRIPT_DIR
-readonly SCRIPT_VERSION="1.3.0"
+readonly SCRIPT_VERSION="1.3.1"
 readonly SCHEMA="pansc-hg002-joint-v090-assignment-benchmark-1m-v1"
 readonly SAMPLE_SIZE="1000000"
 readonly SEED="pansc-hg002-joint-v090-gene-assignment-1m-v1"
@@ -60,13 +60,16 @@ readonly HOST_PYTHON="/mnt/ssd/lalli/.linuxbrew/Cellar/python@3.11/3.11.14/bin/p
 
 ROOT="${DEFAULT_ROOT}"
 PREFLIGHT_ONLY=0
+RESUME_AFTER_CORRECTION=0
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--root PATH] [--preflight-only]
+Usage: $(basename "$0") [--root PATH] [--preflight-only] [--resume-after-correction]
 
 Runs the fixed, authorized partial-unblinding benchmark. Existing partial or
-terminal benchmark directories are never overwritten.
+terminal benchmark directories are never overwritten. The narrowly scoped
+resume mode accepts only a structurally valid, record-count-verified correction
+artifact whose producer command exited successfully before wrapper validation.
 EOF
 }
 
@@ -79,6 +82,10 @@ while (($#)); do
             ;;
         --preflight-only)
             PREFLIGHT_ONLY=1
+            shift
+            ;;
+        --resume-after-correction)
+            RESUME_AFTER_CORRECTION=1
             shift
             ;;
         -h|--help)
@@ -101,6 +108,11 @@ readonly LOG_ROOT="${ROOT}/logs"
 readonly COMMAND_ROOT="${ROOT}/commands"
 readonly TIMING_ROOT="${ROOT}/timings"
 readonly RUN_STATUS="${ROOT}/BENCHMARK.STATUS"
+
+(( ! (PREFLIGHT_ONLY && RESUME_AFTER_CORRECTION) )) || {
+    printf 'ERROR: --preflight-only and --resume-after-correction are mutually exclusive\n' >&2
+    exit 2
+}
 
 CURRENT_STAGE="preflight"
 
@@ -161,6 +173,21 @@ record_command() {
         printf '%q ' "$@"
         printf '\n'
     } > "${path}"
+}
+
+summary_value() {
+    local key=$1
+    local line=$2
+    local field
+    for field in ${line}; do
+        case "${field}" in
+            "${key}="*)
+                printf '%s\n' "${field#*=}"
+                return 0
+                ;;
+        esac
+    done
+    fail "missing ${key} in correction summary"
 }
 
 preflight() {
@@ -276,10 +303,80 @@ run_correction() {
         "${correction_command[@]}" \
         > "${LOG_ROOT}/correct_barcodes.stdout.log" \
         2> "${LOG_ROOT}/correct_barcodes.stderr.log"
-    samtools quickcheck --verbose "${partial}/cbcorr.subset.bam"
+    # samtools quickcheck in the host release accepts short options only and
+    # does not recognize the conventional `--` end-of-options marker.
+    samtools quickcheck -v "${partial}/cbcorr.subset.bam"
     ended=$(timestamp)
     printf 'correct_barcodes_complete\tstarted_utc=%s\tcompleted_utc=%s\n' \
         "${started}" "${ended}" > "${partial}/STATUS"
+    mv "${partial}" "${final}"
+}
+
+resume_completed_correction() {
+    local partial="${ROOT}/correct_barcodes.partial"
+    local final="${ROOT}/correct_barcodes"
+    local bam="${partial}/cbcorr.subset.bam"
+    local correction_log="${LOG_ROOT}/correct_barcodes.stderr.log"
+    local resource_log="${TIMING_ROOT}/correct_barcodes.resource.txt"
+    local receipt="${ROOT}/CORRECTION_RESUME.tsv"
+    local failed_status started summary source_records selected_records
+    local selected_filter_records emitted dropped_uncorrectable barcode_only
+    local observed_records bam_bytes
+
+    [[ -d "${partial}" ]] || fail "resume requires ${partial}"
+    [[ ! -e "${final}" ]] || fail "resume refuses existing terminal stage: ${final}"
+    [[ ! -e "${receipt}" ]] || fail "resume receipt already exists: ${receipt}"
+    require_file "${bam}"
+    require_file "${correction_log}"
+    require_file "${resource_log}"
+    require_file "${RUN_STATUS}"
+
+    failed_status=$(<"${RUN_STATUS}")
+    [[ "${failed_status}" == benchmark_failed$'\t'stage=correct_barcodes$'\t'* ]] || \
+        fail "resume requires a recorded correction-stage wrapper failure"
+    grep -Eq '^[[:space:]]*Exit status: 0$' "${resource_log}" || \
+        fail "correction producer did not record exit status 0"
+
+    summary=$(awk '/^source_records=/ {line = $0} END {print line}' "${correction_log}")
+    [[ -n "${summary}" ]] || fail "correction producer terminal summary is missing"
+    source_records=$(summary_value source_records "${summary}")
+    selected_records=$(summary_value selected_records "${summary}")
+    selected_filter_records=$(summary_value selected_filter_records "${summary}")
+    emitted=$(summary_value emitted "${summary}")
+    dropped_uncorrectable=$(summary_value dropped_uncorrectable "${summary}")
+    barcode_only=$(summary_value barcode_only "${summary}")
+    [[ "${source_records}" == "11881577" ]] || fail "unexpected source record count"
+    [[ "${selected_records}" == "${SAMPLE_SIZE}" ]] || fail "unexpected selected-name count"
+    [[ "${selected_filter_records}" == "${SAMPLE_SIZE}" ]] || \
+        fail "selected htslib filter did not return the complete subset"
+    (( emitted + dropped_uncorrectable + barcode_only == SAMPLE_SIZE )) || \
+        fail "correction terminal accounting does not reconcile"
+
+    samtools quickcheck -v "${bam}"
+    observed_records=$(samtools view -@ 8 -c "${bam}")
+    [[ "${observed_records}" == "${emitted}" ]] || \
+        fail "corrected BAM has ${observed_records} records, expected ${emitted}"
+    bam_bytes=$(stat -c '%s' "${bam}")
+    started=$(awk -F '\t' 'NR == 1 {sub(/^started_utc=/, "", $2); print $2}' \
+        "${partial}/STATUS")
+    [[ -n "${started}" ]] || fail "correction start time is missing"
+
+    {
+        printf 'schema\tpansc-correction-wrapper-resume-v1\n'
+        printf 'reason\tsamtools_quickcheck_short_option_compatibility\n'
+        printf 'prior_benchmark_status\t%s\n' "${failed_status}"
+        printf 'producer_exit_status\t0\n'
+        printf 'source_records\t%s\n' "${source_records}"
+        printf 'selected_filter_records\t%s\n' "${selected_filter_records}"
+        printf 'emitted_records\t%s\n' "${emitted}"
+        printf 'corrected_bam_bytes\t%s\n' "${bam_bytes}"
+        printf 'quickcheck\tpass\n'
+        printf 'record_count_check\tpass\n'
+        printf 'runner_version\t%s\n' "${SCRIPT_VERSION}"
+        printf 'resumed_utc\t%s\n' "$(timestamp)"
+    } > "${receipt}"
+    printf 'correct_barcodes_complete\tstarted_utc=%s\tcompleted_utc=%s\tresumed_after_wrapper_validation=true\n' \
+        "${started}" "$(timestamp)" > "${partial}/STATUS"
     mv "${partial}" "${final}"
 }
 
@@ -452,32 +549,42 @@ if ((PREFLIGHT_ONLY)); then
     exit 0
 fi
 
-for path in \
-    "${ROOT}/correct_barcodes.partial" "${ROOT}/correct_barcodes" \
-    "${ROOT}/count.partial" "${ROOT}/count" \
-    "${ROOT}/score.partial" "${ROOT}/score" \
-    "${ROOT}/BENCHMARK.MANIFEST.json"; do
-    [[ ! -e "${path}" ]] || fail "refusing existing benchmark artifact: ${path}"
-done
 mkdir -p "${LOG_ROOT}" "${COMMAND_ROOT}" "${TIMING_ROOT}"
-{
-    printf 'schema\t%s\n' "${SCHEMA}"
-    printf 'script_version\t%s\n' "${SCRIPT_VERSION}"
-    printf 'evaluation_status\tauthorized_partial_unblinding\n'
-    printf 'full_final_test_complete\tfalse\n'
-    printf 'sample_n\t%s\n' "${SAMPLE_SIZE}"
-    printf 'seed\t%s\n' "${SEED}"
-    printf 'source_bam\t%s\n' "${SOURCE_BAM}"
-    printf 'source_bam_sha256\t%s\n' "${SOURCE_BAM_SHA256}"
-    printf 'freeze_root\t%s\n' "${FREEZE_ROOT}"
-    printf 'annotation_root\t%s\n' "${ANNOTATION_ROOT}"
-    printf 'direct_policy\t%s\n' "${DIRECT_POLICY}"
-    printf 'projected_policy\t%s\n' "${PROJECTED_POLICY}"
-} > "${ROOT}/BENCHMARK.CONFIG.tsv"
-printf 'benchmark_running\tstage=correct_barcodes\tutc=%s\n' "$(timestamp)" > "${RUN_STATUS}"
-
-CURRENT_STAGE="correct_barcodes"
-run_correction
+if ((RESUME_AFTER_CORRECTION)); then
+    for path in \
+        "${ROOT}/count.partial" "${ROOT}/count" \
+        "${ROOT}/score.partial" "${ROOT}/score" \
+        "${ROOT}/BENCHMARK.MANIFEST.json"; do
+        [[ ! -e "${path}" ]] || fail "resume refuses existing later-stage artifact: ${path}"
+    done
+    CURRENT_STAGE="resume_correction"
+    resume_completed_correction
+else
+    for path in \
+        "${ROOT}/correct_barcodes.partial" "${ROOT}/correct_barcodes" \
+        "${ROOT}/count.partial" "${ROOT}/count" \
+        "${ROOT}/score.partial" "${ROOT}/score" \
+        "${ROOT}/BENCHMARK.MANIFEST.json"; do
+        [[ ! -e "${path}" ]] || fail "refusing existing benchmark artifact: ${path}"
+    done
+    {
+        printf 'schema\t%s\n' "${SCHEMA}"
+        printf 'script_version\t%s\n' "${SCRIPT_VERSION}"
+        printf 'evaluation_status\tauthorized_partial_unblinding\n'
+        printf 'full_final_test_complete\tfalse\n'
+        printf 'sample_n\t%s\n' "${SAMPLE_SIZE}"
+        printf 'seed\t%s\n' "${SEED}"
+        printf 'source_bam\t%s\n' "${SOURCE_BAM}"
+        printf 'source_bam_sha256\t%s\n' "${SOURCE_BAM_SHA256}"
+        printf 'freeze_root\t%s\n' "${FREEZE_ROOT}"
+        printf 'annotation_root\t%s\n' "${ANNOTATION_ROOT}"
+        printf 'direct_policy\t%s\n' "${DIRECT_POLICY}"
+        printf 'projected_policy\t%s\n' "${PROJECTED_POLICY}"
+    } > "${ROOT}/BENCHMARK.CONFIG.tsv"
+    printf 'benchmark_running\tstage=correct_barcodes\tutc=%s\n' "$(timestamp)" > "${RUN_STATUS}"
+    CURRENT_STAGE="correct_barcodes"
+    run_correction
+fi
 printf 'benchmark_running\tstage=count\tutc=%s\n' "$(timestamp)" > "${RUN_STATUS}"
 CURRENT_STAGE="count"
 run_count
