@@ -3,13 +3,15 @@
 # gene-assignment benchmark. Selection is already frozen in SUBSET_ROOT.
 #
 # The correction stage intentionally reads the complete producer BAM twice:
-# pass 1 learns the frozen all-read barcode prior, while pass 2 streams corrected
-# records through a selected-QNAME filter. This avoids both a subset-derived prior
-# and a full corrected-BAM write.
+# pass 1 learns the frozen all-read barcode prior, while pass 2 checks the frozen
+# selected QNAME set before correcting and writing records. This avoids both a
+# subset-derived prior and work or serialization for unselected records.
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="1.0.0"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+readonly SCRIPT_DIR
+readonly SCRIPT_VERSION="1.1.0"
 readonly SCHEMA="pansc-hg002-joint-v090-assignment-benchmark-1m-v1"
 readonly SAMPLE_SIZE="1000000"
 readonly SEED="pansc-hg002-joint-v090-gene-assignment-1m-v1"
@@ -32,9 +34,11 @@ readonly FROZEN_RUNTIME="${FREEZE_ROOT}/provenance"
 readonly CORRECT_CB="${FROZEN_RUNTIME}/bin/correct_cb.py"
 readonly COUNT_CR="${FROZEN_RUNTIME}/bin/count_cr.py"
 readonly SCORE_READS="${FROZEN_RUNTIME}/scripts/score_count_cr_read_classification.py"
+readonly CORRECT_CB_SELECTED="${SCRIPT_DIR}/correct_cb_selected.py"
 readonly CORRECT_CB_SHA256="a54ac84bf757e779e9591792f6e387d241acbbdd0f8d40be1590ae3c6a83b526"
 readonly COUNT_CR_SHA256="4d9707ef7c62b2b7db8741ffe824949904fbffc5c03268e496ced4b4a9ab5104"
 readonly SCORE_READS_SHA256="0382efb093cc750a96a6e7a9542f5d8c41a2390ee3ed5dad439b948f1b943bca"
+readonly CORRECT_CB_SELECTED_SHA256="d3acbe5b06f99f55aa9740d1ab0d988ad0fe588649dd50c61787b30469ae0988"
 
 readonly ANNOTATION_ROOT="/mnt/ssd/lalli/hg002_chr20_chr21_chr22_strict_membership_annotation_v1_20260903T063000Z"
 readonly PATH_LEDGER="${ANNOTATION_ROOT}/path_identity_ledger.corrected.tsv"
@@ -221,6 +225,7 @@ PY
     require_sha256 "${CORRECT_CB}" "${CORRECT_CB_SHA256}"
     require_sha256 "${COUNT_CR}" "${COUNT_CR_SHA256}"
     require_sha256 "${SCORE_READS}" "${SCORE_READS_SHA256}"
+    require_sha256 "${CORRECT_CB_SELECTED}" "${CORRECT_CB_SELECTED_SHA256}"
 
     require_file "${ANNOTATION_ROOT}/SHA256SUMS"
     require_manifest_entry "${ANNOTATION_ROOT}/SHA256SUMS" \
@@ -247,7 +252,7 @@ run_correction() {
     local partial="${ROOT}/correct_barcodes.partial"
     local final="${ROOT}/correct_barcodes"
     local started ended
-    local -a correction_command filter_command
+    local -a correction_command
 
     [[ ! -e "${partial}" ]] || fail "preserving existing partial stage: ${partial}"
     [[ ! -e "${final}" ]] || fail "refusing existing terminal stage: ${final}"
@@ -255,19 +260,20 @@ run_correction() {
     correction_command=(
         docker run --rm --user "$(id -u):$(id -g)"
         -v /mnt/ssd/lalli:/mnt/ssd/lalli
-        "${PYSAM_IMAGE}" python3 "${CORRECT_CB}"
-        "${SOURCE_BAM}" - "${WHITELIST}"
+        "${PYSAM_IMAGE}" python3 "${CORRECT_CB_SELECTED}"
+        "${SOURCE_BAM}" "${partial}/cbcorr.subset.bam" "${WHITELIST}"
+        "${SELECTED_NAMES}"
+        --expected-source-records 11881577
+        --expected-selected-records "${SAMPLE_SIZE}"
+        --progress-every 1000000
     )
-    filter_command=(
-        samtools view --no-PG --threads 8 --qname-file "${SELECTED_NAMES}"
-        --bam --output "${partial}/cbcorr.subset.bam" -
-    )
-    record_command "${COMMAND_ROOT}/correct_barcodes.producer.txt" "${correction_command[@]}"
-    record_command "${COMMAND_ROOT}/correct_barcodes.filter.txt" "${filter_command[@]}"
+    record_command "${COMMAND_ROOT}/correct_barcodes.txt" "${correction_command[@]}"
     started=$(timestamp)
     printf 'correct_barcodes_running\tstarted_utc=%s\n' "${started}" > "${partial}/STATUS"
-    "${correction_command[@]}" 2> "${LOG_ROOT}/correct_barcodes.stderr.log" \
-        | "${filter_command[@]}" 2> "${LOG_ROOT}/correct_barcodes.filter.stderr.log"
+    /usr/bin/time --verbose --output="${TIMING_ROOT}/correct_barcodes.resource.txt" \
+        "${correction_command[@]}" \
+        > "${LOG_ROOT}/correct_barcodes.stdout.log" \
+        2> "${LOG_ROOT}/correct_barcodes.stderr.log"
     samtools quickcheck --verbose "${partial}/cbcorr.subset.bam"
     ended=$(timestamp)
     printf 'correct_barcodes_complete\tstarted_utc=%s\tcompleted_utc=%s\n' \
@@ -415,7 +421,7 @@ payload = {
     },
     "barcode_correction": {
         "prior_universe": "all 11881577 producer BAM records",
-        "output_filter": "selected QNAMEs after correction",
+        "selected_work": "QNAME membership checked before pass-2 correction",
         "full_corrected_bam_written": False,
     },
     "metric_contract": {

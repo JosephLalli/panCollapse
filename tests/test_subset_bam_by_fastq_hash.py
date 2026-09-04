@@ -12,6 +12,7 @@ import pysam
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/subset_bam_by_fastq_hash.py"
 CORRECT_CB = ROOT / "bin/correct_cb.py"
+CORRECT_CB_SELECTED = ROOT / "scripts/correct_cb_selected.py"
 
 
 def digest(path: Path) -> str:
@@ -165,6 +166,7 @@ def test_frozen_barcode_correction_can_be_stream_filtered(tmp_path: Path) -> Non
     selected = tmp_path / "selected.txt"
     selected.write_text("keep-exact\nkeep-corrected\n")
     corrected = tmp_path / "corrected-subset.bam"
+    corrected_selected = tmp_path / "corrected-selected-direct.bam"
 
     correct = subprocess.Popen(
         [sys.executable, "-B", str(CORRECT_CB), str(bam), "-", str(whitelist)],
@@ -185,9 +187,93 @@ def test_frozen_barcode_correction_can_be_stream_filtered(tmp_path: Path) -> Non
     stderr = correct.stderr.read().decode() if correct.stderr is not None else ""
     assert correct.wait() == 0, stderr
     assert filtered.stderr == b""
+    selected_run = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            str(CORRECT_CB_SELECTED),
+            str(bam),
+            str(corrected_selected),
+            str(whitelist),
+            str(selected),
+            "--expected-source-records",
+            "3",
+            "--expected-selected-records",
+            "2",
+            "--progress-every",
+            "0",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "source_records=3 selected_records=2 emitted=2" in selected_run.stderr
     with pysam.AlignmentFile(corrected, "rb") as observed:
         records = list(observed.fetch(until_eof=True))
+    with pysam.AlignmentFile(corrected_selected, "rb") as observed:
+        direct_records = list(observed.fetch(until_eof=True))
     assert [record.query_name for record in records] == ["keep-exact", "keep-corrected"]
     assert [record.get_tag("CB") for record in records] == [
         "AAAAAAAAAAAAAAAA", "AAAAAAAAAAAAAAAA"
     ]
+    assert [record.to_string() for record in direct_records] == [
+        record.to_string() for record in records
+    ]
+
+
+def test_selected_correction_uses_unselected_reads_in_global_prior(
+    tmp_path: Path,
+) -> None:
+    bam = tmp_path / "raw.bam"
+    whitelist = tmp_path / "whitelist.txt"
+    barcode_a = "AAAAAAAAAAAAAAAA"
+    barcode_b = "CAAAAAAAAAAAAAAC"
+    ambiguous = "CAAAAAAAAAAAAAAA"
+    whitelist.write_text(f"{barcode_a}\n{barcode_b}\n")
+    header = {"HD": {"VN": "1.6", "SO": "unsorted"}, "SQ": [{"SN": "x", "LN": 100}]}
+    with pysam.AlignmentFile(bam, "wb", header=header) as output:
+        for index in range(100):
+            record = pysam.AlignedSegment(output.header)
+            record.query_name = f"unselected-a-{index}"
+            record.query_sequence = "A"
+            record.flag = 4
+            record.query_qualities = pysam.qualitystring_to_array("N")
+            record.set_tag("CB", barcode_a)
+            record.set_tag("CY", "F" * 16)
+            output.write(record)
+        for name, barcode in (("unselected-b", barcode_b), ("selected", ambiguous)):
+            record = pysam.AlignedSegment(output.header)
+            record.query_name = name
+            record.query_sequence = "A"
+            record.flag = 4
+            record.query_qualities = pysam.qualitystring_to_array("N")
+            record.set_tag("CB", barcode)
+            record.set_tag("CY", "F" * 16)
+            output.write(record)
+    selected = tmp_path / "selected.txt"
+    selected.write_text("selected\n")
+    corrected = tmp_path / "corrected-selected.bam"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            str(CORRECT_CB_SELECTED),
+            str(bam),
+            str(corrected),
+            str(whitelist),
+            str(selected),
+            "--expected-source-records",
+            "102",
+            "--expected-selected-records",
+            "1",
+            "--progress-every",
+            "0",
+        ],
+        check=True,
+    )
+    with pysam.AlignmentFile(corrected, "rb") as observed:
+        records = list(observed.fetch(until_eof=True))
+    assert len(records) == 1
+    assert records[0].query_name == "selected"
+    assert records[0].get_tag("CB") == barcode_a
