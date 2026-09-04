@@ -779,6 +779,173 @@ set_tests_properties(genefull_ex50pas_gamp PROPERTIES
   LABELS "vg;pathtally;genefull;ledger;ex50"
   FIXTURES_REQUIRED genefull_ex50pas_dir FIXTURES_SETUP genefull_ex50pas_inputs)
 
+# Native v0.10 direct counting. The authenticated bundle is rebuilt from repository
+# fixtures for every test run, then one- and four-thread requests must publish the
+# same canonical Parquet/MEX content. The small exact surface may intentionally
+# reduce the active worker count to one; larger fixtures cover the worker pool.
+set(DIRECT_COUNT_BUNDLE "${EX50_DIR}/count_bundle")
+set(DIRECT_COUNT_ONE "${EX50_DIR}/direct_count_threads_1")
+set(DIRECT_COUNT_FOUR "${EX50_DIR}/direct_count_threads_4")
+set(DIRECT_COUNT_CR7 "${EX50_DIR}/direct_count_cr7_only")
+set(DIRECT_COUNT_PANSC "${EX50_DIR}/direct_count_pansc_only")
+set(DIRECT_COUNT_OVERRIDE "${EX50_DIR}/direct_count_override")
+set(DIRECT_COUNT_EMPTY "${EX50_DIR}/direct_count_empty")
+add_test(NAME direct_count_fixture_clean
+  COMMAND ${CMAKE_COMMAND} -E rm -rf
+    "${DIRECT_COUNT_BUNDLE}" "${DIRECT_COUNT_ONE}" "${DIRECT_COUNT_FOUR}"
+    "${DIRECT_COUNT_CR7}" "${DIRECT_COUNT_PANSC}"
+    "${DIRECT_COUNT_OVERRIDE}" "${DIRECT_COUNT_EMPTY}" "${EX50_DIR}/empty.gamp")
+set_tests_properties(direct_count_fixture_clean PROPERTIES
+  LABELS "vg;count;direct-count"
+  FIXTURES_REQUIRED genefull_ex50pas_inputs
+  FIXTURES_SETUP direct_count_clean)
+
+add_test(NAME direct_count_bundle_fixture
+  COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/make_count_bundle_fixture.py"
+    "${EX50_FIX}" "${DIRECT_COUNT_BUNDLE}")
+set_tests_properties(direct_count_bundle_fixture PROPERTIES
+  LABELS "vg;count;direct-count;facts"
+  FIXTURES_REQUIRED direct_count_clean
+  FIXTURES_SETUP direct_count_bundle)
+
+add_test(NAME direct_count_threads_1
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --t2g "${EX50_FIX}/count_t2g.tsv"
+    --body-t2g "${EX50_FIX}/count_body_t2g.tsv"
+    --cr7 --pansc-strict-v1 --threads 1 --count-memory-budget 1MiB
+    --10x-mex --rad-out
+    --read-assignments-out diagnostics/read_assignments.parquet
+    --out-dir "${DIRECT_COUNT_ONE}")
+set_tests_properties(direct_count_threads_1 PROPERTIES
+  LABELS "vg;count;direct-count;parquet;mex;rad"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
+  FIXTURES_SETUP direct_count_one)
+
+add_test(NAME direct_count_threads_4
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --pansc-strict-v1 --threads 4 --count-memory-budget 1MiB
+    --10x-mex --out-dir "${DIRECT_COUNT_FOUR}")
+set_tests_properties(direct_count_threads_4 PROPERTIES
+  LABELS "vg;count;direct-count;parquet;mex;threads"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
+  FIXTURES_SETUP direct_count_four)
+
+add_test(NAME direct_count_cr7_only
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --threads 2 --count-memory-budget 1MiB
+    --out-dir "${DIRECT_COUNT_CR7}")
+set_tests_properties(direct_count_cr7_only PROPERTIES
+  LABELS "vg;count;direct-count;parquet;profiles"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
+  FIXTURES_SETUP direct_count_cr7)
+
+add_test(NAME direct_count_pansc_only
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --pansc-strict-v1 --threads 2 --count-memory-budget 1MiB
+    --out-dir "${DIRECT_COUNT_PANSC}")
+set_tests_properties(direct_count_pansc_only PROPERTIES
+  LABELS "vg;count;direct-count;parquet;profiles"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
+  FIXTURES_SETUP direct_count_pansc)
+
+add_test(NAME direct_count_verify
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_verify.py"
+    "${DIRECT_COUNT_ONE}" "${DIRECT_COUNT_FOUR}"
+    "${DIRECT_COUNT_CR7}" "${DIRECT_COUNT_PANSC}")
+set_tests_properties(direct_count_verify PROPERTIES
+  LABELS "vg;count;direct-count;parquet;mex;threads;profiles"
+  FIXTURES_REQUIRED "direct_count_one;direct_count_four;direct_count_cr7;direct_count_pansc")
+
+add_test(NAME direct_count_duplicate_profile_rejected
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --profile cr7-v1 --out-dir "${EX50_DIR}/duplicate_profile")
+set_tests_properties(direct_count_duplicate_profile_rejected PROPERTIES
+  LABELS "vg;count;direct-count;cli"
+  FIXTURES_REQUIRED direct_count_bundle WILL_FAIL TRUE)
+
+add_test(NAME direct_count_override_scope_rejected
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --profile-override cr7-v1:score-window=4
+    --out-dir "${EX50_DIR}/override_without_scope")
+set_tests_properties(direct_count_override_scope_rejected PROPERTIES
+  LABELS "vg;count;direct-count;cli"
+  FIXTURES_REQUIRED direct_count_bundle WILL_FAIL TRUE)
+
+add_test(NAME direct_count_override_sensitivity
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}/MANIFEST.json"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --analysis-scope sensitivity-analysis
+    --profile-override cr7-v1:score-window=4
+    --out-dir "${DIRECT_COUNT_OVERRIDE}")
+set_tests_properties(direct_count_override_sensitivity PROPERTIES
+  LABELS "vg;count;direct-count;cli;policy"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
+  FIXTURES_SETUP direct_count_override_output)
+
+add_test(NAME direct_count_override_verify
+  COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_override_verify.py"
+    "${DIRECT_COUNT_OVERRIDE}")
+set_tests_properties(direct_count_override_verify PROPERTIES
+  LABELS "vg;count;direct-count;cli;policy;parquet"
+  FIXTURES_REQUIRED direct_count_override_output)
+
+add_test(NAME direct_count_t2g_mismatch_rejected
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --t2g "${EX50_FIX}/count_t2g_mismatch.tsv"
+    --cr7 --out-dir "${EX50_DIR}/t2g_mismatch")
+set_tests_properties(direct_count_t2g_mismatch_rejected PROPERTIES
+  LABELS "vg;count;direct-count;cli;facts"
+  FIXTURES_REQUIRED direct_count_bundle WILL_FAIL TRUE)
+
+add_test(NAME direct_count_empty_gamp_setup
+  COMMAND ${CMAKE_COMMAND} -E touch "${EX50_DIR}/empty.gamp")
+set_tests_properties(direct_count_empty_gamp_setup PROPERTIES
+  LABELS "vg;count;direct-count;empty"
+  FIXTURES_REQUIRED direct_count_clean FIXTURES_SETUP direct_count_empty_input)
+
+add_test(NAME direct_count_empty_gamp
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/empty.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --out-dir "${DIRECT_COUNT_EMPTY}")
+set_tests_properties(direct_count_empty_gamp PROPERTIES
+  LABELS "vg;count;direct-count;empty;parquet"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle;direct_count_empty_input"
+  FIXTURES_SETUP direct_count_empty_output)
+
+add_test(NAME direct_count_empty_verify
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_empty_verify.py"
+    "${DIRECT_COUNT_EMPTY}")
+set_tests_properties(direct_count_empty_verify PROPERTIES
+  LABELS "vg;count;direct-count;empty;parquet"
+  FIXTURES_REQUIRED direct_count_empty_output)
+
 add_test(NAME genefull_ex50pas_rad_baseline
   COMMAND $<TARGET_FILE:panCollapse> convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
@@ -799,6 +966,15 @@ set_tests_properties(genefull_ex50pas_exact PROPERTIES
   LABELS "vg;pathtally;genefull;ledger;ex50;bam"
   FIXTURES_REQUIRED genefull_ex50pas_inputs
   FIXTURES_SETUP genefull_ex50pas_exact_out)
+
+# --rad-out is the existing pre-count sink, so native count must preserve the
+# exact legacy bytes rather than render either profile's final assignments.
+add_test(NAME direct_count_rad_matches_convert
+  COMMAND ${CMAKE_COMMAND} -E compare_files
+    "${DIRECT_COUNT_ONE}/map.rad" "${EX50_DIR}/exact/map.rad")
+set_tests_properties(direct_count_rad_matches_convert PROPERTIES
+  LABELS "vg;count;direct-count;rad;parity"
+  FIXTURES_REQUIRED "direct_count_one;genefull_ex50pas_exact_out")
 
 # A generated production-ledger fixture has 64 lexical Parents and canonical targets. Three exon
 # and three body paths per Parent produce 576 exact models but only 64 immutable exon-edge

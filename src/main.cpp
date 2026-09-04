@@ -1,6 +1,7 @@
 #include <handlegraph/path_position_handle_graph.hpp>
 #include <handlegraph/util.hpp>
 #include <htslib/sam.h>
+#include <openssl/evp.h>
 #include <vg/io/stream.hpp>
 #include <vg/vg.pb.h>
 #include <xg.hpp>
@@ -9,6 +10,12 @@
 #include "pathtally_ledger.hpp"
 #include "pathtally_qualadj.hpp"
 #include "path_identity_ledger.hpp"
+#include "direct_count.hpp"
+#include "direct_count_assignment.hpp"
+#include "direct_count_diagnostics.hpp"
+#include "direct_count_facts.hpp"
+#include "direct_count_output.hpp"
+#include "direct_count_runtime.hpp"
 
 #include <algorithm>
 #include <array>
@@ -42,6 +49,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 namespace {
 
@@ -86,6 +94,7 @@ enum class StrandFilter { Both, Forward, Reverse };
 enum class MoleculeParseStatus { Ok, Missing, Malformed, Unsupported };
 
 struct Options {
+    bool direct_count = false;
     std::filesystem::path gamp;
     std::filesystem::path xg;
     std::filesystem::path t2g;
@@ -115,6 +124,16 @@ struct Options {
     // D068 is the v0.8 default. The explicit opt-out restores the pre-D068 exact-evidence
     // eligibility surface: every complete compatible traversal reaches downstream Ex50 ranking.
     bool exact_ex50_score_window_enabled = true;
+    std::filesystem::path count_bundle;
+    std::filesystem::path barcode_whitelist;
+    std::vector<std::string> requested_profiles;
+    std::vector<pancollapse::direct_count::ProfileOverride> profile_overrides;
+    std::vector<pancollapse::direct_count::EffectiveProfile> count_profiles;
+    std::string analysis_scope;
+    uint64_t count_memory_budget = 128ULL << 30;
+    bool count_10x_mex = false;
+    bool count_rad_out = false;
+    std::filesystem::path read_assignments_out;
 };
 
 struct MoleculeId {
@@ -175,11 +194,158 @@ constexpr const char* kUsageText =
     "[--compact-exact-count-bam forward|reverse] "
     "[--path-identity-ledger-sha256 HEX] "
     "[--strict-allowlisted-parents parents.txt] "
-    "[--strict-allowlisted-parents-sha256 HEX]";
+    "[--strict-allowlisted-parents-sha256 HEX]\n"
+    "       panCollapse count --gamp reads.gamp --xg graph.xg "
+    "--count-bundle panSC-count-facts-v1 --barcode-whitelist barcodes.txt "
+    "PROFILE_SELECTOR [PROFILE_SELECTOR ...] --out-dir counts "
+    "[--t2g transcripts.tsv] [--body-t2g bodies.tsv] "
+    "[--profile-override BASE:FIELD=VALUE ... "
+    "--analysis-scope sensitivity-analysis] [--threads N] "
+    "[--count-memory-budget 128GiB] [--10x-mex] [--rad-out] "
+    "[--read-assignments-out relative/path.parquet]\n"
+    "       PROFILE_SELECTOR is --cr7, --pansc-strict-v1, or --profile ID; "
+    "selectors may be combined";
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(kUsageText);
 }
+
+// Read-through SHA-256 used by `count` so manifest identity does not require a
+// second scan of GAMP or XG. This stream buffer has no read-ahead of its own;
+// bulk reads remain bulk reads in the wrapped file buffer.
+class Sha256InputStream : public std::istream {
+  private:
+    class Buffer : public std::streambuf {
+      public:
+        explicit Buffer(std::streambuf* source)
+            : source_(source), context_(EVP_MD_CTX_new(), EVP_MD_CTX_free) {
+            if (source_ == nullptr || !context_ ||
+                EVP_DigestInit_ex(context_.get(), EVP_sha256(), nullptr) != 1) {
+                throw std::runtime_error("cannot initialize input SHA-256 stream");
+            }
+            const pos_type position =
+                source_->pubseekoff(0, std::ios_base::cur, std::ios_base::in);
+            seekable_ = position != pos_type(off_type(-1));
+            if (seekable_ && position != pos_type(0)) {
+                throw std::runtime_error("input SHA-256 stream must start at byte zero");
+            }
+        }
+
+        bool seekable() const { return seekable_; }
+        std::uint64_t hashed_bytes() const { return hashed_bytes_; }
+
+        std::string finish() {
+            if (finished_) {
+                throw std::logic_error("input SHA-256 stream finalized twice");
+            }
+            std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+            unsigned int length = 0;
+            if (EVP_DigestFinal_ex(context_.get(), digest.data(), &length) != 1 ||
+                length != 32) {
+                throw std::runtime_error("cannot finalize input SHA-256 stream");
+            }
+            constexpr char digits[] = "0123456789abcdef";
+            std::string result(length * 2, '0');
+            for (size_t index = 0; index < length; ++index) {
+                result[index * 2] = digits[digest[index] >> 4U];
+                result[index * 2 + 1] = digits[digest[index] & 15U];
+            }
+            finished_ = true;
+            return result;
+        }
+
+      protected:
+        std::streamsize xsgetn(char* destination, std::streamsize count) override {
+            const pos_type position = seekable_
+                ? source_->pubseekoff(0, std::ios_base::cur, std::ios_base::in)
+                : pos_type(off_type(-1));
+            const std::streamsize read = source_->sgetn(destination, count);
+            update_range(position, destination, read);
+            return read;
+        }
+
+        int_type underflow() override { return source_->sgetc(); }
+
+        int_type uflow() override {
+            const pos_type position = seekable_
+                ? source_->pubseekoff(0, std::ios_base::cur, std::ios_base::in)
+                : pos_type(off_type(-1));
+            const int_type value = source_->sbumpc();
+            if (!traits_type::eq_int_type(value, traits_type::eof())) {
+                const char character = traits_type::to_char_type(value);
+                update_range(position, &character, 1);
+            }
+            return value;
+        }
+
+        std::streamsize showmanyc() override { return source_->in_avail(); }
+
+        pos_type seekoff(off_type offset, std::ios_base::seekdir direction,
+                         std::ios_base::openmode mode) override {
+            return source_->pubseekoff(offset, direction, mode);
+        }
+
+        pos_type seekpos(pos_type position, std::ios_base::openmode mode) override {
+            return source_->pubseekpos(position, mode);
+        }
+
+        int_type pbackfail(int_type character = traits_type::eof()) override {
+            if (traits_type::eq_int_type(character, traits_type::eof())) {
+                return source_->sungetc();
+            }
+            return source_->sputbackc(traits_type::to_char_type(character));
+        }
+
+      private:
+        void update_range(pos_type position, const char* bytes, std::streamsize count) {
+            if (count <= 0) {
+                return;
+            }
+            size_t offset = 0;
+            size_t amount = static_cast<size_t>(count);
+            if (seekable_) {
+                const std::uint64_t start = static_cast<std::uint64_t>(position);
+                const std::uint64_t end = start + amount;
+                if (end <= hashed_bytes_ || start > hashed_bytes_) {
+                    return;
+                }
+                offset = static_cast<size_t>(hashed_bytes_ - start);
+                amount -= offset;
+            }
+            if (EVP_DigestUpdate(context_.get(), bytes + offset, amount) != 1) {
+                throw std::runtime_error("cannot update input SHA-256 stream");
+            }
+            hashed_bytes_ += amount;
+        }
+
+        std::streambuf* source_;
+        std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context_;
+        std::uint64_t hashed_bytes_ = 0;
+        bool seekable_ = false;
+        bool finished_ = false;
+    };
+
+  public:
+    explicit Sha256InputStream(std::istream& source)
+        : std::istream(nullptr), buffer_(source.rdbuf()) {
+        rdbuf(&buffer_);
+    }
+
+    std::string complete_and_finish() {
+        clear();
+        if (buffer_.seekable()) {
+            seekg(static_cast<std::streamoff>(buffer_.hashed_bytes()), std::ios_base::beg);
+            if (!*this) {
+                throw std::runtime_error("cannot seek while completing input SHA-256");
+            }
+        }
+        ignore(std::numeric_limits<std::streamsize>::max());
+        return buffer_.finish();
+    }
+
+  private:
+    Buffer buffer_;
+};
 
 size_t parse_size_option(const std::string& option_name, const std::string& value) {
     if (value.empty()) {
@@ -199,12 +365,50 @@ size_t parse_size_option(const std::string& option_name, const std::string& valu
     return parsed;
 }
 
+uint64_t parse_byte_size_option(const std::string& option_name,
+                                const std::string& value) {
+    const std::array<std::pair<std::string_view, uint64_t>, 5> suffixes{{
+        {"TiB", 1ULL << 40}, {"GiB", 1ULL << 30}, {"MiB", 1ULL << 20},
+        {"KiB", 1ULL << 10}, {"B", 1ULL},
+    }};
+    std::string_view number = value;
+    uint64_t multiplier = 1;
+    for (const auto& [suffix, scale] : suffixes) {
+        if (number.size() >= suffix.size() && number.ends_with(suffix)) {
+            number.remove_suffix(suffix.size());
+            multiplier = scale;
+            break;
+        }
+    }
+    if (number.empty()) {
+        throw std::runtime_error(option_name + " must be an unsigned byte size");
+    }
+    uint64_t parsed = 0;
+    for (const char character : number) {
+        if (character < '0' || character > '9') {
+            throw std::runtime_error(
+                option_name + " must use an integer with optional KiB/MiB/GiB/TiB suffix");
+        }
+        const uint64_t digit = static_cast<uint64_t>(character - '0');
+        if (parsed > (std::numeric_limits<uint64_t>::max() - digit) / 10) {
+            throw std::runtime_error(option_name + " is outside the supported byte range");
+        }
+        parsed = parsed * 10 + digit;
+    }
+    if (parsed > std::numeric_limits<uint64_t>::max() / multiplier) {
+        throw std::runtime_error(option_name + " is outside the supported byte range");
+    }
+    return parsed * multiplier;
+}
+
 Options parse_options(int argc, char** argv) {
-    if (argc < 2 || std::string(argv[1]) != "convert") {
+    if (argc < 2 || (std::string(argv[1]) != "convert" &&
+                     std::string(argv[1]) != "count")) {
         usage_error();
     }
 
     Options options;
+    options.direct_count = std::string(argv[1]) == "count";
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         auto require_value = [&](const std::string& name) -> std::string {
@@ -314,6 +518,31 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--strict-allowlisted-parents-sha256") {
             options.strict_allowlisted_parents_sha256 =
                 require_value("--strict-allowlisted-parents-sha256");
+        } else if (arg == "--count-bundle" && options.direct_count) {
+            options.count_bundle = require_value("--count-bundle");
+        } else if (arg == "--barcode-whitelist" && options.direct_count) {
+            options.barcode_whitelist = require_value("--barcode-whitelist");
+        } else if (arg == "--cr7" && options.direct_count) {
+            options.requested_profiles.emplace_back("cr7-v1");
+        } else if (arg == "--pansc-strict-v1" && options.direct_count) {
+            options.requested_profiles.emplace_back("pansc-strict-v1");
+        } else if (arg == "--profile" && options.direct_count) {
+            options.requested_profiles.push_back(require_value("--profile"));
+        } else if (arg == "--profile-override" && options.direct_count) {
+            options.profile_overrides.push_back(
+                pancollapse::direct_count::parse_profile_override(
+                    require_value("--profile-override")));
+        } else if (arg == "--analysis-scope" && options.direct_count) {
+            options.analysis_scope = require_value("--analysis-scope");
+        } else if (arg == "--count-memory-budget" && options.direct_count) {
+            options.count_memory_budget = parse_byte_size_option(
+                "--count-memory-budget", require_value("--count-memory-budget"));
+        } else if (arg == "--10x-mex" && options.direct_count) {
+            options.count_10x_mex = true;
+        } else if (arg == "--rad-out" && options.direct_count) {
+            options.count_rad_out = true;
+        } else if (arg == "--read-assignments-out" && options.direct_count) {
+            options.read_assignments_out = require_value("--read-assignments-out");
         } else {
             usage_error();
         }
@@ -329,7 +558,93 @@ Options parse_options(int argc, char** argv) {
     if (options.threads == 0) {
         throw std::runtime_error("--threads must be at least 1");
     }
-    const bool production_ledger = !options.path_identity_ledger.empty();
+    if (options.direct_count) {
+        if (options.count_bundle.empty() || options.barcode_whitelist.empty()) {
+            throw std::runtime_error(
+                "panCollapse count requires --count-bundle and --barcode-whitelist");
+        }
+        if (!options.path_identity_ledger.empty() || !options.legacy_adapter.empty() ||
+            !options.bam_out.empty() || !options.debug_evidence_out.empty() ||
+            options.compact_exact_count_strand.has_value() ||
+            !options.strict_allowlisted_parents.empty() ||
+            !options.strict_allowlisted_parents_sha256.empty() ||
+            !options.path_identity_ledger_sha256.empty()) {
+            throw std::runtime_error(
+                "panCollapse count obtains identity/policy from --count-bundle and cannot use "
+                "legacy, BAM, debug, compact-BAM, or external allowlist options");
+        }
+        if (!options.read_assignments_out.empty()) {
+            const std::filesystem::path normalized =
+                options.read_assignments_out.lexically_normal();
+            if (options.read_assignments_out.is_absolute() ||
+                options.read_assignments_out != normalized ||
+                options.read_assignments_out.extension() != ".parquet") {
+                throw std::runtime_error(
+                    "--read-assignments-out must be a normalized relative .parquet path");
+            }
+            for (const auto& component : options.read_assignments_out) {
+                if (component == "." || component == "..") {
+                    throw std::runtime_error(
+                        "--read-assignments-out must stay within --out-dir");
+                }
+            }
+            const std::string first = options.read_assignments_out.begin()->string();
+            if (first == "parquet" || first == "mex" || first == "spill" ||
+                options.read_assignments_out == "manifest.json" ||
+                options.read_assignments_out == "summary.tsv" ||
+                options.read_assignments_out == "map.rad") {
+                throw std::runtime_error(
+                    "--read-assignments-out collides with a reserved result path");
+            }
+        }
+        if (options.requested_profiles.empty()) {
+            throw std::runtime_error("panCollapse count requires at least one profile");
+        }
+        std::sort(options.requested_profiles.begin(), options.requested_profiles.end());
+        if (std::adjacent_find(options.requested_profiles.begin(),
+                               options.requested_profiles.end()) !=
+            options.requested_profiles.end()) {
+            throw std::runtime_error("panCollapse count profile IDs must not be repeated");
+        }
+        if (!options.profile_overrides.empty() &&
+            options.analysis_scope != "sensitivity-analysis") {
+            throw std::runtime_error(
+                "--profile-override requires --analysis-scope sensitivity-analysis");
+        }
+        if (!options.analysis_scope.empty() &&
+            options.analysis_scope != "sensitivity-analysis") {
+            throw std::runtime_error(
+                "the only v0.10 analysis scope is sensitivity-analysis");
+        }
+        for (const std::string& requested : options.requested_profiles) {
+            const auto id = pancollapse::direct_count::parse_profile_id(requested);
+            std::vector<pancollapse::direct_count::ProfileOverride> overrides;
+            std::copy_if(options.profile_overrides.begin(), options.profile_overrides.end(),
+                         std::back_inserter(overrides), [&](const auto& override) {
+                             return override.base == id;
+                         });
+            options.count_profiles.push_back(
+                pancollapse::direct_count::effective_profile(id, overrides));
+        }
+        for (const auto& override : options.profile_overrides) {
+            const bool selected = std::any_of(
+                options.count_profiles.begin(), options.count_profiles.end(),
+                [&](const auto& profile) {
+                    return profile.profile.id == override.base;
+                });
+            if (!selected) {
+                throw std::runtime_error(
+                    "profile override base was not selected by --profile or its alias");
+            }
+        }
+        if (options.count_memory_budget < (1ULL << 20)) {
+            throw std::runtime_error("--count-memory-budget must be at least 1MiB");
+        }
+        options.count_mode = pathtally::CountMode::GeneFullEx50pAS;
+        options.bam_multigene = BamMultiGenePolicy::All;
+        options.exact_ex50_score_window_enabled = false;
+    }
+    const bool production_ledger = options.direct_count || !options.path_identity_ledger.empty();
     const bool legacy_adapter = !options.legacy_adapter.empty();
     if (production_ledger == legacy_adapter) {
         throw std::runtime_error(
@@ -341,17 +656,17 @@ Options parse_options(int argc, char** argv) {
                 "--count-mode genefull_ex50pas requires --path-identity-ledger; "
                 "legacy t2g/body-t2g evidence cannot represent exact base-overlap tiers");
         }
-        if (options.bam_out.empty()) {
+        if (!options.direct_count && options.bam_out.empty()) {
             throw std::runtime_error(
                 "--count-mode genefull_ex50pas is a BAM/count_cr mode and requires --bam-out");
         }
-        if (options.bam_multigene != BamMultiGenePolicy::All) {
+        if (!options.direct_count && options.bam_multigene != BamMultiGenePolicy::All) {
             throw std::runtime_error(
                 "--count-mode genefull_ex50pas requires --bam-multigene all so downstream "
                 "selection receives every exact evidence entry");
         }
     }
-    if (!options.exact_ex50_score_window_enabled &&
+    if (!options.direct_count && !options.exact_ex50_score_window_enabled &&
         (!production_ledger || options.count_mode == pathtally::CountMode::Score ||
          options.bam_out.empty())) {
         throw std::runtime_error(
@@ -407,6 +722,9 @@ Options parse_options(int argc, char** argv) {
         }
     }
     if (production_ledger) {
+        if (options.direct_count) {
+            return options;
+        }
         if (!options.t2g.empty() || !options.body_t2g.empty()) {
             throw std::runtime_error(
                 "--path-identity-ledger cannot be combined with --t2g or --body-t2g");
@@ -625,6 +943,71 @@ BodyT2gData read_body_t2g(const std::filesystem::path& filename) {
     return data;
 }
 
+// The count bundle is the only live annotation input. Optional historical t2g
+// files are accepted as fail-fast compatibility assertions for callers that
+// already possess them; they are never consulted while resolving a read.
+void validate_count_t2g_assertions(
+    const std::filesystem::path& exon_t2g_path,
+    const std::filesystem::path& body_t2g_path,
+    const path_identity::PathIdentityLedger& ledger) {
+    if (!exon_t2g_path.empty()) {
+        const T2gData supplied = read_t2g(exon_t2g_path);
+        std::map<std::string, std::pair<std::string, std::string>> expected;
+        for (const auto& [path, row] : ledger.rows_by_path) {
+            const auto& identity = row.annotation;
+            if (identity.feature_layer == "exon") {
+                expected.emplace(
+                    path, std::pair{identity.canonical_transcript, identity.gene_id});
+            }
+        }
+        if (supplied.path_transcript.size() != expected.size()) {
+            throw std::runtime_error(
+                "--t2g does not contain exactly the count bundle's exon path universe");
+        }
+        for (const auto& [path, identity] : expected) {
+            const auto supplied_path = supplied.path_transcript.find(path);
+            if (supplied_path == supplied.path_transcript.end() ||
+                supplied_path->second != identity.first) {
+                throw std::runtime_error(
+                    "--t2g disagrees with the count bundle for exon path " + path);
+            }
+            const auto supplied_gene = supplied.transcript_gene.find(identity.first);
+            if (supplied_gene == supplied.transcript_gene.end() ||
+                supplied_gene->second != identity.second) {
+                throw std::runtime_error(
+                    "--t2g disagrees with the count bundle for canonical transcript " +
+                    identity.first);
+            }
+        }
+    }
+
+    if (!body_t2g_path.empty()) {
+        const BodyT2gData supplied = read_body_t2g(body_t2g_path);
+        std::map<std::string, std::pair<std::string, std::string>> expected;
+        for (const auto& [path, row] : ledger.rows_by_path) {
+            const auto& identity = row.annotation;
+            if (identity.feature_layer == "body") {
+                expected.emplace(
+                    path, std::pair{identity.gene_id, identity.canonical_transcript});
+            }
+        }
+        if (supplied.paths.size() != expected.size()) {
+            throw std::runtime_error(
+                "--body-t2g does not contain exactly the count bundle's body path universe");
+        }
+        for (const auto& [path, identity] : expected) {
+            const auto supplied_path = supplied.paths.find(path);
+            if (supplied_path == supplied.paths.end() ||
+                supplied_path->second.gene != identity.first ||
+                (supplied.transcript_specific &&
+                 supplied_path->second.transcript != identity.second)) {
+                throw std::runtime_error(
+                    "--body-t2g disagrees with the count bundle for body path " + path);
+            }
+        }
+    }
+}
+
 // Exact body-path rows are authoritative. Only the legacy two-column format retains the
 // suffix-stripped bare-path fallback; explicit transcript-body rows must name the actual raw
 // graph paths so a fragment/copy cannot be assigned accidentally.
@@ -672,7 +1055,9 @@ std::string molecule_status_counter(MoleculeParseStatus status) {
     throw std::runtime_error("unknown molecule parse status");
 }
 
-MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length, size_t umi_length) {
+MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
+                                      size_t umi_length,
+                                      bool ignore_malformed_quality = false) {
     // New RNA carry-along names end in _cy<hex(CY)>_uy<hex(UY)>. Hex keeps arbitrary printable
     // FASTQ quality characters out of the QNAME delimiter/whitespace grammar. Legacy names with
     // neither quality, and the transitional CY-only form, remain accepted.
@@ -688,6 +1073,11 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
         }
         const std::string encoded = molecule_name.substr(quality_sep + 1 + prefix.size());
         if (encoded.size() != expected_length * 2) {
+            if (ignore_malformed_quality) {
+                decoded.clear();
+                molecule_name.resize(quality_sep);
+                return true;
+            }
             throw std::invalid_argument("hex-encoded raw " + label +
                                         " quality length does not match configured length");
         }
@@ -703,12 +1093,22 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
             const int hi = hex_value(encoded[i]);
             const int lo = hex_value(encoded[i + 1]);
             if (hi < 0 || lo < 0) {
+                if (ignore_malformed_quality) {
+                    decoded.clear();
+                    molecule_name.resize(quality_sep);
+                    return true;
+                }
                 throw std::invalid_argument("raw " + label +
                                             " quality contains non-hexadecimal text");
             }
             const char quality = static_cast<char>((hi << 4) | lo);
             const unsigned char printable = static_cast<unsigned char>(quality);
             if (printable < 33 || printable > 126) {
+                if (ignore_malformed_quality) {
+                    decoded.clear();
+                    molecule_name.resize(quality_sep);
+                    return true;
+                }
                 throw std::invalid_argument("decoded raw " + label +
                                             " quality is not printable FASTQ quality text");
             }
@@ -721,8 +1121,12 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
         const bool has_uy = decode_quality_suffix("uy", umi_length, umi_quality, "UMI");
         const bool has_cy = decode_quality_suffix("cy", cb_length, barcode_quality, "barcode");
         if (has_uy && !has_cy) {
+            if (ignore_malformed_quality) {
+                umi_quality.clear();
+            } else {
             return {MoleculeParseStatus::Malformed, {},
                     "raw UMI quality suffix requires the preceding barcode quality suffix"};
+            }
         }
     } catch (const std::invalid_argument& error) {
         return {MoleculeParseStatus::Malformed, {}, error.what()};
@@ -1767,9 +2171,150 @@ private:
     std::array<Shard, ShardCount> shards_;
 };
 
+// Assignment signatures repeat heavily in production, but their result is independent of
+// barcode and UMI. Keep a bounded insertion-only cache: an exact key match is reusable across
+// workers, while a full shard simply evaluates new evidence without caching it. There is no
+// eviction order that could vary with scheduling.
+template<class Key, class Value, size_t ShardCount = 256>
+class BoundedShardedCache {
+public:
+    explicit BoundedShardedCache(size_t maximum_entries)
+        : entries_per_shard_(std::max<size_t>(1, (maximum_entries + ShardCount - 1) /
+                                                     ShardCount)) {
+        static_assert(ShardCount > 0);
+        if (maximum_entries == 0) {
+            throw std::invalid_argument("bounded cache capacity must be positive");
+        }
+    }
+
+    template<class Builder>
+    std::shared_ptr<const Value> get_or_build(const Key& key, Builder&& builder) {
+        Shard& shard = shards_[std::hash<Key>{}(key) % ShardCount];
+        {
+            std::shared_lock<std::shared_mutex> lock(shard.mutex);
+            const auto found = shard.values.find(key);
+            if (found != shard.values.end()) {
+                hits_.fetch_add(1, std::memory_order_relaxed);
+                return found->second;
+            }
+        }
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        const auto found = shard.values.find(key);
+        if (found != shard.values.end()) {
+            hits_.fetch_add(1, std::memory_order_relaxed);
+            return found->second;
+        }
+        misses_.fetch_add(1, std::memory_order_relaxed);
+        auto value = std::make_shared<const Value>(builder());
+        if (shard.values.size() < entries_per_shard_) {
+            shard.values.emplace(key, value);
+            entries_.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            uncached_.fetch_add(1, std::memory_order_relaxed);
+        }
+        return value;
+    }
+
+    size_t hits() const { return hits_.load(std::memory_order_relaxed); }
+    size_t misses() const { return misses_.load(std::memory_order_relaxed); }
+    size_t entries() const { return entries_.load(std::memory_order_relaxed); }
+    size_t uncached() const { return uncached_.load(std::memory_order_relaxed); }
+
+private:
+    struct Shard {
+        std::shared_mutex mutex;
+        std::unordered_map<Key, std::shared_ptr<const Value>> values;
+    };
+
+    size_t entries_per_shard_;
+    std::array<Shard, ShardCount> shards_;
+    std::atomic<size_t> hits_{0};
+    std::atomic<size_t> misses_{0};
+    std::atomic<size_t> entries_{0};
+    std::atomic<size_t> uncached_{0};
+};
+
+void append_signature_integer(std::string& output, std::uint64_t value) {
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        output.push_back(static_cast<char>((value >> shift) & 0xffU));
+    }
+}
+
+void append_signature_string(std::string& output, std::string_view value) {
+    append_signature_integer(output, value.size());
+    output.append(value);
+}
+
+std::string assignment_candidate_signature(
+    const pancollapse::direct_count::AssignmentCandidate& candidate) {
+    std::string output;
+    append_signature_string(output, candidate.gene);
+    append_signature_string(output, candidate.equivalence_gene);
+    append_signature_string(output, candidate.nested_host);
+    append_signature_integer(output, static_cast<std::uint64_t>(candidate.score));
+    append_signature_integer(output, static_cast<std::uint8_t>(candidate.tier));
+    append_signature_integer(output, static_cast<std::uint8_t>(candidate.strand));
+    append_signature_integer(output, static_cast<std::uint8_t>(candidate.competition));
+    append_signature_integer(output, candidate.body_sample_support);
+    std::vector<std::string> body_support_units = candidate.body_support_units;
+    std::sort(body_support_units.begin(), body_support_units.end());
+    body_support_units.erase(
+        std::unique(body_support_units.begin(), body_support_units.end()),
+        body_support_units.end());
+    append_signature_integer(output, body_support_units.size());
+    for (const std::string& unit : body_support_units) {
+        append_signature_string(output, unit);
+    }
+    append_signature_integer(output, candidate.identity_known ? 1 : 0);
+    append_signature_integer(output, candidate.novel_paralog ? 1 : 0);
+    append_signature_integer(output, candidate.strong_local_support ? 1 : 0);
+    append_signature_integer(
+        output, candidate.protected_primary_protein_nested_host ? 1 : 0);
+    append_signature_string(output, candidate.novel_origin_gene);
+    append_signature_integer(output, candidate.categories.size());
+    for (const std::string& category : candidate.categories) {
+        append_signature_string(output, category);
+    }
+    append_signature_integer(output, candidate.gene_types.size());
+    for (const std::string& gene_type : candidate.gene_types) {
+        append_signature_string(output, gene_type);
+    }
+    return output;
+}
+
+std::string assignment_facts_signature(
+    const pancollapse::direct_count::AssignmentFacts& facts) {
+    std::string output;
+    output.push_back(facts.has_complete_provenance ? '\1' : '\0');
+    auto append_candidates = [&](const auto& candidates) {
+        std::vector<std::string> rows;
+        rows.reserve(candidates.size());
+        for (const auto& candidate : candidates) {
+            rows.push_back(assignment_candidate_signature(candidate));
+        }
+        std::sort(rows.begin(), rows.end());
+        append_signature_integer(output, rows.size());
+        for (const std::string& row : rows) {
+            append_signature_string(output, row);
+        }
+    };
+    append_candidates(facts.exact);
+    append_candidates(facts.gene_fallback);
+    return output;
+}
+
 int run_convert(int argc, char** argv) {
     const auto invocation_started = std::chrono::steady_clock::now();
-    const Options options = parse_options(argc, argv);
+    Options options = parse_options(argc, argv);
+    std::optional<pancollapse::direct_count::CountFactBundle> count_bundle;
+    if (options.direct_count) {
+        // Bundle compatibility and every bundled checksum are verified before XG
+        // deserialization or opening GAMP.
+        count_bundle = pancollapse::direct_count::load_count_fact_bundle(
+            options.count_bundle);
+        options.path_identity_ledger =
+            count_bundle->files.at("path_identity_ledger").path;
+    }
     const bool production_identity = !options.path_identity_ledger.empty();
     const auto metadata_started = std::chrono::steady_clock::now();
     const std::unordered_set<std::string> strict_allowlisted_parents =
@@ -1779,12 +2324,19 @@ int run_convert(int argc, char** argv) {
     // Production uses one strict, versioned identity ledger. The hst-v1 adapter below is the only
     // route to historical 2/3-column t2g behavior; CLI parsing makes the two routes exclusive.
     std::optional<path_identity::PathIdentityLedger> identity_ledger;
+    std::optional<pancollapse::direct_count::CountFactCatalog> count_facts;
     T2gData t2g;
     BodyT2gData body_t2g;
     if (production_identity) {
         identity_ledger = path_identity::read(
             options.path_identity_ledger,
             options.count_mode == pathtally::CountMode::GeneFullEx50pAS);
+        if (options.direct_count) {
+            count_facts = pancollapse::direct_count::CountFactCatalog::load(
+                *count_bundle, *identity_ledger);
+            validate_count_t2g_assertions(options.t2g, options.body_t2g,
+                                          *identity_ledger);
+        }
         if (!strict_allowlisted_parents.empty()) {
             for (const std::string& parent : strict_allowlisted_parents) {
                 if (identity_ledger->identities_by_parent.count(parent) == 0) {
@@ -1852,7 +2404,17 @@ int run_convert(int argc, char** argv) {
     if (!xg_in) {
         throw std::runtime_error("cannot open XG");
     }
-    graph.deserialize(xg_in);
+    std::unique_ptr<Sha256InputStream> xg_hash_stream;
+    std::istream* xg_source = &xg_in;
+    if (options.direct_count) {
+        xg_hash_stream = std::make_unique<Sha256InputStream>(xg_in);
+        xg_source = xg_hash_stream.get();
+    }
+    graph.deserialize(*xg_source);
+    std::string xg_input_sha256;
+    if (xg_hash_stream) {
+        xg_input_sha256 = xg_hash_stream->complete_and_finish();
+    }
     const double xg_deserialize_seconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - xg_deserialize_started).count();
     std::cerr << "panCollapse: initialization: phase=xg_deserialize seconds="
@@ -1929,7 +2491,7 @@ int run_convert(int argc, char** argv) {
     // Legacy and score BAMs deliberately keep their marker-absent historical interpretation.
     const bool exact_ex50 = production_identity &&
                            options.count_mode != pathtally::CountMode::Score &&
-                           !options.bam_out.empty();
+                           (options.direct_count || !options.bam_out.empty());
     using ExactEdge = std::tuple<int64_t, bool, int64_t, bool>;
     struct ExactEx50Model {
         const path_identity::PathIdentityRow* exon = nullptr;
@@ -3450,7 +4012,72 @@ int run_convert(int argc, char** argv) {
         }
     };
 
-    std::filesystem::create_directories(options.out_dir);
+    struct CountStageCleanup {
+        std::filesystem::path path;
+        bool active = false;
+        ~CountStageCleanup() {
+            if (active) {
+                std::error_code ignored;
+                std::filesystem::remove_all(path, ignored);
+            }
+        }
+    } count_stage_cleanup;
+    std::filesystem::path count_stage;
+    if (options.direct_count) {
+        if (std::filesystem::exists(options.out_dir)) {
+            throw std::runtime_error("panCollapse count output directory already exists: " +
+                                     options.out_dir.string());
+        }
+        std::filesystem::path parent = options.out_dir.parent_path();
+        if (parent.empty()) {
+            parent = ".";
+        }
+        std::filesystem::create_directories(parent);
+        count_stage = std::filesystem::absolute(parent) /
+                      ("." + options.out_dir.filename().string() + ".staging-" +
+                       std::to_string(static_cast<unsigned long long>(getpid())));
+        if (std::filesystem::exists(count_stage)) {
+            throw std::runtime_error("panCollapse count staging directory already exists: " +
+                                     count_stage.string());
+        }
+        std::filesystem::create_directories(count_stage);
+        count_stage_cleanup.path = count_stage;
+        count_stage_cleanup.active = true;
+    } else {
+        std::filesystem::create_directories(options.out_dir);
+    }
+
+    std::unique_ptr<pancollapse::direct_count::CountRuntime> count_runtime;
+    std::vector<std::array<std::atomic<std::uint64_t>,
+                           pancollapse::direct_count::kAssignmentTerminalCount>>
+        profile_assignment_terminals(options.count_profiles.size());
+    if (options.direct_count) {
+        std::vector<std::string> features;
+        features.reserve(count_facts->genes().size());
+        for (const auto& [gene, fact] : count_facts->genes()) {
+            static_cast<void>(fact);
+            features.push_back(gene);
+        }
+        pancollapse::direct_count::CountRuntimeOptions runtime_options;
+        runtime_options.memory_budget_bytes = options.count_memory_budget;
+        runtime_options.spill_directory = count_stage / "spill";
+        runtime_options.raw_barcode_length = options.raw_cb_length;
+        runtime_options.raw_umi_length = options.raw_umi_length;
+        count_runtime = std::make_unique<pancollapse::direct_count::CountRuntime>(
+            options.count_profiles,
+            pancollapse::direct_count::read_barcode_whitelist(
+                options.barcode_whitelist, options.raw_cb_length),
+            std::move(features), std::move(runtime_options));
+    }
+    const std::filesystem::path diagnostics_spool_path =
+        count_stage / ".read-assignments.spool.zst";
+    std::unique_ptr<pancollapse::direct_count::DirectCountDiagnosticsSpool>
+        diagnostics_spool;
+    if (!options.read_assignments_out.empty()) {
+        diagnostics_spool = std::make_unique<
+            pancollapse::direct_count::DirectCountDiagnosticsSpool>(
+                diagnostics_spool_path);
+    }
     uint64_t max_chunk_bytes = static_cast<uint64_t>(1) << 30;  // 1 GiB, well under the u32 chunk field
     if (const char* env = std::getenv("PANCOLLAPSE_MAX_CHUNK_BYTES")) {
         max_chunk_bytes = std::strtoull(env, nullptr, 10);
@@ -3458,8 +4085,13 @@ int run_convert(int argc, char** argv) {
             max_chunk_bytes = 1;
         }
     }
-    RadStreamWriter rad_writer(options.out_dir / "map.rad", t2g.target_names, options.raw_cb_length,
-                               options.raw_umi_length, max_chunk_bytes);
+    std::unique_ptr<RadStreamWriter> rad_writer;
+    if (!options.direct_count || options.count_rad_out) {
+        rad_writer = std::make_unique<RadStreamWriter>(
+            options.direct_count ? count_stage / "map.rad" : options.out_dir / "map.rad",
+            t2g.target_names, options.raw_cb_length, options.raw_umi_length,
+            max_chunk_bytes);
+    }
 
     std::unique_ptr<BamWriter> bam_writer;
     if (!options.bam_out.empty()) {
@@ -3505,6 +4137,12 @@ int run_convert(int argc, char** argv) {
         }
         gamp_in = &gamp_file;
     }
+    std::unique_ptr<Sha256InputStream> gamp_hash_stream;
+    if (options.direct_count) {
+        gamp_hash_stream = std::make_unique<Sha256InputStream>(*gamp_in);
+        gamp_in = gamp_hash_stream.get();
+    }
+    std::string gamp_input_sha256;
 
     size_t input_records = 0;
     size_t input_read_groups = 0;
@@ -3543,7 +4181,8 @@ int run_convert(int argc, char** argv) {
         current_group.name = alignment.name();
         ++input_read_groups;
         const MoleculeParseResult molecule =
-            parse_molecule_id(alignment.name(), options.raw_cb_length, options.raw_umi_length);
+            parse_molecule_id(alignment.name(), options.raw_cb_length,
+                              options.raw_umi_length, options.direct_count);
         if (molecule.status == MoleculeParseStatus::Ok) {
             current_group.molecule = molecule.id;
         } else {
@@ -3573,6 +4212,23 @@ int run_convert(int argc, char** argv) {
     }
     const bool profile_runtime_timing =
         std::getenv("PANCOLLAPSE_PROFILE_TIMING") != nullptr;
+    using CachedAssignmentResults =
+        std::vector<pancollapse::direct_count::AssignmentResult>;
+    constexpr size_t kAssignmentSignatureCacheEntries = 131072;
+    std::unique_ptr<BoundedShardedCache<std::string, CachedAssignmentResults>>
+        assignment_cache;
+    std::vector<std::unique_ptr<pancollapse::direct_count::CountWorker>> count_workers;
+    if (options.direct_count) {
+        assignment_cache = std::make_unique<
+            BoundedShardedCache<std::string, CachedAssignmentResults>>(
+            kAssignmentSignatureCacheEntries);
+        count_workers.reserve(processing_threads);
+        for (size_t index = 0; index < processing_threads; ++index) {
+            count_workers.push_back(
+                std::make_unique<pancollapse::direct_count::CountWorker>(
+                    count_runtime->make_worker()));
+        }
+    }
     struct alignas(64) WorkerRuntimeTiming {
         uint64_t groups = 0;
         uint64_t queue_wait_ns = 0;
@@ -3586,12 +4242,16 @@ int run_convert(int argc, char** argv) {
     auto producer_finished = processing_started;
     auto next_progress_report = processing_started + std::chrono::minutes(5);
     size_t next_progress_group = 1000000;
-    size_t completed_groups_for_progress = 0;  // touched only while holding the output turn
-    OrderedOutputCoordinator ordered_output(processing_threads > 1);
+    std::atomic<size_t> completed_groups_for_progress{0};
+    std::mutex progress_mutex;
+    OrderedOutputCoordinator ordered_output(
+        processing_threads > 1 &&
+        (!options.direct_count || options.count_rad_out || diagnostics_spool != nullptr));
     auto process_group = [&](Group group, size_t ordinal,
                              pathtally::TallyMap& tally_workspace,
                              pathtally::NumericTallyMap& numeric_tally_workspace,
-                             WorkerRuntimeTiming& runtime_timing) {
+                             WorkerRuntimeTiming& runtime_timing,
+                             pancollapse::direct_count::CountWorker* count_worker) {
         Group& current_group = group;
         const size_t current_read_group = ordinal + 1;
         OrderedOutputCoordinator::Guard output_guard(ordered_output, ordinal);
@@ -3638,7 +4298,20 @@ int run_convert(int argc, char** argv) {
             }
             std::cerr << "panCollapse: warning: skipped read group with invalid raw molecule identity: "
                       << current_group.name << ": " << current_group.molecule_message << '\n';
+            if (diagnostics_spool) {
+                for (size_t profile_index = 0;
+                     profile_index < options.count_profiles.size(); ++profile_index) {
+                    diagnostics_spool->append(
+                        {ordinal, current_group.name,
+                         static_cast<std::uint32_t>(profile_index), std::nullopt,
+                         std::nullopt, std::nullopt, "invalid_raw_molecule",
+                         std::nullopt, std::nullopt, 0});
+                }
+            }
             return;
+        }
+        if (count_worker != nullptr) {
+            count_worker->observe_barcode(current_group.molecule.barcode);
         }
 
         bool bam_record_written = false;
@@ -3884,7 +4557,7 @@ int run_convert(int argc, char** argv) {
                     strict_allowlisted_evidence_dropped.fetch_add(
                         before - exact_group_evidence.size(), std::memory_order_relaxed);
                 }
-                if (options.exact_ex50_score_window_enabled &&
+                if (!options.direct_count && options.exact_ex50_score_window_enabled &&
                     !exact_group_evidence.empty()) {
                     int64_t top_score = std::numeric_limits<int64_t>::min();
                     for (const ExactEx50Evidence& evidence : exact_group_evidence) {
@@ -3971,6 +4644,157 @@ int run_convert(int argc, char** argv) {
                     forward = oit == gene_orient->end() || oit->second.first >= oit->second.second;
                 }
                 transcript_gd[call.transcript_target_id] = forward ? 'F' : 'R';
+            }
+
+            if (count_worker != nullptr) {
+                using pancollapse::direct_count::AssignmentFacts;
+                using pancollapse::direct_count::EvidenceStrand;
+                using pancollapse::direct_count::EvidenceTier;
+                const auto& selected_profiles = count_runtime->profiles();
+                std::vector<AssignmentFacts> profile_assignment_facts(
+                    selected_profiles.size());
+                for (AssignmentFacts& facts : profile_assignment_facts) {
+                    facts.exact.reserve(exact_group_evidence.size());
+                }
+                for (const ExactEx50Evidence& evidence : exact_group_evidence) {
+                    EvidenceTier tier = EvidenceTier::body;
+                    if (evidence.tier == pathtally::Ex50Tier::FullyExonic) {
+                        tier = EvidenceTier::exon;
+                    } else if (evidence.tier == pathtally::Ex50Tier::ExonicMajority) {
+                        tier = EvidenceTier::partial_exon;
+                    }
+                    for (size_t profile_index = 0;
+                         profile_index < selected_profiles.size(); ++profile_index) {
+                        profile_assignment_facts[profile_index].exact.push_back(
+                            count_facts->candidate(
+                                pancollapse::direct_count::profile_policy_source(
+                                    selected_profiles[profile_index]),
+                                *evidence.parent, evidence.score, tier,
+                                evidence.direction == 'F' ? EvidenceStrand::forward
+                                                          : EvidenceStrand::reverse));
+                    }
+                }
+                for (const pathtally::LedgerCall& call : calls) {
+                    // Frozen exact-strand Gene fallback is a forward, spliced
+                    // (XR=G, GL=S) surface. Unspliced/body calls must never
+                    // rescue an otherwise antisense-only exact assignment.
+                    if (!call.spliced) {
+                        continue;
+                    }
+                    const auto& evidence_map =
+                        exon_identity_evidence;
+                    const auto evidence = evidence_map.find(call.transcript_target_id);
+                    if (evidence == evidence_map.end()) {
+                        throw std::runtime_error(
+                            "internal path identity provenance is missing for a Gene fallback");
+                    }
+                    const EvidenceStrand direction =
+                        transcript_gd.at(call.transcript_target_id) == 'F'
+                            ? EvidenceStrand::forward
+                            : EvidenceStrand::reverse;
+                    for (const std::string* parent : evidence->second.winning_parents) {
+                        for (size_t profile_index = 0;
+                             profile_index < selected_profiles.size(); ++profile_index) {
+                            profile_assignment_facts[profile_index]
+                                .gene_fallback.push_back(count_facts->candidate(
+                                    pancollapse::direct_count::profile_policy_source(
+                                        selected_profiles[profile_index]),
+                                    *parent, evidence->second.score,
+                                    EvidenceTier::gene, direction));
+                        }
+                    }
+                }
+                const auto quality = current_group.molecule.barcode_quality.empty()
+                    ? std::optional<std::string_view>{}
+                    : std::optional<std::string_view>{
+                          current_group.molecule.barcode_quality};
+                std::string assignment_signature;
+                for (const AssignmentFacts& facts : profile_assignment_facts) {
+                    append_signature_string(
+                        assignment_signature, assignment_facts_signature(facts));
+                }
+                const std::shared_ptr<const CachedAssignmentResults> assignments =
+                    assignment_cache->get_or_build(assignment_signature, [&]() {
+                        CachedAssignmentResults resolved;
+                        resolved.reserve(selected_profiles.size());
+                        for (size_t profile_index = 0;
+                             profile_index < selected_profiles.size(); ++profile_index) {
+                            resolved.push_back(
+                                pancollapse::direct_count::resolve_assignment(
+                                    selected_profiles[profile_index],
+                                    profile_assignment_facts[profile_index]));
+                        }
+                        return resolved;
+                    });
+                const auto umi_status = pancollapse::direct_count::basic_umi_status(
+                    current_group.molecule.umi);
+                if (!assignments->empty()) {
+                    const bool barcode_eligible =
+                        assignments->front().barcode_correction_eligible;
+                    for (const auto& assignment : *assignments) {
+                        if (assignment.barcode_correction_eligible != barcode_eligible) {
+                            throw std::logic_error(
+                                "count profiles disagree on profile-invariant barcode "
+                                "correction eligibility");
+                        }
+                    }
+                }
+                for (size_t profile_index = 0; profile_index < assignments->size();
+                     ++profile_index) {
+                    const auto& assignment = assignments->at(profile_index);
+                    profile_assignment_terminals[profile_index]
+                        [static_cast<size_t>(assignment.terminal)]
+                            .fetch_add(1, std::memory_order_relaxed);
+                    // Barcode-only reads never enter correct_cb's feature-bearing
+                    // pass. For every other read, defer the final molecule outcome
+                    // until barcode correction while preserving whether Python's
+                    // early evidence exits would have reached the UMI filter.
+                    if (assignment.barcode_correction_eligible) {
+                        count_worker->observe_assignment(
+                            static_cast<std::uint32_t>(profile_index),
+                            current_group.molecule.barcode, quality,
+                            current_group.molecule.umi, assignment.genes,
+                            /*read_count=*/1, assignment.reaches_umi_filter);
+                    }
+                    if (diagnostics_spool) {
+                        acquire_output();
+                        std::optional<std::string> selected_gene;
+                        if (!assignment.genes.empty()) {
+                            selected_gene.emplace();
+                            for (const std::string& gene : assignment.genes) {
+                                if (!selected_gene->empty()) {
+                                    *selected_gene += ';';
+                                }
+                                *selected_gene += gene;
+                            }
+                        }
+                        const std::optional<std::string> selected_tier =
+                            assignment.genes.empty()
+                                ? std::nullopt
+                                : std::optional<std::string>(
+                                      pancollapse::direct_count::evidence_tier_name(
+                                          assignment.winning_tier));
+                        auto terminal =
+                            pancollapse::direct_count::terminal_after_umi_filter(
+                                assignment, umi_status);
+                        diagnostics_spool->append(
+                            {ordinal, current_group.molecule.original_name,
+                             static_cast<std::uint32_t>(profile_index),
+                             current_group.molecule.barcode,
+                             current_group.molecule.barcode_quality.empty()
+                                 ? std::nullopt
+                                 : std::optional<std::string>(
+                                       current_group.molecule.barcode_quality),
+                             current_group.molecule.umi,
+                             std::move(terminal.name),
+                             std::move(selected_gene), selected_tier,
+                             terminal.reasons,
+                             assignment.barcode_correction_eligible});
+                    }
+                }
+                if (!options.count_rad_out) {
+                    return;
+                }
             }
 
             // The production normal BAM is a versioned typed union. G rows retain ordinary S/U
@@ -4202,7 +5026,9 @@ int run_convert(int argc, char** argv) {
                 hits.push_back({target_id->second, target.forward});
             }
             acquire_output();
-            rad_writer.write_record(current_group.molecule, hits);
+            if (rad_writer) {
+                rad_writer->write_record(current_group.molecule, hits);
+            }
         }
         if (bam_writer && options.count_mode == pathtally::CountMode::Score) {
             // Score mode keeps the transcript-target BAM: collapse the read's transcript targets to
@@ -4264,28 +5090,46 @@ int run_convert(int argc, char** argv) {
         write_barcode_only();
         };
         process();
-        // Even groups with no output must take and retire their ordinal so later writers progress.
-        acquire_output();
-        ++completed_groups_for_progress;
-        const bool group_report = completed_groups_for_progress >= next_progress_group;
-        if (group_report || completed_groups_for_progress % 4096 == 0) {
+        // Convert's ordinal is retired even when a group emitted nothing. Native
+        // count has no ordered sink by default, so progress uses a small periodic
+        // critical section rather than serializing every completed group.
+        if (!options.direct_count || options.count_rad_out) {
+            acquire_output();
+        }
+        const size_t completed =
+            completed_groups_for_progress.fetch_add(1, std::memory_order_relaxed) + 1;
+        auto report_progress = [&]() {
+            const bool group_report = completed >= next_progress_group;
             const auto progress_now = std::chrono::steady_clock::now();
             if (group_report || progress_now >= next_progress_report) {
                 const double elapsed = std::chrono::duration<double>(
                     progress_now - processing_started).count();
                 std::cerr << "panCollapse: progress: completed_read_groups="
-                          << completed_groups_for_progress << " elapsed_seconds=" << elapsed
+                          << completed << " elapsed_seconds=" << elapsed
                           << " groups_per_second="
-                          << (elapsed > 0.0 ? completed_groups_for_progress / elapsed : 0.0)
-                          << '\n';
+                          << (elapsed > 0.0 ? completed / elapsed : 0.0) << '\n';
                 next_progress_report = progress_now + std::chrono::minutes(5);
-                next_progress_group = completed_groups_for_progress + 1000000;
+                next_progress_group = completed + 1000000;
             }
+        };
+        if (options.direct_count && !options.count_rad_out) {
+            if (completed % 4096 == 0) {
+                std::lock_guard<std::mutex> lock(progress_mutex);
+                report_progress();
+            }
+        } else if (completed >= next_progress_group || completed % 4096 == 0) {
+            report_progress();
         }
         if (profile_runtime_timing) {
-            runtime_timing.ordered_region_ns += static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - output_phase_started_at).count());
+            if (output_phase_started) {
+                runtime_timing.ordered_region_ns += static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - output_phase_started_at).count());
+            } else {
+                runtime_timing.compute_before_output_ns += static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - group_started).count());
+            }
             ++runtime_timing.groups;
         }
     };
@@ -4331,7 +5175,8 @@ int run_convert(int argc, char** argv) {
                 }
                 jobs_have_space.notify_one();
                 process_group(std::move(job.group), job.ordinal, tally_workspace,
-                              numeric_tally_workspace, runtime_timing);
+                              numeric_tally_workspace, runtime_timing,
+                              options.direct_count ? count_workers[worker_id].get() : nullptr);
             }
         } catch (...) {
             ordered_output.fail(std::current_exception());
@@ -4374,7 +5219,8 @@ int run_convert(int argc, char** argv) {
         have_group = false;
         if (processing_threads == 1) {
             process_group(std::move(job.group), job.ordinal, serial_tally_workspace,
-                          serial_numeric_tally_workspace, worker_runtime_timing.front());
+                          serial_numeric_tally_workspace, worker_runtime_timing.front(),
+                          options.direct_count ? count_workers.front().get() : nullptr);
             return;
         }
         std::unique_lock<std::mutex> lock(jobs_mutex);
@@ -4432,6 +5278,9 @@ int run_convert(int argc, char** argv) {
             }
         });
         submit_group();
+        if (gamp_hash_stream) {
+            gamp_input_sha256 = gamp_hash_stream->complete_and_finish();
+        }
         producer_finished = std::chrono::steady_clock::now();
     } catch (...) {
         producer_finished = std::chrono::steady_clock::now();
@@ -4459,6 +5308,26 @@ int run_convert(int argc, char** argv) {
         std::rethrow_exception(worker_failure);
     }
 
+    std::optional<pancollapse::direct_count::CountRuntimeResult> count_result;
+    std::optional<pancollapse::direct_count::DirectCountDiagnosticsParquetResult>
+        diagnostics_result;
+    if (options.direct_count) {
+        for (const auto& worker : count_workers) {
+            worker->flush();
+        }
+        count_result = count_runtime->finalize();
+        if (diagnostics_spool) {
+            diagnostics_spool->finish();
+            pancollapse::direct_count::DirectCountDiagnosticsParquetOptions
+                diagnostics_options;
+            diagnostics_options.output_path = count_stage / options.read_assignments_out;
+            diagnostics_result =
+                pancollapse::direct_count::write_direct_count_diagnostics_parquet(
+                    diagnostics_spool_path, *count_runtime, diagnostics_options);
+            diagnostics_spool.reset();
+            std::filesystem::remove(diagnostics_spool_path);
+        }
+    }
     const auto processing_finished = std::chrono::steady_clock::now();
 
     if (profile_runtime_timing) {
@@ -4510,8 +5379,10 @@ int run_convert(int argc, char** argv) {
                   << '\n';
     }
 
-    if (input_records == 0) {
-        throw std::runtime_error("panCollapse convert expects at least one GAMP record");
+    if (input_records == 0 && !options.direct_count) {
+        throw std::runtime_error(
+            std::string("panCollapse ") + (options.direct_count ? "count" : "convert") +
+            " expects at least one GAMP record");
     }
 
     if (exact_ex50) {
@@ -4542,12 +5413,90 @@ int run_convert(int argc, char** argv) {
               << exact_model_candidates.build_count()
               << '\n';
 
-    rad_writer.finalize();
+    if (rad_writer) {
+        rad_writer->finalize();
+    }
     if (bam_writer) {
         bam_writer->finalize();
     }
     if (debug_writer) {
         debug_writer->finalize();
+    }
+    if (options.direct_count) {
+        pancollapse::direct_count::CountOutputOptions output_options;
+        output_options.output_directory = std::filesystem::absolute(options.out_dir);
+        output_options.staging_directory = count_stage;
+        output_options.pancollapse_version = PANCOLLAPSE_VERSION;
+        for (int index = 0; index < argc; ++index) {
+            if (!output_options.command_line.empty()) {
+                output_options.command_line += ' ';
+            }
+            output_options.command_line += argv[index];
+        }
+        output_options.analysis_scope = options.analysis_scope.empty()
+                                            ? "frozen-profiles"
+                                            : options.analysis_scope;
+        output_options.fact_bundle_content_id = count_bundle->content_id;
+        auto add_input = [&](const std::string& role, const std::filesystem::path& path,
+                             const std::string& streamed_sha256 = std::string{}) {
+            if (path.empty()) {
+                return;
+            }
+            const bool standard_input = path == std::filesystem::path("-");
+            output_options.inputs.push_back(
+                {role, standard_input ? path : std::filesystem::absolute(path),
+                 streamed_sha256.empty()
+                     ? pancollapse::direct_count::sha256_file(path)
+                     : streamed_sha256,
+                 standard_input ? 0 : std::filesystem::file_size(path)});
+        };
+        add_input("gamp", options.gamp, gamp_input_sha256);
+        add_input("xg", options.xg, xg_input_sha256);
+        add_input("barcode_whitelist", options.barcode_whitelist);
+        add_input("count_bundle_manifest", count_bundle->manifest_path);
+        add_input("t2g", options.t2g);
+        add_input("body_t2g", options.body_t2g);
+        output_options.threads = processing_threads;
+        output_options.memory_budget_bytes = options.count_memory_budget;
+        output_options.assignment_cache_capacity = kAssignmentSignatureCacheEntries;
+        output_options.assignment_cache_entries = assignment_cache->entries();
+        output_options.assignment_cache_hits = assignment_cache->hits();
+        output_options.assignment_cache_misses = assignment_cache->misses();
+        output_options.assignment_cache_uncached = assignment_cache->uncached();
+        output_options.input_records = input_records;
+        output_options.input_read_groups = input_read_groups;
+        output_options.raw_molecule_missing_groups = raw_molecule_missing_groups.load();
+        output_options.raw_molecule_malformed_groups = raw_molecule_malformed_groups.load();
+        output_options.raw_molecule_unsupported_groups = raw_molecule_unsupported_groups.load();
+        output_options.raw_molecule_skipped_groups = raw_molecule_skipped_groups.load();
+        output_options.profile_assignment_terminals.resize(
+            profile_assignment_terminals.size());
+        for (size_t profile_index = 0;
+             profile_index < profile_assignment_terminals.size(); ++profile_index) {
+            for (size_t terminal = 0;
+                 terminal < pancollapse::direct_count::kAssignmentTerminalCount; ++terminal) {
+                output_options.profile_assignment_terminals[profile_index][terminal] =
+                    profile_assignment_terminals[profile_index][terminal].load(
+                        std::memory_order_relaxed);
+            }
+        }
+        output_options.initialization_seconds = initialization_seconds;
+        output_options.processing_seconds = processing_seconds;
+        output_options.write_10x_mex = options.count_10x_mex;
+        output_options.rad_records = rad_writer ? rad_writer->record_count() : 0;
+        if (diagnostics_result) {
+            output_options.read_assignments =
+                pancollapse::direct_count::CountTableIdentity{
+                    options.read_assignments_out.string(), diagnostics_result->rows,
+                    std::filesystem::file_size(
+                        count_stage / options.read_assignments_out),
+                    diagnostics_result->canonical_logical_sha256,
+                    diagnostics_result->parquet_byte_sha256};
+        }
+        static_cast<void>(pancollapse::direct_count::write_count_outputs(
+            *count_runtime, *count_result, *count_facts, output_options));
+        count_stage_cleanup.active = false;
+        return 0;
     }
     std::string tx2gene;
     for (const std::string& target_name : t2g.target_names) {
@@ -4572,7 +5521,7 @@ int run_convert(int argc, char** argv) {
     write_text_file(options.out_dir / "summary.tsv",
                     "input_records\t" + std::to_string(input_records) + "\ninput_read_groups\t" +
                         std::to_string(input_read_groups) + "\nemitted_groups\t" +
-                        std::to_string(rad_writer.record_count()) + "\nno_compatible_transcript_groups\t" +
+                        std::to_string(rad_writer ? rad_writer->record_count() : 0) + "\nno_compatible_transcript_groups\t" +
                         std::to_string(no_compatible_transcript_groups.load()) + "\nstrand_filtered_groups\t" +
                         std::to_string(strand_filtered_groups.load()) + "\nmultigene_dropped_groups\t" +
                         std::to_string(multigene_dropped_groups.load()) + "\nunaligned_reads\t" +

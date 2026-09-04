@@ -1,0 +1,3 @@
+profile_id	count_gene	gene_type	competition_class	competition_reason	equivalence_gene	source_annotation	nested_host
+cr7-v1	GENE	protein_coding	PRIMARY	fixture	GENE	CAT	.
+pansc-strict-v1	GENE	protein_coding	PRIMARY	fixture	GENE	CAT	.

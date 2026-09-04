@@ -14,17 +14,9 @@
 
 FROM debian:bookworm-slim
 
-# procps provides /bin/ps, which the Nextflow docker executor invokes inside the
-# container to collect per-task resource metrics. It is unrelated to the bundled
-# binary (which runs through its own loader below); without it Nextflow aborts the
-# task with "Command 'ps' ... cannot be found".
-RUN apt-get update \
- && apt-get install -y --no-install-recommends procps \
- && rm -rf /var/lib/apt/lists/*
-
 LABEL org.opencontainers.image.title="panCollapse" \
-      org.opencontainers.image.version="0.9.0" \
-      org.opencontainers.image.description="Convert vg mpmap GAMP alignments into RAD records or provenance-rich BAM evidence for exact GeneFull_Ex50pAS counting." \
+      org.opencontainers.image.version="0.10.0" \
+      org.opencontainers.image.description="Native panCollapse count emits Parquet by default from a verified count-fact bundle; legacy convert remains available for RAD and BAM evidence." \
       org.opencontainers.image.source="https://github.com/JosephLalli/panCollapse" \
       org.opencontainers.image.licenses="Apache-2.0"
 
@@ -36,6 +28,14 @@ COPY bin/panCollapse /opt/pancollapse/bin/panCollapse
 # The closure may originate from a group-restricted VG build. The image runs as an unprivileged
 # user, so normalize read/execute bits after COPY rather than relying on source-tree modes.
 RUN chmod -R a+rX /opt/pancollapse/lib /opt/pancollapse/bin
+
+# Native count writes Arrow/Parquet and uses Zstandard compression. The release closure must
+# carry those runtime libraries, but never Python's runtime library; the staging script enforces
+# the same pre-build gate on the resolved host closure.
+RUN find /opt/pancollapse/lib -maxdepth 1 -type f -name 'libarrow.so*' -print -quit | grep -q . \
+ && find /opt/pancollapse/lib -maxdepth 1 -type f -name 'libparquet.so*' -print -quit | grep -q . \
+ && find /opt/pancollapse/lib -maxdepth 1 -type f -name 'libzstd.so*' -print -quit | grep -q . \
+ && ! find /opt/pancollapse/lib -maxdepth 1 -type f -name 'libpython*.so*' -print -quit | grep -q .
 
 # Launch wrapper: resolve every dependency from the bundled closure via the
 # bundled loader, independent of the base image's libc. Verify at build time.

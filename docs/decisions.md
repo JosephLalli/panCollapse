@@ -1829,6 +1829,72 @@ cyclic degradation and repeated-resolvable occurrence fixtures also matched. The
 measurements validate the optimization and deterministic evidence contract, not whole-pangenome
 runtime or memory.
 
+### D076 — Add native, profile-versioned gene counting without a BAM boundary
+
+**Decision source:** User, 2026-09-04 (requested implementation of the approved v0.10.0 native
+direct-count plan and explicitly rejected an nf-core/Nextflow-owned implementation).
+
+**Decision:** Add `panCollapse count` as an additive standalone command; preserve `convert`
+unchanged for legacy/debug RAD and BAM workflows. Native count consumes name-grouped GAMP, its
+matching XG, a barcode whitelist, and one checksum-bound `panSC-count-facts-v1` bundle. The bundle
+is the only assignment authority and binds exact path identity, profile-specific gene policy,
+Parent categories, projected nesting, independent support, gene metadata, producer receipts, and
+source hashes. Optional historical exon/body t2gs are assertions against the bundle, never live
+assignment inputs.
+
+The initially immutable profiles are `cr7-v1` and `pansc-strict-v1`; either or both may run in one
+GAMP pass. Repeatable typed assignment-policy overrides require explicit
+`sensitivity-analysis` scope and always create a derived profile ID bound to the full effective
+policy SHA-256. Frozen IDs are never edited in place, and barcode/UMI algorithms are not
+overridable in v0.10. `cr7-v1` is described as CR7 emulation on PanCollapse alignments, not full
+Cell Ranger equivalence.
+
+The default product is atomically published Parquet dictionaries, counts, and molecules plus
+`manifest.json` and stable `summary.tsv`. Raw 10x MEX, the existing pre-count RAD, and ordered
+per-read diagnostics are explicit optional sinks. Native count has no BAM sink and no Python
+runtime dependency. The implementation resides entirely in the PanCollapse repository; panSC
+only compiles the annotation-side count-fact bundle. No Nextflow or nf-core route is added by this
+decision.
+
+Workers resolve CB-independent numeric evidence and aggregate observations without preserving
+unnecessary read order. A bounded sharded signature cache reuses repeated profile-resolution
+results. Exact-whitelist observations aggregate immediately; only potentially correctable raw
+barcodes are deferred. Memory-pressure handling writes deterministic checksum-protected,
+Zstandard-compressed sorted runs, including a secondary exact path for a pathological single
+barcode. Canonically sorted decoded value rows and per-profile library-independent logical
+hashes—not volatile manifest bytes or output-local dictionary indexes—are invariant to thread
+count, scheduling, spill boundaries, and joint-versus-separate profile execution.
+
+**Release boundary:** Hermetic parity, spill, threading, output-schema, optional-RAD, and container
+gates are required before release. The scientific gates remain the frozen one-million-read
+subset, full chr20 and chr21, then immutable joint chr20–22 without remapping. The final joint
+requirements are exact oracle matrices/counters, at most 8.4 GB default persisted output, at
+least twofold improvement over the matched 7 h 48 m v0.9 producer, under one day, and below
+600 GB peak RSS. A resource or parity failure may change implementation, not the frozen biological
+rules.
+
+### D077 — Preserve barcode-correction and UMI-filter stage order explicitly
+
+**Decision source:** Frozen `correct_cb.py` and `count_cr.py` parity audit during v0.10
+implementation, 2026-09-04.
+
+**Decision:** Model two independent per-profile gates on every resolved read:
+`barcode_correction_eligible` and `reaches_umi_filter`. Every valid GAMP group updates the global
+exact-whitelist barcode prior, even when featureless. A profile result may then exit before UMI
+inspection, reach UMI inspection with zero genes, or produce one/multiple genes. Those states must
+not be inferred from the final gene vector or terminal label alone.
+
+For exact-whitelist reads, post-barcode counters are applied immediately. For a one-mismatch raw
+barcode, the compact deferred key carries its post-correction disposition; assigned-read,
+multi-gene, and UMI-drop counters are applied only if EOF posterior correction succeeds. A barcode
+that fails correction and a Parent/category policy exit therefore cannot acquire an N/homopolymer
+UMI terminal, while a successfully corrected read that survives evidence resolution but has zero
+genes does reach the UMI filter. Global counters are sums over explicit per-profile counters where
+the event is profile-specific. Barcode correction and off-whitelist rejection instead occur once
+before the profile fork, so profile zero owns each pass-global increment while every profile keeps
+its matching audit value. Spill encoding versions the disposition and validates its domain, so
+memory pressure cannot alter stage semantics.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

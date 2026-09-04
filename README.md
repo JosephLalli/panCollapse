@@ -4,6 +4,11 @@
 multipath format) into mapper-style, uncollated RAD records that
 [alevin-fry](https://github.com/COMBINE-lab/alevin-fry) quantifies into a cell-by-gene matrix.
 
+Version 0.10 also provides native `panCollapse count`: a count-fact-bundle-authoritative
+path that emits a verified Parquet count dataset by default. It can additionally emit 10x
+MEX and RAD with explicit flags. Legacy `panCollapse convert` remains the independent
+GAMP-to-RAD/BAM evidence interface.
+
 It bridges a pangenome aligner and the standard single-cell counting workflow: for each read
 it reports the set of transcripts the read is compatible with (with orientation), reading
 compatibility directly off the haplotype-specific transcript (HST) paths that `vg rna`
@@ -14,7 +19,11 @@ embedded in the graph — no GTF or annotation projection at run time.
 - A VG installation/checkout to build and link against (the tool consumes `vg mpmap` GAMP and
   a matching `.xg`). Build it, or point at an existing checkout.
 - C++20 (GCC 15), CMake, and Ninja.
-- [alevin-fry](https://github.com/COMBINE-lab/alevin-fry) for downstream quantification.
+- Pinned Arrow/Parquet C++ headers and shared libraries for native count output
+  (`PANCOLLAPSE_ARROW_ROOT` when CMake package discovery cannot find them).
+- [alevin-fry](https://github.com/COMBINE-lab/alevin-fry) only when using legacy
+  `convert`/RAD output with its downstream quantification route; native `count` has no
+  alevin-fry runtime dependency.
 - Python 3 to run the test suite.
 
 ## Build
@@ -23,6 +32,7 @@ embedded in the graph — no GTF or annotation projection at run time.
 VG=/path/to/vg                      # a vg checkout/install with lib/pkgconfig
 PKG_CONFIG_PATH="$VG/lib/pkgconfig" cmake -S . -B build -G Ninja \
   -DPANCOLLAPSE_VG_ROOT="$VG" \
+  -DPANCOLLAPSE_ARROW_ROOT=/path/to/arrow-parquet \
   -DCMAKE_PREFIX_PATH="$VG" \
   -DCMAKE_BUILD_RPATH="$VG/lib"
 cmake --build build
@@ -36,6 +46,7 @@ The converter is `build/src/panCollapse`.
 | Variable | Required | Description |
 |---|---|---|
 | `PANCOLLAPSE_VG_ROOT` | Yes | Path to a VG checkout/build with `include/xg.hpp` and `lib/pkgconfig`. |
+| `PANCOLLAPSE_ARROW_ROOT` | Native count | Pinned Arrow/Parquet C++ prefix containing `include/`, `libarrow`, and `libparquet`; required when their CMake package files are not discoverable. |
 | `CMAKE_PREFIX_PATH` | Recommended | Set to the same VG path so CMake finds `libhandlegraph`, `VGio`, and `Protobuf`. |
 | `CMAKE_BUILD_RPATH` | Recommended | Set to `$VG/lib` so the built binary finds VG's shared libraries at run time. |
 | `PKG_CONFIG_PATH` | Recommended | Prepend `$VG/lib/pkgconfig` so pkg-config finds `sdsl-lite`, `libdivsufsort`, and `absl_*`. |
@@ -55,7 +66,40 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --out-dir out
                     [--bam-out reads.bam] [--bam-multigene omit|first|all]
                     [--threads N]
                     [--no-ex50-score-window]
+
+panCollapse count --gamp reads.gamp --xg graph.xg --count-bundle bundle \
+                  --barcode-whitelist barcodes.txt PROFILE_SELECTOR [PROFILE_SELECTOR ...] \
+                  --out-dir counts [--t2g transcripts.tsv] [--body-t2g bodies.tsv] \
+                  [--threads N] [--count-memory-budget 128GiB] \
+                  [--10x-mex] [--rad-out] \
+                  [--read-assignments-out diagnostics/read_assignments.parquet]
+
+PROFILE_SELECTOR := --cr7 | --pansc-strict-v1 | --profile ID
 ```
+
+`count` takes annotation identity and policy only from its checksum-verified
+`panSC-count-facts-v1` bundle; it refuses legacy adapters, external ledgers/allowlists,
+and BAM/debug evidence options. At least one unique profile selector is required. The
+`--cr7` and `--pansc-strict-v1` aliases select immutable `cr7-v1` and
+`pansc-strict-v1`; they may be combined in one GAMP pass or mixed with repeatable
+`--profile ID`. Optional `--t2g` and `--body-t2g` inputs are compatibility assertions
+against the bundle, not assignment inputs.
+
+Its default output is a Parquet dataset with barcode, feature, count, and molecule tables
+plus `manifest.json` and `summary.tsv`. `--10x-mex` adds per-profile MEX and
+`--rad-out` adds a RAD compatibility artifact. `--read-assignments-out` adds an ordered,
+compressed Parquet per-read audit sidecar beneath `--out-dir`; it must be a normalized relative
+path ending in `.parquet`. It is disabled by default because it intentionally restores
+per-read-scale output I/O. Native `count` never writes BAM and requires no Python at production
+runtime.
+
+Assignment-policy sensitivities use repeatable
+`--profile-override BASE:FIELD=VALUE` together with the mandatory
+`--analysis-scope sensitivity-analysis`. Unknown, repeated, contradictory, or incorrectly typed
+overrides fail before GAMP is read. An override always produces a
+`derived-<base>-<hash-prefix>` profile; the manifest retains the full effective-profile SHA-256,
+so derived results are never mislabeled as a frozen profile. The definitive typed field list and
+output schemas are in [`docs/input-output-contract.md`](docs/input-output-contract.md).
 
 ### Inputs
 
@@ -99,7 +143,9 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --out-dir out
   ceiling is still reported), because queue handoff is measurably slower at that scale. Queued
   groups, initialization scratch, and worker scratch otherwise grow with `N`. Start with 8 or 16
   on a bounded representative slice, then increase only while measured throughput improves.
-  Supported requested thread counts produce byte-identical persisted artifacts.
+  For `convert`, supported requested thread counts produce byte-identical persisted artifacts.
+  For native `count`, canonical rows and logical hashes are identical; operational manifest and
+  summary fields still report the requested/active threads, timings, cache, and spill behavior.
 - `--strand both|forward|reverse` — target-relative orientation filter (default `both`, no
   filtering). `forward` keeps only targets the read aligns to in the same (sense) orientation;
   `reverse` keeps only antisense targets. Reads left with no matching target emit no record and
@@ -187,7 +233,7 @@ alevin-fry quant -i pl -m out/tx2gene.tsv -o quant -r cr-like --use-mtx
 
 ## Docker
 
-The current runtime image is built locally as `josephlalli/pancollapse:v0.9.0`;
+The current runtime image is built locally as `josephlalli/pancollapse:v0.10.0`;
 publish that tag before using it from a host that does not already have the
 validated local image. It bundles the panCollapse binary with the exact
 shared-library closure it was built against, so it does not need vg installed
@@ -197,14 +243,17 @@ pipeline steps). Mount your inputs and an output directory:
 ```sh
 docker run --rm \
   -v "$PWD":/work \
-  josephlalli/pancollapse:v0.9.0 convert \
+  josephlalli/pancollapse:v0.10.0 count \
   --gamp /work/reads.gamp --xg /work/graph.spliced.xg \
-  --path-identity-ledger /work/path_identity_ledger.tsv --out-dir /work/out
+  --count-bundle /work/count-facts --barcode-whitelist /work/barcodes.txt \
+  --cr7 --out-dir /work/out
 ```
 
 It also reads a GAMP stream on stdin (`--gamp -`). To build the image locally after compiling
 the binary, run [`scripts/build-docker-image.sh`](scripts/build-docker-image.sh), which stages
-the binary and its library closure and tags `josephlalli/pancollapse:v0.9.0`.
+the binary, Arrow/Parquet/Zstandard closure, and tags `josephlalli/pancollapse:v0.10.0`. The
+release gate refuses a missing native-output library or any `libpython` runtime dependency;
+Python is not required in the image.
 
 ## How it works
 

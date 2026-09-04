@@ -14,8 +14,16 @@ RNA sequencing into transcript-target compatibility records in mapper-style, unc
 RAD format. The RAD output is consumed by the ordinary alevin-fry permit-list, collation,
 and quantification workflow, which ultimately emits gene-level expression values.
 
-The project exists to preserve pangenome-aware alignment evidence while presenting common
-single-cell quantifiers with the transcript-level target sets they expect.
+Version 0.10 additionally defines a native count surface. It consumes a verified
+`panSC-count-facts-v1` bundle rather than independent annotation/policy flags and emits
+Parquet count tables by default; 10x MEX and RAD are optional compatibility outputs. The
+legacy conversion contract below remains supported independently. An opt-in
+`--read-assignments-out` emits ordered compressed Parquet diagnostics for audit; it is not
+enabled by default because it is per-read-scale I/O.
+
+The project exists to preserve pangenome-aware alignment evidence while either presenting common
+single-cell quantifiers with the transcript-level target sets they expect (`convert`) or reducing
+that evidence directly to gene/UMI counts without a BAM boundary (`count`).
 
 ## 2. V1 scope
 
@@ -32,7 +40,11 @@ V1 supports:
 - preservation of multimapping transcript equivalence classes;
 - mapper-style, uncollated RAD output for alevin-fry;
 - preservation of target-relative read orientation in RAD `dirs`;
-- the full compatible transcript target set per read.
+- the full compatible transcript target set per read;
+- native one-pass execution of one or more immutable count profiles, initially `cr7-v1` and
+  `pansc-strict-v1`;
+- default compact Parquet gene-count and molecule outputs, with optional raw 10x MEX, RAD, and
+  per-read diagnostic Parquet.
 
 ## 3. Explicit non-goals
 
@@ -50,6 +62,11 @@ V1 does not:
 
 Potential V1.1–V3 extensions belong in `docs/roadmap.md` and must not leak into V1
 acceptance criteria.
+
+Native v0.10 count specifically does not call cells, model ambient RNA, normalize counts, write a
+BAM, or use Python at production runtime. Its `cr7-v1` result is “CR7 emulation on PanCollapse
+alignments,” not a claim of complete Cell Ranger equivalence: mapper and graph-reference choices
+remain different.
 
 ## 4. Inputs
 
@@ -77,11 +94,19 @@ both exon and body rows. Ordinary ledger modes keep S/U evidence transcript-spec
 `genefull_ex50pas` instead emits exact Parent-preserving E/P/B evidence and requires
 `--bam-out --bam-multigene all`; it rejects `hst-v1`. See `docs/genefull.md`.
 
+For native `count`, the runtime identity inputs are instead a checksum-bound
+`panSC-count-facts-v1` bundle, a barcode whitelist, and one or more profile selectors. The bundle
+binds the path-identity ledger, per-profile gene policy, Parent categories, projected-nesting
+relations, independent-support facts, gene metadata, producer receipts, and source hashes.
+Optional `--t2g` and `--body-t2g` are assertions against that bundle and never participate in
+assignment. Incompatible or incomplete facts fail before GAMP consumption.
+
 ## 5. Barcode and UMI source
 
 Upstream FASTQ preparation writes the observed raw cell barcode and UMI into the
 biological read name before alignment. panCollapse reads those uncorrected values from
-the GAMP name field and writes them to RAD:
+the GAMP name field. `convert` writes them to RAD or optional BAM; `count` consumes them in its
+native barcode/UMI engine:
 
 - RNA read-name convention:
   `<original_read_name>_<raw_CB>_<raw_UMI>_cy<hex(raw_barcode_quality)>_uy<hex(raw_UMI_quality)>`.
@@ -89,9 +114,11 @@ the GAMP name field and writes them to RAD:
   name may contain underscores.
 - Legacy quality-free and CY-only names remain accepted; absent qualities cannot be emitted.
 - Parsed raw barcode and UMI values must match the configured barcode and UMI lengths.
-- panCollapse does not correct cell barcodes or UMIs and does not build a permit list.
-- alevin-fry performs permit-list construction and cell-barcode correction, followed by
-  UMI deduplication/resolution during quantification.
+- `convert` does not correct cell barcodes or UMIs and does not build a permit list; alevin-fry or
+  a legacy BAM counter owns those operations downstream.
+- `count` builds the exact-whitelist read prior from every valid group, including featureless
+  groups, applies the frozen one-mismatch quality posterior, and then runs the frozen UMI filters,
+  non-transitive one-mismatch collapse, and cross-gene maximum-support/tie-discard rule.
 - missing, malformed, or unsupported raw barcode/UMI/quality fields are reported in diagnostics;
 - `--molecule-identity-failures skip|fail` controls whether those conditions are skipped
   and counted or treated as hard failures; the default is `skip`.
@@ -154,6 +181,19 @@ active converter has no assignment-mode CLI.
 
 ## 11. Output
 
+Native v0.10 `count` always publishes `parquet/barcodes.parquet`,
+`parquet/features.parquet`, `parquet/counts.parquet`, `parquet/molecules.parquet`,
+`manifest.json`, and `summary.tsv` through a staged directory rename. The Parquet tables use the
+exact schemas and sort order in `docs/input-output-contract.md`; barcode and feature dictionaries
+are the lexical union actually used across requested profiles. The manifest records immutable
+profile hashes, source identities, canonical logical table hashes, current output hashes,
+counters, timings, threads, memory limit, cache statistics, and spill statistics. Optional raw
+10x MEX is emitted per profile, while optional RAD is one pre-count compatibility artifact rather
+than a rendering of either profile. Per-read assignments remain opt-in because they restore
+per-read-scale I/O.
+
+The remaining section defines legacy `convert` output.
+
 V1 emits mapper-style, uncollated RAD that can enter the standard sequence:
 
 ```text
@@ -204,8 +244,12 @@ reduced in stable ordinal order; one parser owns grouping and one ordered writer
 artifact. `map.rad` is streamed to disk incrementally: records roll into complete,
 self-describing chunks, and the writer seeks back to backpatch each chunk header and the file-level
 `num_chunks` with their final values once known (D049). RAD, BAM, summary, tx2gene, and debug
-artifacts must remain byte-identical across supported thread counts for identical non-operational
-inputs and configuration.
+artifacts from `convert` must remain byte-identical across supported thread counts for identical
+non-operational inputs and configuration. Native `count` must instead preserve decoded semantic
+rows and corresponding per-profile logical hashes across thread counts, scheduling, spill
+boundaries, and joint-versus-separate profile execution. Its operational manifest and summary fields may legitimately report different
+thread, timing, cache, or spill values, and Parquet bytes may change after a future pinned Arrow
+upgrade without changing logical identity.
 
 ## 12. Diagnostics
 
@@ -221,7 +265,9 @@ least:
 - groups with no compatible transcript;
 - groups emitted and number of targets per emitted group;
 - total optional-BAM records and barcode-only prior-evidence records;
-- manifest misses and annotation/index consistency failures.
+- manifest misses and annotation/index consistency failures;
+- native-count barcode-prior, correction, UMI-filter, assignment, molecule, cache, memory, and
+  spill counters globally and per profile where the event is profile-specific.
 
 Errors affecting input interpretation must fail loudly rather than silently changing the
 assignment model.
@@ -246,6 +292,14 @@ If direct lookup proves too slow, record profiling evidence and a proposed custo
 design as a future development item. Implementation of that index requires a separate
 human-approved decision.
 
+Native `count` is a single GAMP pass with no complete per-read evidence spool. Workers resolve
+CB-independent evidence into thread-local aggregate batches; fixed hash shards combine integer
+counts. Only potentially correctable off-whitelist observations are deferred. Deterministic,
+Zstandard-compressed sorted runs spill when `--count-memory-budget` is crossed, including a
+secondary path for one pathological barcode. Barcode correction partitions by raw barcode and
+UMI reduction by corrected barcode. Ordered coordination is reserved for explicitly ordered RAD
+or diagnostic sinks.
+
 ## 14. Acceptance boundary
 
 The V1 product is complete only when:
@@ -257,6 +311,16 @@ The V1 product is complete only when:
   score, target-relative orientation, all-mode RAD assignment, and deferred assignment
   option failures are tested;
 - performance is characterized on a bounded pilot;
-- deterministic-output tests prove byte-identical artifacts across supported execution
+- deterministic-output tests prove byte-identical `convert` artifacts across supported execution
   modes;
 - no custom index or deferred splicing-state behavior has entered the implementation.
+
+Native v0.10 additionally requires exact frozen-oracle agreement for terminal classes, corrected
+barcodes, retained molecules, matrices, and counters; logical-hash equality for no-spill and
+repeated-spill runs at supported thread counts; joint-profile equality with separate-profile runs;
+independent Parquet/MEX validation; optional RAD byte identity; and a release image that exercises
+all count formats without Python. The staged scientific release gate then uses the canonical
+one-million-read subset, full chr20 and chr21, and the immutable joint chr20–22 GAMP. On the joint
+slice, default persisted output must be at most 8.4 GB versus the 167.7 GB v0.9 BAM, wall time at
+least twofold faster than the matched 7 h 48 m producer, total time below one day, and peak RSS
+below 600 GB. Biological profile rules stay frozen if an implementation or resource gate fails.

@@ -2,3 +2,41 @@ add_executable(target_set_policy_smoke target_set_policy_smoke.cpp)
 
 add_test(NAME target_set_policy_smoke COMMAND target_set_policy_smoke)
 set_tests_properties(target_set_policy_smoke PROPERTIES LABELS "pure;policy")
+
+add_executable(direct_count_policy_smoke direct_count_policy_smoke.cpp)
+target_link_libraries(direct_count_policy_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_policy_smoke COMMAND direct_count_policy_smoke)
+set_tests_properties(direct_count_policy_smoke PROPERTIES LABELS "pure;policy;count")
+
+add_executable(direct_count_assignment_smoke direct_count_assignment_smoke.cpp)
+target_link_libraries(direct_count_assignment_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_assignment_smoke COMMAND direct_count_assignment_smoke)
+set_tests_properties(direct_count_assignment_smoke PROPERTIES LABELS "pure;policy;count")
+
+add_executable(count_fact_bundle_smoke count_fact_bundle_smoke.cpp)
+target_link_libraries(count_fact_bundle_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME count_fact_bundle_smoke COMMAND count_fact_bundle_smoke)
+set_tests_properties(count_fact_bundle_smoke PROPERTIES LABELS "pure;policy;count")
+
+add_executable(direct_count_runtime_smoke direct_count_runtime_smoke.cpp)
+target_link_libraries(direct_count_runtime_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_runtime_smoke COMMAND direct_count_runtime_smoke)
+set_tests_properties(direct_count_runtime_smoke PROPERTIES LABELS "pure;policy;count")
+
+add_executable(direct_count_runtime_determinism direct_count_runtime_determinism.cpp)
+target_link_libraries(direct_count_runtime_determinism PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_runtime_determinism COMMAND direct_count_runtime_determinism)
+set_tests_properties(direct_count_runtime_determinism PROPERTIES
+  LABELS "pure;policy;count;determinism;spill")
+
+add_executable(direct_count_diagnostics_smoke direct_count_diagnostics_smoke.cpp)
+target_link_libraries(direct_count_diagnostics_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_diagnostics_smoke COMMAND direct_count_diagnostics_smoke)
+set_tests_properties(direct_count_diagnostics_smoke PROPERTIES
+  LABELS "pure;policy;count;parquet;diagnostics")

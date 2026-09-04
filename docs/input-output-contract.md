@@ -4,6 +4,76 @@ This document translates the product specification into interface obligations wi
 prescribing the code architecture. The GAMP-to-RAD algorithm is defined by D048 and
 `docs/conversion-algorithm.md`.
 
+## Native count interface (v0.10)
+
+`panCollapse count` requires GAMP, XG, a barcode whitelist, at least one frozen profile,
+and a `panSC-count-facts-v1` bundle. The bundle is authoritative for path identity,
+profile-specific gene policy, Parent categories, projected-nested policy, strong-support
+facts, corrected annotation, and provenance receipts; the command refuses external legacy
+identity/policy, BAM, debug, compact-BAM, and allowlist options. Its default output is an
+atomic Parquet dataset and manifest; `count` has no BAM sink and no production Python
+dependency. `--10x-mex` and `--rad-out` add compatibility outputs.
+`--read-assignments-out <relative/path.parquet>` optionally adds ordered per-read diagnostic
+Parquet. The path must be normalized, relative to `--out-dir`, end in `.parquet`, and not
+collide with a reserved result path. It is opt-in because it is the only count sink with
+per-read-scale I/O.
+
+Profiles are selected independently: `--cr7` is the `cr7-v1` alias,
+`--pansc-strict-v1` is the identically named frozen custom profile alias, and repeatable
+`--profile ID` is the extensible form. At least one selector is required, duplicates are errors,
+and several profiles may execute in the same GAMP pass. Repeatable typed
+`--profile-override BASE:FIELD=VALUE` is accepted only with
+`--analysis-scope sensitivity-analysis`. The v0.10 override surface is limited to assignment
+policy: `strand`, `score-window`, `membership-class`, `novel-paralog-policy`,
+`excluded-categories`, `post-resolution-fallback-categories`, `tagged-last-resort`,
+`exact-strand-gene-fallback`, `nested-host-rule`, `nested-host-action`,
+`body-support-ratio`, `body-support-gene-types`,
+`strong-local-support-exemption`, `strong-support-clearable-categories`, and
+`protect-primary-protein-nested-hosts`.
+Barcode correction and UMI algorithms are not overridable. Any override creates a
+`derived-<base>-<hash-prefix>` ID whose full effective-profile SHA-256 is recorded in the
+manifest; it can never be reported as the frozen base profile.
+
+The default dataset contains the following non-nullable fields unless marked nullable:
+
+- `parquet/barcodes.parquet`: `barcode_index:uint32`, `barcode:string`,
+  `exact_read_prior:uint64`;
+- `parquet/features.parquet`: `feature_index:uint32`, `gene_id:string`,
+  `gene_name:string nullable`, `gene_type:string nullable`;
+- `parquet/counts.parquet`: `profile_id:string`, `barcode_index:uint32`,
+  `feature_index:uint32`, `umi_count:uint64`;
+- `parquet/molecules.parquet`: `profile_id:string`, `barcode_index:uint32`,
+  `feature_index:uint32`, `corrected_umi:string`, `supporting_read_count:uint64`,
+  `raw_umis_collapsed:uint64`.
+
+Barcode and feature tables are the lexical union of nonempty rows used by any requested profile;
+their compact integer dictionaries are referenced by count and molecule rows. Counts are sorted
+by profile, barcode, and feature; molecules add UMI as the final sort key. Writers use the stored
+Arrow schema, Parquet 2.6, fixed row-group sizing, and Zstandard level 3 without volatile
+timestamps. Because future Arrow versions may encode equivalent tables differently,
+`manifest.json` records library-independent logical hashes over canonical rows as well as the
+current output-file hashes. `summary.tsv` records stable global and per-profile counters. Barcode
+prior/correction totals are counted once globally because they precede profile evaluation; the
+corresponding per-profile counters remain available for joint-versus-separate audit. The
+entire staged directory is published atomically only after all requested outputs close and
+validate.
+
+For count and molecule tables, logical hashing decodes compact dictionary indexes back to barcode
+and gene strings. The manifest also records a count hash and molecule hash for each profile over
+those decoded values. Corresponding per-profile hashes are therefore directly comparable between
+a joint multi-profile pass and separate single-profile runs, even when their active dictionary
+unions—and therefore their stored numeric indexes—differ.
+
+`--10x-mex` adds one `<out-dir>/mex/<profile_id>/raw_feature_bc_matrix` directory per profile,
+containing `matrix.mtx.gz`, `features.tsv.gz`, and `barcodes.tsv.gz`. Matrix rows are features,
+columns are barcodes, entries are raw UMI counts, and the dictionary order agrees with the
+Parquet tables; cell calling remains downstream. `--rad-out` invokes the existing pre-count RAD
+writer once and does not render either profile's final matrix.
+
+The diagnostic sidecar records input ordinal, QNAME, profile, raw/corrected barcode, UMI,
+terminal class, selected gene/tier, and reason bits. It is an audit product, not an input to
+counting or a default production artifact.
+
 ## Runtime inputs
 
 ### GAMP
@@ -13,8 +83,9 @@ prescribing the code architecture. The GAMP-to-RAD algorithm is defined by D048 
   previously completed name.
 - The GAMP name field carries the observed raw molecule identity as
   `<original_read_name>_<raw_CB>_<raw_UMI>_cy<hex(CY)>_uy<hex(UY)>`. Raw barcode, UMI, and optional
-  barcode quality are parsed from the right; panCollapse does not correct them. Legacy
-  names without the quality suffix remain accepted.
+  barcode quality are parsed from the right. Legacy names without the quality suffix remain
+  accepted. `convert` preserves those values; `count` corrects them only after building the
+  all-valid-read exact-whitelist prior.
 - Parsed raw barcode and UMI values must match the configured lengths (`--raw-cb-length`,
   `--raw-umi-length`; Phase 2 defaults 16 and 12).
 - Every alignment of the read (the primary record and each supplementary/secondary record)
@@ -106,11 +177,15 @@ ledger reaches count_cr, which performs transcript-to-gene pooling. See
 
 ### Barcode and UMI
 
-The raw cell barcode and raw UMI come from the GAMP name field. Values are written to RAD as
-observed; panCollapse does not correct, permit-list, repair, or mix them. Missing,
-malformed, or unsupported values (including length mismatch against the configured lengths)
-are skipped per read group and counted by default; `--molecule-identity-failures fail` makes
-them fatal.
+The raw cell barcode and raw UMI come from the GAMP name field. `convert` writes them to RAD or
+BAM as observed and performs no correction or deduplication. Native `count` instead updates the
+dataset-wide exact-whitelist prior from every valid read group, including featureless groups;
+applies the frozen Hamming-distance-one quality posterior and 0.975 acceptance threshold at EOF;
+then performs the frozen basic-UMI filters, non-transitive `1MM_CR`, and
+`MultiGeneUMI_CR` maximum-support/tie-discard rule. A read rejected before barcode correction or
+before its profile reaches the UMI stage cannot contribute an assigned-read or UMI-drop counter.
+Missing, malformed, or unsupported raw molecule fields (including configured-length mismatch)
+are skipped and counted by default; `--molecule-identity-failures fail` makes them fatal.
 
 ## Outputs
 

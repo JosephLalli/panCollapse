@@ -929,3 +929,26 @@ projection, or a custom index.
   oracle (eight expected `GENE` UMIs). Legacy Ex50pAS and missing BAM/all requirements hard-fail;
   exact and ordinary conversions write byte-identical RAD. Focused CTest passes 14/14; full CTest
   passes 101/101.
+- 2026-09-04: Implemented D076/D077 native direct gene counting for v0.10.0 on the isolated
+  PanCollapse branch `feature/v0.10.0-native-count`, based on `main` at `5f4daff`. Added the
+  additive `panCollapse count` command while preserving `convert`: immutable `cr7-v1` and
+  `pansc-strict-v1` profiles (joint or separate execution), sensitivity-only typed derived
+  profiles, authenticated `panSC-count-facts-v1` loading, exact-whitelist barcode priors and
+  posterior correction, oracle-ordered UMI filtering, non-transitive `1MM_CR`,
+  `MultiGeneUMI_CR`, sharded numeric assignment caching, deterministic aggregate/spill merging,
+  and explicit pre-UMI gate state. Default output is atomically published Parquet barcode,
+  feature, count, and molecule tables with decoded per-profile logical hashes; raw 10x MEX, byte-identical
+  pre-count RAD, and ordered per-read diagnostic Parquet are opt-in. Native count has no BAM sink
+  and no production Python dependency. The CMake/Docker release surface is 0.10.0 with exact
+  Arrow/Parquet 17.0.0 and Zstandard 1.5.7 pins. The standalone release image gate ran both
+  profiles and every count format successfully as an unprivileged UID and verified that no Python
+  executable or `libpython` enters the image. Full PanCollapse CTest passes 150/150; the separate
+  panSC annotation-fact compiler passes 9/9 pytest cases; `git diff --check` and release-script
+  syntax checks pass.
+- 2026-09-04: The large scientific release gate is intentionally still pending, not silently
+  inferred from fixtures: frozen Python differential on the canonical one-million-read subset,
+  full chr20 and chr21, then the immutable joint chr20–22 GAMP without remapping. Run `/reload`
+  before the full joint gate. Required joint outcomes remain exact oracle matrices/counters,
+  default persisted output at most 8.4 GB, at least twofold wall-time improvement over the matched
+  7 h 48 m v0.9 producer, completion under one day, and peak RSS below 600 GB. Failures may change
+  implementation/resource behavior, not the frozen biological rules.
