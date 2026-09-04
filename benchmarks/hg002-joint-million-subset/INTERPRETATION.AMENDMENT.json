@@ -1,0 +1,41 @@
+{
+  "corrected_manifest": {
+    "path": "BENCHMARK.MANIFEST.v2.json",
+    "sha256": "c70efdddebe8428e97a7c9218a41c1bc933f74c53a296cca8400bd08644136a3"
+  },
+  "created_utc": "2026-09-04T21:09:04Z",
+  "defect": "BENCHMARK.MANIFEST.json incorrectly labeled read-weighted F1 primary",
+  "frozen_authority": {
+    "freeze_id": "sha256:b60634bd04695b6eaa0d6498e2dd7aba2a3d21248ef8b2760eda40438e265b67",
+    "optimization_objective": "uniform_truth_gene_f1",
+    "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_strict_membership_final_method_freeze_v8_v090_20260904T055700Z/MANIFEST.json",
+    "sha256": "71e1b5c401cd5a89f9300cd1a1aa54974f37d51d81bbcd50b314575ac7d64d1d"
+  },
+  "metric_hierarchy": {
+    "diagnostic": "per-chromosome metrics and all-mapped-origin read-weighted and gene-unit metrics",
+    "mandatory_co_report": "overall eligibility-aware read-weighted precision, recall, and F1",
+    "primary": "overall eligibility-aware uniform-truth-gene F1"
+  },
+  "numerical_outputs_changed": false,
+  "original_manifest": {
+    "path": "BENCHMARK.MANIFEST.json",
+    "preserved": true,
+    "sha256": "28be403e744dc38c0f143e5e7a8069d0e02de0dfb1562c8f2db4d3555ccfca6a"
+  },
+  "result_files": {
+    "classification_sha256": "74fe7b158b1b1d5d95f21b2ec39e8a71e21d4e5772e41f5b98c5c50d6fa235c6",
+    "metrics_sha256": "977997749f56ca0e60ed30530f0d8252012ed66016a5d004d42e490b2cac4b16",
+    "score_manifest_sha256": "3303121f693baf77085fb6ace481ea1cf5cddbd26d8acc96bed23209bad4c049"
+  },
+  "schema": "pansc-hg002-joint-v090-assignment-interpretation-amendment-v1",
+  "scope": "metadata_only_no_recount_no_rescore",
+  "status": "complete",
+  "validation": {
+    "correction_accounting": "999759 emitted + 220 uncorrectable + 21 barcode_only = 1000000",
+    "freeze_checksums": "25_of_25_pass",
+    "score_checksums": "6_of_6_pass",
+    "scored_truth_reads": 1000000,
+    "subset_checksums": "7_of_7_pass",
+    "unknown_truth_reads_excluded": 0
+  }
+}

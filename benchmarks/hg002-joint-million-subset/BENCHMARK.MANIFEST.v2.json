@@ -1,0 +1,80 @@
+{
+  "barcode_correction": {
+    "full_corrected_bam_written": false,
+    "output_threads": 8,
+    "pass2_prefilter": "compiled htslib selected-QNAME filter to uncompressed pipe",
+    "prior_universe": "all 11881577 producer BAM records"
+  },
+  "completed_utc": "2026-09-04T19:51:00.372487+00:00",
+  "evaluation_status": "authorized_partial_unblinding",
+  "execution_script_version": "1.3.1",
+  "full_final_test_complete": false,
+  "manifest_schema": "pansc-hg002-joint-v090-assignment-benchmark-manifest-v2",
+  "metadata_correction": {
+    "corrected_by_runner_version": "1.3.2",
+    "frozen_metric_authority": {
+      "freeze_id": "sha256:b60634bd04695b6eaa0d6498e2dd7aba2a3d21248ef8b2760eda40438e265b67",
+      "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_strict_membership_final_method_freeze_v8_v090_20260904T055700Z/MANIFEST.json",
+      "sha256": "71e1b5c401cd5a89f9300cd1a1aa54974f37d51d81bbcd50b314575ac7d64d1d"
+    },
+    "reason": "restore the frozen uniform-truth-gene primary metric hierarchy",
+    "scientific_outputs_changed": false,
+    "supersedes_manifest": {
+      "path": "BENCHMARK.MANIFEST.json",
+      "sha256": "28be403e744dc38c0f143e5e7a8069d0e02de0dfb1562c8f2db4d3555ccfca6a"
+    }
+  },
+  "metric_contract": {
+    "diagnostic": "per-chromosome metrics and all-mapped-origin read-weighted and gene-unit metrics",
+    "mandatory_co_report": "overall eligibility-aware read-weighted precision, recall, and F1",
+    "matrix_qc_run": false,
+    "missing_classification": "false negative",
+    "primary": "overall eligibility-aware uniform-truth-gene F1"
+  },
+  "outputs": {
+    "metrics": {
+      "bytes": 2854,
+      "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_pancollapse_v090_gene_assignment_1m_v1_20260904T171055Z/score/metrics.tsv",
+      "sha256": "977997749f56ca0e60ed30530f0d8252012ed66016a5d004d42e490b2cac4b16"
+    },
+    "read_classification": {
+      "bytes": 21197020,
+      "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_pancollapse_v090_gene_assignment_1m_v1_20260904T171055Z/count/read_classification.tsv.gz",
+      "sha256": "74fe7b158b1b1d5d95f21b2ec39e8a71e21d4e5772e41f5b98c5c50d6fa235c6"
+    },
+    "score_manifest": {
+      "bytes": 3675,
+      "path": "/mnt/ssd/lalli/hg002_chr20_chr21_chr22_pancollapse_v090_gene_assignment_1m_v1_20260904T171055Z/score/MANIFEST.json",
+      "sha256": "3303121f693baf77085fb6ace481ea1cf5cddbd26d8acc96bed23209bad4c049"
+    }
+  },
+  "result_summary": {
+    "mandatory_read_weighted_co_report": {
+      "f1": 0.96634848027290354,
+      "fn": 49838,
+      "fp": 16019,
+      "precision": 0.98334139277561994,
+      "recall": 0.94993289291799277,
+      "tn": 3322,
+      "tp": 945586
+    },
+    "primary_uniform_truth_gene": {
+      "f1": 0.95522451646978013,
+      "fn": 51.424910301591851,
+      "fp": 35.346464323368522,
+      "precision": 0.96321607713404722,
+      "recall": 0.94736447256745981,
+      "represented_background_truth_genes": 47,
+      "represented_eligible_truth_genes": 977,
+      "tp": 925.57508969840819
+    }
+  },
+  "sample": {
+    "assignment_blind": true,
+    "n": 1000000,
+    "seed": "pansc-hg002-joint-v090-gene-assignment-1m-v1",
+    "selection": "lowest_sha256(seed_NUL_read_name)"
+  },
+  "schema": "pansc-hg002-joint-v090-assignment-benchmark-1m-v1",
+  "status": "complete"
+}

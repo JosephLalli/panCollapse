@@ -11,7 +11,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly SCRIPT_DIR
-readonly SCRIPT_VERSION="1.3.1"
+readonly SCRIPT_VERSION="1.3.2"
 readonly SCHEMA="pansc-hg002-joint-v090-assignment-benchmark-1m-v1"
 readonly SAMPLE_SIZE="1000000"
 readonly SEED="pansc-hg002-joint-v090-gene-assignment-1m-v1"
@@ -30,6 +30,8 @@ readonly TEMPLATE_TRUTH_SHA256="0387959ceb4f99ddb7ff442959d33918c064c048655ca711
 readonly TRUTH_CHECKSUMS_SHA256="dbc1d1b40c3c7a439a02fef26eae79e67200009c45424313f8b12c1cf13f8a01"
 
 readonly FREEZE_ROOT="/mnt/ssd/lalli/hg002_chr20_chr21_chr22_strict_membership_final_method_freeze_v8_v090_20260904T055700Z"
+readonly FREEZE_MANIFEST="${FREEZE_ROOT}/MANIFEST.json"
+readonly FREEZE_MANIFEST_SHA256="71e1b5c401cd5a89f9300cd1a1aa54974f37d51d81bbcd50b314575ac7d64d1d"
 readonly FROZEN_RUNTIME="${FREEZE_ROOT}/provenance"
 readonly CORRECT_CB="${FROZEN_RUNTIME}/bin/correct_cb.py"
 readonly COUNT_CR="${FROZEN_RUNTIME}/bin/count_cr.py"
@@ -197,6 +199,16 @@ preflight() {
         command -v "${executable}" >/dev/null || fail "missing executable: ${executable}"
     done
     require_file "${HOST_PYTHON}"
+    require_sha256 "${FREEZE_MANIFEST}" "${FREEZE_MANIFEST_SHA256}"
+    "${HOST_PYTHON}" - "${FREEZE_MANIFEST}" <<'PY'
+import json
+import pathlib
+import sys
+
+manifest = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert manifest["method"]["optimization_objective"] == "uniform_truth_gene_f1"
+assert manifest["method"]["metric_contract"]["traditional_read_weighted_metrics"] == "mandatory co-report"
+PY
     require_file "${SUBSET_ROOT}/STATUS"
     require_file "${SUBSET_ROOT}/MANIFEST.json"
     require_file "${SUBSET_ROOT}/SHA256SUMS"
@@ -525,8 +537,9 @@ payload = {
         "full_corrected_bam_written": False,
     },
     "metric_contract": {
-        "primary": "read-weighted eligibility-aware open-set F1",
-        "diagnostic": "all-mapped-origin read-weighted and represented-gene-balanced F1",
+        "primary": "overall eligibility-aware uniform-truth-gene F1",
+        "mandatory_co_report": "overall eligibility-aware read-weighted precision, recall, and F1",
+        "diagnostic": "per-chromosome metrics and all-mapped-origin read-weighted and gene-unit metrics",
         "missing_classification": "false negative",
         "matrix_qc_run": False,
     },

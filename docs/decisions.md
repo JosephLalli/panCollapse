@@ -1849,6 +1849,23 @@ are tracked here, while large BAM and result artifacts remain in their immutable
 reviewable and resumable in a PanCollapse branch. It also prevents downstream evaluation policy
 changes from being mistaken for PanCollapse runtime or assignment-algorithm changes.
 
+### D077 — Apply the frozen uniform-truth-gene metric hierarchy to the 1M result
+
+**Decision source:** Frozen method contract
+`sha256:b60634bd04695b6eaa0d6498e2dd7aba2a3d21248ef8b2760eda40438e265b67`,
+verified after the terminal 1M score on 2026-09-04.
+
+**Decision:** Overall eligibility-aware uniform-truth-gene F1 is primary. Overall ordinary
+read-weighted precision/recall/F1 are mandatory co-reports. Per-chromosome and all-mapped-origin
+variants are diagnostic. The original terminal manifest inverted the first two roles; preserve
+it as executed provenance and supersede its metadata with `BENCHMARK.MANIFEST.v2.json` plus
+`INTERPRETATION.AMENDMENT.json`. Do not recount or rescore because the metric table and underlying
+classification are numerically valid and checksum-complete.
+
+**Rationale:** The frozen objective gives every represented truth gene equal total weight so
+high-expression genes cannot dominate optimization. Relabeling an already computed column restores
+the preregistered hierarchy; changing assignments or recomputing after inspection would not.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

@@ -42,19 +42,20 @@ records. It emitted 999,759 selected records; 220 uncorrectable and 21 barcode-o
 were not emitted. Scoring retained the selected FASTQ as the denominator, so missing
 classifications count as false negatives rather than disappearing.
 
-The primary metric is eligibility-aware open-set, read-weighted F1. The all-mapped-origin
-and gene-balanced fields are diagnostics.
+The frozen optimization objective makes overall eligibility-aware uniform-truth-gene
+(`gene_unit_*`) F1 primary. Ordinary read-weighted precision/recall/F1 are mandatory
+co-reports. Per-chromosome and all-mapped-origin fields are diagnostics.
 
-| Scope | Truth reads | Precision | Recall | F1 |
-|---|---:|---:|---:|---:|
-| Overall | 1,000,000 | 0.983341393 | 0.949932893 | **0.966348480** |
-| chr20 | 448,595 | 0.997124837 | 0.991406059 | 0.994257225 |
-| chr21 | 151,579 | 0.984481874 | 0.913553147 | 0.947692223 |
-| chr22 | 399,826 | 0.966710999 | 0.917230163 | 0.941320785 |
+| Scope | Gene-unit P / R / F1 | Read-weighted P / R / F1 |
+|---|---|---|
+| Overall | 0.963216 / 0.947364 / **0.955225** | 0.983341 / 0.949933 / **0.966348** |
+| chr20 | 0.970439 / 0.971584 / 0.971011 | 0.997125 / 0.991406 / 0.994257 |
+| chr21 | 0.946436 / 0.930093 / 0.938193 | 0.984482 / 0.913553 / 0.947692 |
+| chr22 | 0.962005 / 0.926986 / 0.944171 | 0.966711 / 0.917230 / 0.941321 |
 
-Overall primary counts are TP 945,586, FP 16,019, FN 49,838, and TN 3,322 over
+The read-weighted co-report has TP 945,586, FP 16,019, FN 49,838, and TN 3,322 over
 995,424 eligible plus 4,576 background truth reads. Overall all-mapped-origin diagnostic
-F1 is 0.964094198; represented eligible-gene-balanced diagnostic F1 is 0.955224516.
+F1 is 0.964094 read-weighted and 0.932606 gene-unit.
 
 This is an authorized partial unblinding, not the completed full final test. It evaluates
 the frozen integrated annotation/filter/counting policy on a deterministic read sample; it
@@ -79,6 +80,11 @@ policy implementations are not vendored into PanCollapse. Set
 running its cross-repository integration test elsewhere; that one test skips if the oracle
 is unavailable.
 
-The small terminal receipts in this directory are copies of the immutable result metadata.
+The original `BENCHMARK.MANIFEST.json` is retained byte-for-byte and contains the detected
+metric-label defect. `INTERPRETATION.AMENDMENT.json` and `BENCHMARK.MANIFEST.v2.json`
+supersede only that hierarchy; no count or score changed. The small terminal receipts in
+this directory are copies of the immutable result metadata.
 The large BAM, classifications, and per-gene tables remain under the benchmark root and are
-bound by hashes in `BENCHMARK.MANIFEST.json` and `score.MANIFEST.json`.
+bound by hashes in `EXTERNAL.TERMINAL.SHA256SUMS`; run that manifest from the external
+benchmark root. It seals 46 files, including the corrected BAM, classifications, matrices,
+subset artifacts, commands, logs, timings, and both benchmark manifests.
