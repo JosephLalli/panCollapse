@@ -901,6 +901,203 @@ CompatibilityTableIdentity write_table(
             std::move(logical_sha256)};
 }
 
+class CompatibilityParquetBatchWriter {
+  public:
+    CompatibilityParquetBatchWriter(const std::filesystem::path& path,
+                                    std::string relative_path,
+                                    std::shared_ptr<arrow::Schema> schema)
+        : path_(path), relative_path_(std::move(relative_path)),
+          schema_(std::move(schema)) {
+        output_ = arrow_value(arrow::io::FileOutputStream::Open(path_.string()),
+                              "cannot open compatibility Parquet output");
+        parquet::WriterProperties::Builder properties;
+        properties.version(parquet::ParquetVersion::PARQUET_2_6)
+            ->compression(parquet::Compression::ZSTD)
+            ->compression_level(3)
+            ->created_by(std::string(kCreatedBy));
+        parquet::ArrowWriterProperties::Builder arrow_properties;
+        arrow_properties.store_schema();
+        writer_ = arrow_value(
+            parquet::arrow::FileWriter::Open(
+                *schema_, arrow::default_memory_pool(), output_, properties.build(),
+                arrow_properties.build()),
+            "cannot create compatibility Parquet batch writer");
+    }
+
+    void write(const std::shared_ptr<arrow::RecordBatch>& batch) {
+        if (!batch || batch->num_rows() <= 0 ||
+            !batch->schema()->Equals(*schema_)) {
+            fail("compatibility Parquet batch is empty or has the wrong schema");
+        }
+        check_arrow(writer_->NewRowGroup(batch->num_rows()),
+                    "cannot start compatibility Parquet row group");
+        for (int column = 0; column < batch->num_columns(); ++column) {
+            check_arrow(writer_->WriteColumnChunk(*batch->column(column)),
+                        "cannot write compatibility Parquet column chunk");
+        }
+        rows_ += static_cast<std::uint64_t>(batch->num_rows());
+    }
+
+    CompatibilityTableIdentity finish(std::string logical_sha256) {
+        check_arrow(writer_->Close(), "cannot close compatibility Parquet batch writer");
+        writer_.reset();
+        check_arrow(output_->Close(), "cannot close compatibility Parquet output");
+        output_.reset();
+        return {std::move(relative_path_), rows_, std::filesystem::file_size(path_),
+                sha256_file(path_), std::move(logical_sha256)};
+    }
+
+  private:
+    std::filesystem::path path_;
+    std::string relative_path_;
+    std::shared_ptr<arrow::Schema> schema_;
+    std::shared_ptr<arrow::io::FileOutputStream> output_;
+    std::unique_ptr<parquet::arrow::FileWriter> writer_;
+    std::uint64_t rows_ = 0;
+};
+
+struct ExactBatchRow {
+    std::uint64_t fact_set_id = 0;
+    const ExactCompatibilityFact* fact = nullptr;
+};
+
+std::shared_ptr<arrow::RecordBatch> make_exact_batch(
+    const std::vector<ExactBatchRow>& rows) {
+    arrow::UInt64Builder id_builder;
+    arrow::StringBuilder transcript_builder;
+    arrow::StringBuilder locus_parent_builder;
+    arrow::StringBuilder path_builder;
+    arrow::StringBuilder parent_builder;
+    arrow::Int64Builder score_builder;
+    arrow::StringBuilder tier_builder;
+    arrow::StringBuilder strand_builder;
+    for (const ExactBatchRow& row : rows) {
+        if (row.fact == nullptr) fail("exact compatibility batch contains a null fact");
+        const ExactCompatibilityFact& fact = *row.fact;
+        append_value(id_builder, row.fact_set_id, "append exact fact-set ID");
+        append_value(transcript_builder, fact.canonical_transcript,
+                     "append exact transcript");
+        append_value(locus_parent_builder, fact.locus_parent,
+                     "append exact locus Parent");
+        append_value(path_builder, fact.path, "append exact path");
+        append_value(parent_builder, fact.unique_parent,
+                     "append exact unique Parent");
+        append_value(score_builder, fact.score, "append exact score");
+        append_value(tier_builder, tier_name(fact.tier), "append exact tier");
+        append_value(strand_builder, strand_name(fact.strand),
+                     "append exact strand");
+    }
+    return arrow::RecordBatch::Make(
+        exact_schema(), static_cast<std::int64_t>(rows.size()),
+        {finish(id_builder, "finish exact fact-set IDs"),
+         finish(transcript_builder, "finish exact transcripts"),
+         finish(locus_parent_builder, "finish exact locus Parents"),
+         finish(path_builder, "finish exact paths"),
+         finish(parent_builder, "finish exact unique Parents"),
+         finish(score_builder, "finish exact scores"),
+         finish(tier_builder, "finish exact tiers"),
+         finish(strand_builder, "finish exact strands")});
+}
+
+struct StructuralBatchRow {
+    std::uint64_t fact_set_id = 0;
+    const StructuralCompatibilityFact* fact = nullptr;
+};
+
+std::shared_ptr<arrow::RecordBatch> make_structural_batch(
+    const std::vector<StructuralBatchRow>& rows) {
+    arrow::UInt64Builder id_builder;
+    arrow::StringBuilder transcript_builder;
+    arrow::StringBuilder layer_builder;
+    arrow::Int64Builder score_builder;
+    arrow::StringBuilder strand_builder;
+    arrow::ListBuilder paths_builder(
+        arrow::default_memory_pool(), std::make_shared<arrow::StringBuilder>());
+    arrow::ListBuilder parents_builder(
+        arrow::default_memory_pool(), std::make_shared<arrow::StringBuilder>());
+    auto* path_value_builder =
+        static_cast<arrow::StringBuilder*>(paths_builder.value_builder());
+    auto* parent_value_builder =
+        static_cast<arrow::StringBuilder*>(parents_builder.value_builder());
+    for (const StructuralBatchRow& row : rows) {
+        if (row.fact == nullptr) {
+            fail("structural compatibility batch contains a null fact");
+        }
+        const StructuralCompatibilityFact& fact = *row.fact;
+        append_value(id_builder, row.fact_set_id,
+                     "append structural fact-set ID");
+        append_value(transcript_builder, fact.canonical_transcript,
+                     "append structural transcript");
+        append_value(layer_builder, layer_name(fact.layer),
+                     "append structural layer");
+        append_value(score_builder, fact.score, "append structural score");
+        append_value(strand_builder, strand_name(fact.strand),
+                     "append structural strand");
+        check_arrow(paths_builder.Append(), "append structural path list");
+        for (const std::string& value : fact.winning_paths) {
+            append_value(*path_value_builder, value, "append structural path");
+        }
+        check_arrow(parents_builder.Append(), "append structural Parent list");
+        for (const std::string& value : fact.winning_parents) {
+            append_value(*parent_value_builder, value, "append structural Parent");
+        }
+    }
+    return arrow::RecordBatch::Make(
+        structural_schema(), static_cast<std::int64_t>(rows.size()),
+        {finish(id_builder, "finish structural fact-set IDs"),
+         finish(transcript_builder, "finish structural transcripts"),
+         finish(layer_builder, "finish structural layers"),
+         finish(score_builder, "finish structural scores"),
+         finish(strand_builder, "finish structural strands"),
+         finish(paths_builder, "finish structural path lists"),
+         finish(parents_builder, "finish structural Parent lists")});
+}
+
+void add_string_bytes(std::uint64_t& total, size_t bytes) {
+    if (bytes > std::numeric_limits<std::uint64_t>::max() - total) {
+        fail("compatibility fact string-byte count overflows uint64");
+    }
+    total += static_cast<std::uint64_t>(bytes);
+}
+
+std::uint64_t exact_string_bytes(const ExactCompatibilityFact& fact) {
+    std::uint64_t result = 0;
+    add_string_bytes(result, fact.canonical_transcript.size());
+    add_string_bytes(result, fact.locus_parent.size());
+    add_string_bytes(result, fact.path.size());
+    add_string_bytes(result, fact.unique_parent.size());
+    add_string_bytes(result, tier_name(fact.tier).size());
+    add_string_bytes(result, strand_name(fact.strand).size());
+    return result;
+}
+
+std::uint64_t structural_string_bytes(const StructuralCompatibilityFact& fact) {
+    std::uint64_t result = 0;
+    add_string_bytes(result, fact.canonical_transcript.size());
+    add_string_bytes(result, layer_name(fact.layer).size());
+    add_string_bytes(result, strand_name(fact.strand).size());
+    for (const std::string& value : fact.winning_paths) {
+        add_string_bytes(result, value.size());
+    }
+    for (const std::string& value : fact.winning_parents) {
+        add_string_bytes(result, value.size());
+    }
+    return result;
+}
+
+std::uint64_t read_string_bytes(const ReadCompatibilityRow& read) {
+    std::uint64_t result = 0;
+    add_string_bytes(result, read.original_name.size());
+    add_string_bytes(result, molecule_status_name(read.molecule_status).size());
+    for (const auto* value : {std::addressof(read.raw_barcode),
+                              std::addressof(read.barcode_quality),
+                              std::addressof(read.umi),
+                              std::addressof(read.umi_quality)}) {
+        if (*value) add_string_bytes(result, (*value)->size());
+    }
+    return result;
+}
+
 std::shared_ptr<arrow::RecordBatch> make_read_batch(
     const std::vector<ReadCompatibilityRow>& rows) {
     arrow::UInt64Builder ordinal_builder;
@@ -945,22 +1142,10 @@ CompatibilityTableIdentity write_spooled_read_table(
     const std::filesystem::path& parquet_path,
     std::uint64_t row_count,
     std::uint64_t row_group_rows,
+    std::uint64_t max_string_bytes_per_batch,
     const std::vector<std::uint64_t>& provisional_to_canonical) {
-    auto output = arrow_value(arrow::io::FileOutputStream::Open(parquet_path.string()),
-                              "cannot open compatibility read Parquet output");
-    parquet::WriterProperties::Builder properties;
-    properties.version(parquet::ParquetVersion::PARQUET_2_6)
-        ->compression(parquet::Compression::ZSTD)
-        ->compression_level(3)
-        ->created_by(std::string(kCreatedBy))
-        ->max_row_group_length(static_cast<std::int64_t>(row_group_rows));
-    parquet::ArrowWriterProperties::Builder arrow_properties;
-    arrow_properties.store_schema();
-    auto writer = arrow_value(
-        parquet::arrow::FileWriter::Open(*read_schema(), arrow::default_memory_pool(),
-                                         output, properties.build(),
-                                         arrow_properties.build()),
-        "cannot create compatibility read Parquet writer");
+    CompatibilityParquetBatchWriter writer(
+        parquet_path, "parquet/read_rows.parquet", read_schema());
 
     ZstdSpoolInput input(spool_path);
     std::array<char, kSpoolMagic.size()> magic{};
@@ -971,6 +1156,13 @@ CompatibilityTableIdentity write_spooled_read_table(
     std::vector<ReadCompatibilityRow> batch;
     batch.reserve(static_cast<size_t>(std::min<std::uint64_t>(
         row_group_rows, std::numeric_limits<size_t>::max())));
+    std::uint64_t batch_string_bytes = 0;
+    auto flush = [&]() {
+        if (batch.empty()) return;
+        writer.write(make_read_batch(batch));
+        batch.clear();
+        batch_string_bytes = 0;
+    };
     for (std::uint64_t ordinal = 0; ordinal < row_count; ++ordinal) {
         ReadCompatibilityRow read = decode_spool_read(input, spool_digest);
         if (read.ordinal != ordinal ||
@@ -980,17 +1172,20 @@ CompatibilityTableIdentity write_spooled_read_table(
         validate_read(read);
         read.fact_set_id = provisional_to_canonical[read.fact_set_id];
         append_logical_read(logical_digest, read);
-        batch.push_back(std::move(read));
-        if (batch.size() == row_group_rows) {
-            check_arrow(writer->WriteRecordBatch(*make_read_batch(batch)),
-                        "cannot write compatibility read Parquet row group");
-            batch.clear();
+        const std::uint64_t row_string_bytes = read_string_bytes(read);
+        if (row_string_bytes > max_string_bytes_per_batch) {
+            fail("one compatibility read row exceeds the Parquet batch string budget");
         }
+        if (!batch.empty() &&
+            (batch.size() == row_group_rows ||
+             row_string_bytes >
+                 max_string_bytes_per_batch - batch_string_bytes)) {
+            flush();
+        }
+        batch.push_back(std::move(read));
+        batch_string_bytes += row_string_bytes;
     }
-    if (!batch.empty()) {
-        check_arrow(writer->WriteRecordBatch(*make_read_batch(batch)),
-                    "cannot write final compatibility read Parquet row group");
-    }
+    flush();
 
     std::array<char, kSpoolFooter.size()> footer{};
     input.read_exact(footer.data(), footer.size());
@@ -1004,11 +1199,11 @@ CompatibilityTableIdentity write_spooled_read_table(
     }
     input.finish();
 
-    check_arrow(writer->Close(), "cannot close compatibility read Parquet writer");
-    check_arrow(output->Close(), "cannot close compatibility read Parquet output");
-    return {"parquet/read_rows.parquet", row_count,
-            std::filesystem::file_size(parquet_path), sha256_file(parquet_path),
-            logical_digest.finish()};
+    CompatibilityTableIdentity result = writer.finish(logical_digest.finish());
+    if (result.rows != row_count) {
+        fail("compatibility read Parquet writer dropped an input row");
+    }
+    return result;
 }
 
 std::shared_ptr<arrow::Table> read_table(
@@ -1025,6 +1220,52 @@ std::shared_ptr<arrow::Table> read_table(
         throw std::runtime_error("unexpected compatibility Parquet schema: " + path.string());
     }
     return table;
+}
+
+void for_each_fact_table_batch(
+    const std::filesystem::path& path,
+    const std::shared_ptr<arrow::Schema>& expected_schema,
+    std::uint64_t expected_rows,
+    const std::function<void(const std::shared_ptr<arrow::RecordBatch>&)>& callback) {
+    auto input = arrow_value(arrow::io::ReadableFile::Open(path.string()),
+                             "cannot open compatibility Parquet input");
+    std::unique_ptr<parquet::arrow::FileReader> reader;
+    check_arrow(parquet::arrow::OpenFile(input, arrow::default_memory_pool(), &reader),
+                "cannot initialize compatibility Parquet batch reader");
+    std::shared_ptr<arrow::Schema> schema;
+    check_arrow(reader->GetSchema(&schema),
+                "cannot read compatibility Parquet batch schema");
+    if (!schema->Equals(*expected_schema)) {
+        throw std::runtime_error("unexpected compatibility Parquet schema: " +
+                                 path.string());
+    }
+    const auto metadata = reader->parquet_reader()->metadata();
+    if (metadata->num_rows() < 0 ||
+        static_cast<std::uint64_t>(metadata->num_rows()) != expected_rows) {
+        throw std::runtime_error("compatibility table row-count mismatch: " +
+                                 path.string());
+    }
+    std::uint64_t rows = 0;
+    for (int row_group = 0; row_group < metadata->num_row_groups(); ++row_group) {
+        std::unique_ptr<arrow::RecordBatchReader> batches;
+        check_arrow(reader->GetRecordBatchReader({row_group}, &batches),
+                    "cannot initialize compatibility row-group reader");
+        while (true) {
+            std::shared_ptr<arrow::RecordBatch> batch;
+            check_arrow(batches->ReadNext(&batch),
+                        "cannot read compatibility fact-table batch");
+            if (!batch) break;
+            if (!batch->schema()->Equals(*expected_schema) || batch->num_rows() <= 0) {
+                fail("compatibility fact-table batch is empty or has the wrong schema");
+            }
+            rows += static_cast<std::uint64_t>(batch->num_rows());
+            callback(batch);
+        }
+    }
+    if (rows != expected_rows) {
+        throw std::runtime_error("compatibility fact-table batch count mismatch: " +
+                                 path.string());
+    }
 }
 
 std::shared_ptr<arrow::Array> combine_column(const std::shared_ptr<arrow::Table>& table,
@@ -1265,6 +1506,7 @@ std::string build_manifest_content(
 void write_fact_tables(const std::filesystem::path& staging,
                        const CompatibilityBundle& bundle,
                        std::uint64_t row_group_rows,
+                       std::uint64_t max_string_bytes_per_batch,
                        const std::map<std::string, std::string>& logical,
                        CompatibilityWriteReceipt& receipt) {
     {
@@ -1288,98 +1530,72 @@ void write_fact_tables(const std::filesystem::path& staging,
             row_group_rows, logical.at(path)));
     }
     {
-        arrow::UInt64Builder id_builder;
-        arrow::StringBuilder transcript_builder;
-        arrow::StringBuilder locus_parent_builder;
-        arrow::StringBuilder path_builder;
-        arrow::StringBuilder parent_builder;
-        arrow::Int64Builder score_builder;
-        arrow::StringBuilder tier_builder;
-        arrow::StringBuilder strand_builder;
+        const std::string path = "parquet/exact_facts.parquet";
+        CompatibilityParquetBatchWriter writer(staging / path, path,
+                                               exact_schema());
+        std::vector<ExactBatchRow> batch;
+        batch.reserve(static_cast<size_t>(row_group_rows));
+        std::uint64_t batch_string_bytes = 0;
+        auto flush = [&]() {
+            if (batch.empty()) return;
+            writer.write(make_exact_batch(batch));
+            batch.clear();
+            batch_string_bytes = 0;
+        };
         for (size_t index = 0; index < bundle.fact_sets.size(); ++index) {
             for (const ExactCompatibilityFact& fact : bundle.fact_sets[index].exact) {
-                append_value(id_builder, static_cast<std::uint64_t>(index),
-                             "append exact fact-set ID");
-                append_value(transcript_builder, fact.canonical_transcript,
-                             "append exact transcript");
-                append_value(locus_parent_builder, fact.locus_parent,
-                             "append exact locus Parent");
-                append_value(path_builder, fact.path, "append exact path");
-                append_value(parent_builder, fact.unique_parent,
-                             "append exact unique Parent");
-                append_value(score_builder, fact.score, "append exact score");
-                append_value(tier_builder, tier_name(fact.tier), "append exact tier");
-                append_value(strand_builder, strand_name(fact.strand),
-                             "append exact strand");
+                const std::uint64_t row_string_bytes = exact_string_bytes(fact);
+                if (row_string_bytes > max_string_bytes_per_batch) {
+                    fail("one exact compatibility fact exceeds the Parquet batch string budget");
+                }
+                if (!batch.empty() &&
+                    (batch.size() == row_group_rows ||
+                     row_string_bytes >
+                         max_string_bytes_per_batch - batch_string_bytes)) {
+                    flush();
+                }
+                batch.push_back(
+                    {static_cast<std::uint64_t>(index), std::addressof(fact)});
+                batch_string_bytes += row_string_bytes;
             }
         }
-        const std::string path = "parquet/exact_facts.parquet";
-        receipt.tables.push_back(write_table(
-            staging / path, path,
-            arrow::Table::Make(
-                exact_schema(),
-                {finish(id_builder, "finish exact fact-set IDs"),
-                 finish(transcript_builder, "finish exact transcripts"),
-                 finish(locus_parent_builder, "finish exact locus Parents"),
-                 finish(path_builder, "finish exact paths"),
-                 finish(parent_builder, "finish exact unique Parents"),
-                 finish(score_builder, "finish exact scores"),
-                 finish(tier_builder, "finish exact tiers"),
-                 finish(strand_builder, "finish exact strands")}),
-            row_group_rows, logical.at(path)));
+        flush();
+        receipt.tables.push_back(writer.finish(logical.at(path)));
     }
     {
-        arrow::UInt64Builder id_builder;
-        arrow::StringBuilder transcript_builder;
-        arrow::StringBuilder layer_builder;
-        arrow::Int64Builder score_builder;
-        arrow::StringBuilder strand_builder;
-        arrow::ListBuilder paths_builder(
-            arrow::default_memory_pool(), std::make_shared<arrow::StringBuilder>());
-        arrow::ListBuilder parents_builder(
-            arrow::default_memory_pool(), std::make_shared<arrow::StringBuilder>());
-        auto* path_value_builder =
-            static_cast<arrow::StringBuilder*>(paths_builder.value_builder());
-        auto* parent_value_builder =
-            static_cast<arrow::StringBuilder*>(parents_builder.value_builder());
+        const std::string path = "parquet/structural_facts.parquet";
+        CompatibilityParquetBatchWriter writer(staging / path, path,
+                                               structural_schema());
+        std::vector<StructuralBatchRow> batch;
+        batch.reserve(static_cast<size_t>(row_group_rows));
+        std::uint64_t batch_string_bytes = 0;
+        auto flush = [&]() {
+            if (batch.empty()) return;
+            writer.write(make_structural_batch(batch));
+            batch.clear();
+            batch_string_bytes = 0;
+        };
         for (size_t index = 0; index < bundle.fact_sets.size(); ++index) {
             for (const StructuralCompatibilityFact& fact :
                  bundle.fact_sets[index].structural) {
-                append_value(id_builder, static_cast<std::uint64_t>(index),
-                             "append structural fact-set ID");
-                append_value(transcript_builder, fact.canonical_transcript,
-                             "append structural transcript");
-                append_value(layer_builder, layer_name(fact.layer),
-                             "append structural layer");
-                append_value(score_builder, fact.score, "append structural score");
-                append_value(strand_builder, strand_name(fact.strand),
-                             "append structural strand");
-                check_arrow(paths_builder.Append(), "append structural path list");
-                for (const std::string& value : fact.winning_paths) {
-                    append_value(*path_value_builder, value,
-                                 "append structural path");
+                const std::uint64_t row_string_bytes =
+                    structural_string_bytes(fact);
+                if (row_string_bytes > max_string_bytes_per_batch) {
+                    fail("one structural compatibility fact exceeds the Parquet batch string budget");
                 }
-                check_arrow(parents_builder.Append(),
-                            "append structural Parent list");
-                for (const std::string& value : fact.winning_parents) {
-                    append_value(*parent_value_builder, value,
-                                 "append structural Parent");
+                if (!batch.empty() &&
+                    (batch.size() == row_group_rows ||
+                     row_string_bytes >
+                         max_string_bytes_per_batch - batch_string_bytes)) {
+                    flush();
                 }
+                batch.push_back(
+                    {static_cast<std::uint64_t>(index), std::addressof(fact)});
+                batch_string_bytes += row_string_bytes;
             }
         }
-        const std::string path = "parquet/structural_facts.parquet";
-        receipt.tables.push_back(write_table(
-            staging / path, path,
-            arrow::Table::Make(
-                structural_schema(),
-                {finish(id_builder, "finish structural fact-set IDs"),
-                 finish(transcript_builder, "finish structural transcripts"),
-                 finish(layer_builder, "finish structural layers"),
-                 finish(score_builder, "finish structural scores"),
-                 finish(strand_builder, "finish structural strands"),
-                 finish(paths_builder, "finish structural path lists"),
-                 finish(parents_builder, "finish structural Parent lists")}),
-            row_group_rows, logical.at(path)));
+        flush();
+        receipt.tables.push_back(writer.finish(logical.at(path)));
     }
 }
 
@@ -1424,7 +1640,10 @@ struct CompatibilityBundleWriter::Impl {
          CompatibilityWriteOptions options_value)
         : identity(std::move(identity_value)), options(std::move(options_value)) {
         if (options.output_directory.empty() || options.parquet_row_group_rows == 0 ||
-            options.parquet_row_group_rows > kMaximumCompatibilityRowsPerBatch) {
+            options.parquet_row_group_rows > kMaximumCompatibilityRowsPerBatch ||
+            options.parquet_max_string_bytes_per_batch == 0 ||
+            options.parquet_max_string_bytes_per_batch >
+                kMaximumCompatibilityStringBytesPerBatch) {
             throw std::invalid_argument("compatibility output options are incomplete");
         }
         if (identity.producer_version.empty() ||
@@ -1576,9 +1795,11 @@ CompatibilityWriteReceipt CompatibilityBundleWriter::finalize() {
     try {
         receipt.tables.push_back(write_spooled_read_table(
             impl_->spool_path, impl_->staging / "parquet/read_rows.parquet",
-            impl_->rows, impl_->options.parquet_row_group_rows, remap));
-        write_fact_tables(impl_->staging, canonical,
-                          impl_->options.parquet_row_group_rows, logical, receipt);
+            impl_->rows, impl_->options.parquet_row_group_rows,
+            impl_->options.parquet_max_string_bytes_per_batch, remap));
+        write_fact_tables(
+            impl_->staging, canonical, impl_->options.parquet_row_group_rows,
+            impl_->options.parquet_max_string_bytes_per_batch, logical, receipt);
         if (!std::filesystem::remove(impl_->spool_path)) {
             fail("compatibility read spool disappeared before staged publication");
         }
@@ -1688,10 +1909,6 @@ CompatibilityBundleReader::CompatibilityBundleReader(
 
     const auto fact_sets =
         read_table(impl_->root / "parquet/fact_sets.parquet", fact_set_schema());
-    const auto exact =
-        read_table(impl_->root / "parquet/exact_facts.parquet", exact_schema());
-    const auto structural = read_table(
-        impl_->root / "parquet/structural_facts.parquet", structural_schema());
     auto validate_rows = [&](const std::shared_ptr<arrow::Table>& table,
                              std::string_view path) {
         if (table->num_rows() < 0 ||
@@ -1702,8 +1919,6 @@ CompatibilityBundleReader::CompatibilityBundleReader(
         }
     };
     validate_rows(fact_sets, "parquet/fact_sets.parquet");
-    validate_rows(exact, "parquet/exact_facts.parquet");
-    validate_rows(structural, "parquet/structural_facts.parquet");
     if (static_cast<std::uint64_t>(fact_sets->num_rows()) >
         static_cast<std::uint64_t>(std::numeric_limits<size_t>::max())) {
         fail("compatibility fact-set dictionary is too large");
@@ -1742,105 +1957,116 @@ CompatibilityBundleReader::CompatibilityBundleReader(
             complete->Value(row);
     }
 
-    const auto exact_set_ids = std::static_pointer_cast<arrow::UInt64Array>(
-        combine_column(exact, 0));
-    const auto exact_transcripts = std::static_pointer_cast<arrow::StringArray>(
-        combine_column(exact, 1));
-    const auto exact_locus_parents = std::static_pointer_cast<arrow::StringArray>(
-        combine_column(exact, 2));
-    const auto exact_paths = std::static_pointer_cast<arrow::StringArray>(
-        combine_column(exact, 3));
-    const auto exact_parents = std::static_pointer_cast<arrow::StringArray>(
-        combine_column(exact, 4));
-    const auto exact_scores = std::static_pointer_cast<arrow::Int64Array>(
-        combine_column(exact, 5));
-    const auto exact_tiers = std::static_pointer_cast<arrow::StringArray>(
-        combine_column(exact, 6));
-    const auto exact_strands = std::static_pointer_cast<arrow::StringArray>(
-        combine_column(exact, 7));
     std::uint64_t previous_exact_set = 0;
     bool have_exact = false;
-    for (std::int64_t row = 0; row < exact->num_rows(); ++row) {
-        if (exact_set_ids->IsNull(row) || exact_scores->IsNull(row)) {
-            fail("exact compatibility fact contains an unexpected null");
-        }
-        const std::uint64_t set_id = exact_set_ids->Value(row);
-        if (set_id >= impl_->index.fact_sets.size() ||
-            (have_exact && set_id < previous_exact_set)) {
-            fail("exact compatibility fact-set IDs are invalid or unsorted");
-        }
-        have_exact = true;
-        previous_exact_set = set_id;
-        ExactCompatibilityFact fact{
-            string_value(exact_transcripts, row),
-            string_value(exact_locus_parents, row),
-            string_value(exact_paths, row),
-            string_value(exact_parents, row),
-            exact_scores->Value(row),
-            parse_tier(string_value(exact_tiers, row)),
-            parse_strand(string_value(exact_strands, row)),
-        };
-        validate_exact_fact(fact);
-        impl_->index.fact_sets[set_id].exact.push_back(std::move(fact));
-    }
+    for_each_fact_table_batch(
+        impl_->root / "parquet/exact_facts.parquet", exact_schema(),
+        impl_->manifest.tables.at("parquet/exact_facts.parquet").rows,
+        [&](const std::shared_ptr<arrow::RecordBatch>& batch) {
+            const auto exact_set_ids =
+                std::static_pointer_cast<arrow::UInt64Array>(batch->column(0));
+            const auto exact_transcripts =
+                std::static_pointer_cast<arrow::StringArray>(batch->column(1));
+            const auto exact_locus_parents =
+                std::static_pointer_cast<arrow::StringArray>(batch->column(2));
+            const auto exact_paths =
+                std::static_pointer_cast<arrow::StringArray>(batch->column(3));
+            const auto exact_parents =
+                std::static_pointer_cast<arrow::StringArray>(batch->column(4));
+            const auto exact_scores =
+                std::static_pointer_cast<arrow::Int64Array>(batch->column(5));
+            const auto exact_tiers =
+                std::static_pointer_cast<arrow::StringArray>(batch->column(6));
+            const auto exact_strands =
+                std::static_pointer_cast<arrow::StringArray>(batch->column(7));
+            for (std::int64_t row = 0; row < batch->num_rows(); ++row) {
+                if (exact_set_ids->IsNull(row) || exact_scores->IsNull(row)) {
+                    fail("exact compatibility fact contains an unexpected null");
+                }
+                const std::uint64_t set_id = exact_set_ids->Value(row);
+                if (set_id >= impl_->index.fact_sets.size() ||
+                    (have_exact && set_id < previous_exact_set)) {
+                    fail("exact compatibility fact-set IDs are invalid or unsorted");
+                }
+                have_exact = true;
+                previous_exact_set = set_id;
+                ExactCompatibilityFact fact{
+                    string_value(exact_transcripts, row),
+                    string_value(exact_locus_parents, row),
+                    string_value(exact_paths, row),
+                    string_value(exact_parents, row),
+                    exact_scores->Value(row),
+                    parse_tier(string_value(exact_tiers, row)),
+                    parse_strand(string_value(exact_strands, row)),
+                };
+                validate_exact_fact(fact);
+                impl_->index.fact_sets[set_id].exact.push_back(std::move(fact));
+            }
+        });
 
-    const auto structural_set_ids = std::static_pointer_cast<arrow::UInt64Array>(
-        combine_column(structural, 0));
-    const auto structural_transcripts = std::static_pointer_cast<arrow::StringArray>(
-        combine_column(structural, 1));
-    const auto structural_layers = std::static_pointer_cast<arrow::StringArray>(
-        combine_column(structural, 2));
-    const auto structural_scores = std::static_pointer_cast<arrow::Int64Array>(
-        combine_column(structural, 3));
-    const auto structural_strands = std::static_pointer_cast<arrow::StringArray>(
-        combine_column(structural, 4));
-    const auto path_lists = std::static_pointer_cast<arrow::ListArray>(
-        combine_column(structural, 5));
-    const auto parent_lists = std::static_pointer_cast<arrow::ListArray>(
-        combine_column(structural, 6));
-    const auto path_values =
-        std::static_pointer_cast<arrow::StringArray>(path_lists->values());
-    const auto parent_values =
-        std::static_pointer_cast<arrow::StringArray>(parent_lists->values());
     std::uint64_t previous_structural_set = 0;
     bool have_structural = false;
-    for (std::int64_t row = 0; row < structural->num_rows(); ++row) {
-        if (structural_set_ids->IsNull(row) || structural_scores->IsNull(row) ||
-            path_lists->IsNull(row) || parent_lists->IsNull(row)) {
-            fail("structural compatibility fact contains an unexpected null");
-        }
-        const std::uint64_t set_id = structural_set_ids->Value(row);
-        if (set_id >= impl_->index.fact_sets.size() ||
-            (have_structural && set_id < previous_structural_set)) {
-            fail("structural compatibility fact-set IDs are invalid or unsorted");
-        }
-        have_structural = true;
-        previous_structural_set = set_id;
-        StructuralCompatibilityFact fact{
-            string_value(structural_transcripts, row),
-            parse_layer(string_value(structural_layers, row)),
-            structural_scores->Value(row),
-            parse_strand(string_value(structural_strands, row)),
-            {},
-            {},
-        };
-        for (std::int64_t index = path_lists->value_offset(row);
-             index < path_lists->value_offset(row + 1); ++index) {
-            if (path_values->IsNull(index)) {
-                fail("structural compatibility path list contains null");
+    for_each_fact_table_batch(
+        impl_->root / "parquet/structural_facts.parquet", structural_schema(),
+        impl_->manifest.tables.at("parquet/structural_facts.parquet").rows,
+        [&](const std::shared_ptr<arrow::RecordBatch>& batch) {
+            const auto structural_set_ids =
+                std::static_pointer_cast<arrow::UInt64Array>(batch->column(0));
+            const auto structural_transcripts =
+                std::static_pointer_cast<arrow::StringArray>(batch->column(1));
+            const auto structural_layers =
+                std::static_pointer_cast<arrow::StringArray>(batch->column(2));
+            const auto structural_scores =
+                std::static_pointer_cast<arrow::Int64Array>(batch->column(3));
+            const auto structural_strands =
+                std::static_pointer_cast<arrow::StringArray>(batch->column(4));
+            const auto path_lists =
+                std::static_pointer_cast<arrow::ListArray>(batch->column(5));
+            const auto parent_lists =
+                std::static_pointer_cast<arrow::ListArray>(batch->column(6));
+            const auto path_values = std::static_pointer_cast<arrow::StringArray>(
+                path_lists->values());
+            const auto parent_values = std::static_pointer_cast<arrow::StringArray>(
+                parent_lists->values());
+            for (std::int64_t row = 0; row < batch->num_rows(); ++row) {
+                if (structural_set_ids->IsNull(row) ||
+                    structural_scores->IsNull(row) || path_lists->IsNull(row) ||
+                    parent_lists->IsNull(row)) {
+                    fail("structural compatibility fact contains an unexpected null");
+                }
+                const std::uint64_t set_id = structural_set_ids->Value(row);
+                if (set_id >= impl_->index.fact_sets.size() ||
+                    (have_structural && set_id < previous_structural_set)) {
+                    fail("structural compatibility fact-set IDs are invalid or unsorted");
+                }
+                have_structural = true;
+                previous_structural_set = set_id;
+                StructuralCompatibilityFact fact{
+                    string_value(structural_transcripts, row),
+                    parse_layer(string_value(structural_layers, row)),
+                    structural_scores->Value(row),
+                    parse_strand(string_value(structural_strands, row)),
+                    {},
+                    {},
+                };
+                for (std::int64_t index = path_lists->value_offset(row);
+                     index < path_lists->value_offset(row + 1); ++index) {
+                    if (path_values->IsNull(index)) {
+                        fail("structural compatibility path list contains null");
+                    }
+                    fact.winning_paths.push_back(path_values->GetString(index));
+                }
+                for (std::int64_t index = parent_lists->value_offset(row);
+                     index < parent_lists->value_offset(row + 1); ++index) {
+                    if (parent_values->IsNull(index)) {
+                        fail("structural compatibility Parent list contains null");
+                    }
+                    fact.winning_parents.push_back(parent_values->GetString(index));
+                }
+                validate_structural_fact(fact);
+                impl_->index.fact_sets[set_id].structural.push_back(std::move(fact));
             }
-            fact.winning_paths.push_back(path_values->GetString(index));
-        }
-        for (std::int64_t index = parent_lists->value_offset(row);
-             index < parent_lists->value_offset(row + 1); ++index) {
-            if (parent_values->IsNull(index)) {
-                fail("structural compatibility Parent list contains null");
-            }
-            fact.winning_parents.push_back(parent_values->GetString(index));
-        }
-        validate_structural_fact(fact);
-        impl_->index.fact_sets[set_id].structural.push_back(std::move(fact));
-    }
+        });
 
     for (size_t index = 0; index < impl_->index.fact_sets.size(); ++index) {
         CompatibilityFactSet canonical = impl_->index.fact_sets[index];
