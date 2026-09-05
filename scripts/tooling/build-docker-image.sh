@@ -7,14 +7,14 @@
 # an image that launches the binary through the bundled dynamic loader (see the
 # Dockerfile). Nothing about the host vg build is fetched or recompiled.
 #
-# Usage: scripts/build-docker-image.sh [--tag <image:tag>] [--binary <path>]
+# Usage: scripts/tooling/build-docker-image.sh [--tag <image:tag>] [--binary <path>]
 #
 # Defaults: tag josephlalli/pancollapse:v0.10.0, binary build/src/panCollapse.
 # The configured build tree must contain the direct-count CTest fixture; the script
 # creates it through CTest when needed, then exercises every v0.10 count sink in the image.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TAG="josephlalli/pancollapse:v0.10.0"
 BINARY="${REPO_ROOT}/build/src/panCollapse"
 
