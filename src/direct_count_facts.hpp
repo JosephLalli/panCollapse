@@ -1,6 +1,7 @@
 #pragma once
 
 #include "direct_count_assignment.hpp"
+#include "direct_count_compatibility.hpp"
 #include "path_identity_ledger.hpp"
 
 #include <cstdint>
@@ -96,6 +97,20 @@ class CountFactCatalog {
         return candidate(effective_profile(profile_id), unique_parent, score, tier,
                          strand, body_sample_support);
     }
+
+    // Rebinds policy-neutral compatibility evidence to the current corrected
+    // annotation facts. The compatibility bundle owns observed tiers/scores;
+    // this catalog owns gene eligibility, categories, equivalence, and other
+    // profile-sensitive interpretation.
+    AssignmentFacts assignment_facts(const EffectiveProfile& profile,
+                                     const CompatibilityFactSet& facts) const;
+
+    // Fail closed when replay evidence no longer describes the same
+    // transcript/exon path surface. Metadata and policy may change, but D079
+    // does not permit replay across altered transcript/exon structures.
+    void validate_compatibility_structure(
+        const CompatibilityFactSet& facts,
+        const path_identity::PathIdentityLedger& path_ledger) const;
 
   private:
     std::map<std::string, ParentFact, std::less<>> parents_;

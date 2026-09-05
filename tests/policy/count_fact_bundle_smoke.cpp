@@ -223,6 +223,42 @@ int main() {
                 "novel-copy catalog policy differs from frozen lump/separate semantics");
         }
 
+        CompatibilityFactSet compatibility;
+        compatibility.exact = {
+            {"TX1", "exon-parent", "exon-path", "exon-parent", 100,
+             EvidenceTier::exon, EvidenceStrand::forward},
+            {"TX1", "exon-parent", "body-path", "body-parent", 95,
+             EvidenceTier::body, EvidenceStrand::reverse},
+        };
+        compatibility.structural = {
+            {"TX1", StructuralLayer::spliced, 100, EvidenceStrand::forward,
+             {"exon-path"}, {"exon-parent"}},
+            {"TX1", StructuralLayer::unspliced, 95, EvidenceStrand::reverse,
+             {"body-path"}, {"body-parent"}},
+        };
+        catalog.validate_compatibility_structure(compatibility, path_ledger);
+        const AssignmentFacts rebound = catalog.assignment_facts(
+            effective_profile(ProfileId::cr7_v1), compatibility);
+        if (rebound.exact.size() != 2 || rebound.gene_fallback.size() != 1 ||
+            rebound.exact[0].tier != EvidenceTier::exon ||
+            rebound.exact[1].tier != EvidenceTier::body ||
+            rebound.gene_fallback[0].tier != EvidenceTier::gene) {
+            throw std::runtime_error(
+                "compatibility facts did not rebind to current count policy");
+        }
+        CompatibilityFactSet changed_structure = compatibility;
+        changed_structure.exact[0].path = "body-path";
+        bool changed_structure_rejected = false;
+        try {
+            catalog.validate_compatibility_structure(changed_structure, path_ledger);
+        } catch (const std::exception&) {
+            changed_structure_rejected = true;
+        }
+        if (!changed_structure_rejected) {
+            throw std::runtime_error(
+                "compatibility replay accepted changed exon/body structure");
+        }
+
         CountRuntimeOptions runtime_options;
         runtime_options.memory_budget_bytes = 1ULL << 20;
         runtime_options.spill_directory = root / "spill";

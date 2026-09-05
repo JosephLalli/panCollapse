@@ -1,0 +1,2 @@
+{"name":"badname_AAA_AAAAAAAAAAAA","sequence":"AAAAAAAAAAGGGGGGGGGG","start":[0],"subpath":[{"score":20,"path":{"mapping":[{"position":{"node_id":"1"},"edit":[{"from_length":10,"to_length":10}]},{"position":{"node_id":"3"},"edit":[{"from_length":10,"to_length":10}]}]}}]}
+{"name":"unaligned_AAACCCAAGTTTGGGA_AAAAAAAAAAAA","sequence":"AAAA","start":[]}

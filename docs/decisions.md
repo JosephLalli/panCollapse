@@ -1939,6 +1939,46 @@ spool-only runs exercise four workers;
 spill runs are removed by the runtime destructor and a caller-created spill directory is left in
 place. The scientific gates in D076 must be rerun against the corrected raw guard before release.
 
+### D079 — Persist a tiered read-compatibility intermediate before count policy
+
+**Decision source:** User, 2026-09-05 (BAM was inefficient; requested an intermediate holding the
+same tiered read-compatibility information).
+
+**Supersedes:** D076–D078 only where they imply that the final `AssignmentFacts`/count output or
+its diagnostic sidecar is the reusable per-read authority. Their count-fact bundle, profile
+semantics, barcode/UMI rules, aggregate outputs, and release gates remain in force.
+
+**Decision:** `panCollapse count` may write `--compatibility-out <dir>`, a deterministic,
+non-BAM Parquet dataset plus checksum-bound manifest. It records policy-neutral evidence before
+`CountFactCatalog::candidate`: every input read group's molecule identity and status, its
+interned `fact_set_id`, and its exact E/P/B and structural S/U evidence, from which current Gene
+fallback can be reconstructed. Evidence
+retains the exact path, Parent, and canonical-transcript provenance required for replay. Invalid
+raw-molecule and featureless groups are retained, so the artifact has the full input denominator.
+`fact_set_id` resolves quickly to a canonical interned fact set, while a per-read pass supplies
+the matrix and QC denominator. Publication requires the producer's independently accumulated
+read-group count to equal the read-table rows; valid, missing, malformed, and unsupported totals
+are also checksum-bound and revalidated.
+
+Replay uses `count --compatibility-in <dir>` with the current count-facts bundle and whitelist;
+it re-evaluates current profiles without GAMP/XG. Exactly one source is required: either
+GAMP with matching XG, or compatibility input. The artifact is lossless for metadata, tagging,
+whitelist, and count-policy changes that do not change transcript/exon structure. It is not a
+GAMP replacement: the original GAMP/XG digests are frozen as provenance, while replay validates
+the current ledger structural surface but does not reopen XG. Changed graph topology,
+transcript/exon structure, or compatibility algorithm requires regenerated GAMP-derived evidence.
+
+The intermediate deliberately contains no alignments, sequences, CIGARs, or duplicated GAMP/BAM
+payload. It is therefore not BAM and avoids alignment duplication while retaining the tiered
+compatibility facts needed by counting.
+
+**Acceptance:** byte and logical determinism must hold across supported threads and spill modes;
+the manifest/file hashes must cover schema, facts, rows, and inputs; every input group must be
+accounted for; GAMP-to-intermediate-to-count must equal direct count; corruption, schema/source
+mismatch, and incompatible structure must fail; profile re-evaluation must be demonstrated; and
+a bounded storage/runtime benchmark must compare direct count, compatibility production, and
+replay against the v0.9 BAM baseline.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

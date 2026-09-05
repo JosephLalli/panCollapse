@@ -19,6 +19,26 @@ Parquet. The path must be normalized, relative to `--out-dir`, end in `.parquet`
 collide with a reserved result path. It is opt-in because it is the only count sink with
 per-read-scale I/O.
 
+`--compatibility-out <dir>` adds an atomically published compatibility dataset and manifest. Its
+deterministic, ordinal-ordered Parquet rows retain every input group, including invalid-molecule
+and featureless groups:
+read ordinal, molecule identity/status, and an interned `fact_set_id`; the fact-set table holds
+canonical exact E/P/B and structural S/U facts (the latter reconstruct current Gene fallback)
+with path, Parent, and canonical transcript provenance. The manifest pins schema/version,
+canonical logical hashes, output hashes, source digests, the independently accumulated
+input-group denominator and molecule-status totals, and structural/compatibility-algorithm
+identity. This is a non-BAM artifact:
+it contains no alignment records or duplicated alignment payload.
+
+`--compatibility-in <dir>` replaces GAMP and XG and requires the current count-facts bundle and
+whitelist. Exactly one input mode is legal: GAMP/XG or compatibility input. The reader validates
+all hashes, schema, denominator, and ledger structural/algorithm compatibility before using the
+interned facts for fast resolution and scanning the complete read rows for matrix/QC accounting.
+It permits metadata/tagging/whitelist/count-policy replay, but rejects any mismatch that could
+change the ledger transcript/exon surface or compatibility semantics. The source XG digest remains
+frozen in the manifest, but replay does not open an XG and therefore does not independently compare
+graph topology to a current graph. A graph change requires fresh compatibility production.
+
 The bundle's `MANIFEST.json` binds its `content` object to `content_id`, which is
 `sha256:` followed by the hex SHA-256 of the canonical serialization of `content`: object
 keys sorted by code point, no whitespace, integers in decimal, floats in shortest

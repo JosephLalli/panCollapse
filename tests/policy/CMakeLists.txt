@@ -40,3 +40,10 @@ target_link_libraries(direct_count_diagnostics_smoke PRIVATE panCollapse::direct
 add_test(NAME direct_count_diagnostics_smoke COMMAND direct_count_diagnostics_smoke)
 set_tests_properties(direct_count_diagnostics_smoke PROPERTIES
   LABELS "pure;policy;count;parquet;diagnostics")
+
+add_executable(direct_count_compatibility_smoke direct_count_compatibility_smoke.cpp)
+target_link_libraries(direct_count_compatibility_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_compatibility_smoke COMMAND direct_count_compatibility_smoke)
+set_tests_properties(direct_count_compatibility_smoke PROPERTIES
+  LABELS "pure;policy;count;parquet;compatibility")

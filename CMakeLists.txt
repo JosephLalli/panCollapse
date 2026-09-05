@@ -70,6 +70,7 @@ target_compile_options(panCollapse_warnings INTERFACE -Wall -Wextra)
 add_library(panCollapse::warnings ALIAS panCollapse_warnings)
 
 add_library(panCollapse_direct_count STATIC
+  src/direct_count_compatibility.cpp
   src/direct_count.cpp
   src/direct_count_assignment.cpp
   src/direct_count_diagnostics.cpp

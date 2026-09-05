@@ -137,6 +137,28 @@ production-ledger count-mode BAM, and leave RAD byte-identical.
 Each hard failure has a stable nonzero exit status and actionable message. Summary counts
 are independently checkable against fixtures.
 
+## 8a. Compatibility-intermediate cases
+
+- `count --compatibility-out` writes deterministic canonical fact tables and ordinal-ordered read
+  Parquet rows plus a manifest whose file and canonical logical hashes validate; supported thread
+  and spill modes
+  preserve required bytes and logical values respectively;
+- every GAMP group appears once in the read table, including invalid-molecule and featureless
+  groups; producer group count, table rows, and manifest status totals agree on the full
+  direct-count denominator;
+- exact E/P/B and structural S/U facts retain path, Parent, and canonical
+  transcript provenance, while repeated equivalent facts intern to one deterministic
+  `fact_set_id`;
+- direct GAMP/XG count and GAMP-to-intermediate-to-`--compatibility-in` count agree for final
+  matrices, molecules, terminal counters, per-read QC, and applicable tagging/metadata outputs;
+- replay with an allowed current profile/whitelist/metadata change demonstrably re-evaluates the
+  result; final AssignmentFacts/count tables are never substituted as replay input;
+- corruption, missing/hash-invalid tables, schema/version mismatch, incompatible source or
+  structural/compatibility-algorithm identity, and supplying GAMP/XG together with
+  `--compatibility-in` fail before count output;
+- a bounded benchmark reports persisted size and runtime for direct count, compatibility
+  production, and replay, with the v0.9 BAM baseline stated separately.
+
 ## 9. Production-applicability fixture
 
 - `docs/testing_fixture_creation.md` is the human-pangenome GAMP-to-RAD fixture plan (D047):

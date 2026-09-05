@@ -38,6 +38,18 @@ struct CountProfileLogicalIdentity {
     std::string molecules_sha256;
 };
 
+// Links a count result to the policy-neutral compatibility bundle that was
+// either emitted alongside direct GAMP traversal or consumed for replay.
+// The content ID is logical identity; the manifest checksum binds the exact
+// on-disk receipt used by this invocation.
+struct CountCompatibilityIdentity {
+    std::string mode;  // "produced" or "replayed"
+    std::filesystem::path manifest_path;
+    std::string content_id;
+    std::string manifest_sha256;
+    std::uint64_t manifest_size_bytes = 0;
+};
+
 struct CountOutputOptions {
     std::filesystem::path output_directory;
     // Optional caller-owned sibling stage (for an ordered RAD/diagnostic sink
@@ -48,6 +60,7 @@ struct CountOutputOptions {
     std::string command_line;
     std::string analysis_scope = "frozen-profiles";
     std::string fact_bundle_content_id;
+    std::optional<CountCompatibilityIdentity> compatibility_bundle;
     std::vector<CountInputIdentity> inputs;
     std::uint64_t threads = 1;
     std::uint64_t memory_budget_bytes = 0;

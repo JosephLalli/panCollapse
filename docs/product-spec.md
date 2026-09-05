@@ -21,6 +21,18 @@ legacy conversion contract below remains supported independently. An opt-in
 `--read-assignments-out` emits ordered compressed Parquet diagnostics for audit; it is not
 enabled by default because it is per-read-scale I/O.
 
+`count --compatibility-out <dir>` may instead publish a reusable, non-BAM tiered
+read-compatibility intermediate. It is policy-neutral evidence before
+`CountFactCatalog::candidate`, not final `AssignmentFacts`, an assignment result, or a count
+output. `count --compatibility-in <dir>` replays that evidence with the current count-facts
+bundle and whitelist. One invocation accepts exactly one source: GAMP plus its matching XG, or
+the compatibility intermediate. This avoids duplicating alignments while retaining per-read
+molecule status, interned fact-set identity, exact E/P/B and structural S/U
+provenance. It supports lossless metadata, tagging, whitelist, and count-policy re-evaluation
+while the ledger transcript/exon surface and the compatibility algorithm are unchanged. Source
+GAMP/XG digests are frozen in its manifest; replay intentionally does not reopen XG, so any graph
+change requires GAMP-derived regeneration.
+
 The project exists to preserve pangenome-aware alignment evidence while either presenting common
 single-cell quantifiers with the transcript-level target sets they expect (`convert`) or reducing
 that evidence directly to gene/UMI counts without a BAM boundary (`count`).
