@@ -21,6 +21,8 @@ inline constexpr std::string_view kCompatibilityAlgorithmId =
 inline constexpr std::uint64_t kMaximumCompatibilityRowsPerBatch = 1U << 20;
 inline constexpr std::uint64_t kMaximumCompatibilityStringBytesPerBatch =
     1ULL << 30;
+inline constexpr std::uint64_t kMaximumCompatibilityListValuesPerBatch =
+    1ULL << 26;
 
 // D079's deliberately policy-neutral, complete input denominator.
 enum class MoleculeStatus : std::uint8_t { valid, missing, malformed, unsupported };
@@ -138,6 +140,12 @@ struct CompatibilityWriteOptions {
     // RecordBatch. This remains below Arrow's 32-bit StringArray offset limit;
     // tests may lower it to exercise byte-triggered flushing cheaply.
     std::uint64_t parquet_max_string_bytes_per_batch = 256ULL << 20;
+    // Bounds each structural list child independently. In addition to the UTF-8
+    // payload above, Arrow list/string children require one 32-bit offset per
+    // value; keeping each child below 2^26 values bounds that offset buffer to
+    // about 256 MiB. Tests may lower the seam to force count-triggered flushing.
+    std::uint64_t parquet_max_list_values_per_batch =
+        kMaximumCompatibilityListValuesPerBatch;
 };
 struct CompatibilityWriteReceipt {
     std::vector<CompatibilityTableIdentity> tables;

@@ -141,8 +141,9 @@ are independently checkable against fixtures.
 
 - `count --compatibility-out` writes deterministic canonical fact tables and ordinal-ordered read
   Parquet rows plus a manifest whose file and canonical logical hashes validate; supported thread
-  and spill modes preserve required bytes and logical values respectively; row-count and UTF-8
-  byte limits force bounded Parquet batches, including valid zero-row exact/structural tables;
+  and spill modes preserve required bytes and logical values respectively; row-count, UTF-8-byte,
+  and structural-list-value limits force bounded Parquet batches, including valid zero-row
+  exact/structural tables;
 - every GAMP group appears once in the read table, including invalid-molecule and featureless
   groups; producer group count, table rows, and manifest status totals agree on the full
   direct-count denominator;

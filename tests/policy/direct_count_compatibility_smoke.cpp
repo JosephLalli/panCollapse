@@ -140,6 +140,41 @@ int main() {
                                 std::to_string(getpid()))),
                 "failed fact-table finalization left a destination or staging tree");
 
+        options.parquet_row_group_rows = 100;
+        options.parquet_max_string_bytes_per_batch = 1U << 20;
+        options.parquet_max_list_values_per_batch = 2;
+        options.output_directory = root / "list-bounded";
+        const auto list_bounded_receipt =
+            write_compatibility_bundle(bundle, options);
+        require(list_bounded_receipt.tables.size() == 4 &&
+                    row_groups(root / "list-bounded/parquet/structural_facts.parquet") == 2,
+                "compatibility list-value budget did not force bounded row groups");
+
+        options.output_directory = root / "list-finalize-failure";
+        options.parquet_max_list_values_per_batch = 1;
+        finalize_rejected = false;
+        try { (void)write_compatibility_bundle(bundle, options); }
+        catch (const std::exception&) { finalize_rejected = true; }
+        require(finalize_rejected &&
+                    !std::filesystem::exists(options.output_directory) &&
+                    !std::filesystem::exists(
+                        root / (".list-finalize-failure.compatibility-staging-" +
+                                std::to_string(getpid()))),
+                "failed list-bounded finalization left a destination or staging tree");
+
+        options.parquet_max_list_values_per_batch =
+            kMaximumCompatibilityListValuesPerBatch + 1;
+        options.output_directory = root / "oversized-list-batch";
+        bool list_rejected = false;
+        try { (void)write_compatibility_bundle(bundle, options); }
+        catch (const std::exception&) { list_rejected = true; }
+        require(list_rejected && !std::filesystem::exists(options.output_directory),
+                "writer accepted an unbounded Parquet list-value batch");
+        options.parquet_max_list_values_per_batch =
+            kMaximumCompatibilityListValuesPerBatch;
+        options.parquet_row_group_rows = 2;
+        options.parquet_max_string_bytes_per_batch = 40;
+
         CompatibilityBundle wrong_denominator = bundle;
         wrong_denominator.input_read_groups = 4;
         options.output_directory = root / "wrong-denominator";

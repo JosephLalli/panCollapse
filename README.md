@@ -166,7 +166,7 @@ output schemas are in [`docs/input-output-contract.md`](docs/input-output-contra
 - `--compatibility-out <dir>` — atomically publish reusable pre-policy compatibility evidence to
   a destination disjoint from `--out-dir`. Read rows stream through a checksummed ZSTD spool;
   only canonical unique fact sets remain resident while GAMP is read, and fact-table publication
-  uses row- and UTF-8-byte-bounded Parquet batches.
+  uses row-, UTF-8-byte-, and structural-list-value-bounded Parquet batches.
 - `--strand both|forward|reverse` — target-relative orientation filter (default `both`, no
   filtering). `forward` keeps only targets the read aligns to in the same (sense) orientation;
   `reverse` keeps only antisense targets. Reads left with no matching target emit no record and
