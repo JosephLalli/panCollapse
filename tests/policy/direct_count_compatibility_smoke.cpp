@@ -1,5 +1,7 @@
 #include "direct_count_compatibility.hpp"
 
+#include <parquet/file_reader.h>
+
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -16,6 +18,10 @@ std::string bytes(const std::filesystem::path& p) {
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
+int row_groups(const std::filesystem::path& path) {
+    auto reader = parquet::ParquetFileReader::OpenFile(path.string(), false);
+    return reader->metadata()->num_row_groups();
+}
 }  // namespace
 
 int main() {
@@ -31,10 +37,14 @@ int main() {
              EvidenceStrand::forward},
             {"TX1", "locus1", "path1", "parent1", 12, EvidenceTier::exon,
              EvidenceStrand::forward},
+            {"TX3", "locus3", "path3", "parent3", 9, EvidenceTier::body,
+             EvidenceStrand::forward},
         };
         repeated.structural = {
             {"TX1", StructuralLayer::unspliced, 8, EvidenceStrand::forward,
              {"path-b", "path-a", "path-a"}, {"parent-b", "parent-a", "parent-a"}},
+            {"TX2", StructuralLayer::spliced, 7, EvidenceStrand::reverse,
+             {"path-c"}, {"parent-c"}},
         };
         CompatibilityFactSet empty;
         empty.complete_provenance = false;
@@ -60,6 +70,7 @@ int main() {
         CompatibilityWriteOptions options;
         options.output_directory = root / "first";
         options.parquet_row_group_rows = 2;
+        options.parquet_max_string_bytes_per_batch = 40;
         const auto receipt = write_compatibility_bundle(bundle, options);
         require(receipt.tables.size() == 4 && !receipt.content_id.empty() &&
                     receipt.manifest_sha256.size() == 64,
@@ -73,10 +84,14 @@ int main() {
         require(replay.reads[1].molecule_status == MoleculeStatus::malformed &&
                     replay.reads[2].original_name == "read-featureless",
                 "invalid or featureless input denominator was not retained");
-        require(replay.fact_sets[1].exact.size() == 2 &&
+        require(replay.fact_sets[1].exact.size() == 3 &&
                     replay.fact_sets[1].structural[0].winning_paths ==
                         std::vector<std::string>({"path-a", "path-b"}),
                 "fact canonicalization/deduplication failed");
+        require(row_groups(root / "first/parquet/read_rows.parquet") == 3 &&
+                    row_groups(root / "first/parquet/exact_facts.parquet") == 3 &&
+                    row_groups(root / "first/parquet/structural_facts.parquet") == 2,
+                "compatibility string budget did not force bounded row groups");
         require(replay.inputs.size() == 2 && replay.inputs[0].role == "gamp" &&
                     replay.producer_version == bundle.producer_version &&
                     replay.compatibility_algorithm_id == bundle.compatibility_algorithm_id &&
@@ -87,6 +102,43 @@ int main() {
                         MoleculeStatusCounts{2, 0, 1, 0} &&
                     replay.content_id == receipt.content_id,
                 "manifest identity did not round-trip");
+
+        CompatibilityBundle featureless = bundle;
+        featureless.input_records = 2;
+        featureless.input_read_groups = 2;
+        featureless.fact_sets = {empty};
+        featureless.reads = {
+            {0, "empty-valid", MoleculeStatus::valid, "ACGT", std::nullopt,
+             "TGCA", std::nullopt, 0},
+            {1, "empty-missing", MoleculeStatus::missing, std::nullopt,
+             std::nullopt, std::nullopt, std::nullopt, 0},
+        };
+        options.output_directory = root / "featureless";
+        const auto featureless_receipt =
+            write_compatibility_bundle(featureless, options);
+        const CompatibilityBundle featureless_replay =
+            read_compatibility_bundle(options.output_directory);
+        require(featureless_receipt.tables.size() == 4 &&
+                    featureless_replay.reads.size() == 2 &&
+                    featureless_replay.fact_sets.size() == 1 &&
+                    featureless_replay.fact_sets[0].exact.empty() &&
+                    featureless_replay.fact_sets[0].structural.empty() &&
+                    row_groups(root / "featureless/parquet/exact_facts.parquet") == 0 &&
+                    row_groups(root / "featureless/parquet/structural_facts.parquet") == 0,
+                "zero-row fact tables did not publish and replay cleanly");
+
+        CompatibilityBundle oversized_fact = bundle;
+        oversized_fact.fact_sets[1].exact.front().path = std::string(41, 'x');
+        options.output_directory = root / "finalize-failure";
+        bool finalize_rejected = false;
+        try { (void)write_compatibility_bundle(std::move(oversized_fact), options); }
+        catch (const std::exception&) { finalize_rejected = true; }
+        require(finalize_rejected &&
+                    !std::filesystem::exists(options.output_directory) &&
+                    !std::filesystem::exists(
+                        root / (".finalize-failure.compatibility-staging-" +
+                                std::to_string(getpid()))),
+                "failed fact-table finalization left a destination or staging tree");
 
         CompatibilityBundle wrong_denominator = bundle;
         wrong_denominator.input_read_groups = 4;
@@ -184,6 +236,16 @@ int main() {
         require(rejected && !std::filesystem::exists(options.output_directory),
                 "writer accepted an unbounded Parquet row-group request");
         options.parquet_row_group_rows = 2;
+
+        options.output_directory = root / "oversized-string-batch";
+        options.parquet_max_string_bytes_per_batch =
+            kMaximumCompatibilityStringBytesPerBatch + 1;
+        rejected = false;
+        try { (void)write_compatibility_bundle(bundle, options); }
+        catch (const std::exception&) { rejected = true; }
+        require(rejected && !std::filesystem::exists(options.output_directory),
+                "writer accepted an unbounded Parquet string batch");
+        options.parquet_max_string_bytes_per_batch = 40;
 
         options.output_directory = root / "abandoned";
         {

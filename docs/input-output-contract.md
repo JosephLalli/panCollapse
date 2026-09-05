@@ -27,7 +27,9 @@ with path, Parent, and canonical transcript provenance. The manifest pins schema
 canonical logical hashes, output hashes, source digests, the independently accumulated
 input-group denominator and molecule-status totals, and structural/compatibility-algorithm
 identity. This is a non-BAM artifact:
-it contains no alignment records or duplicated alignment payload.
+it contains no alignment records or duplicated alignment payload. Read and fact tables are
+published in row- and UTF-8-byte-bounded Parquet batches so a large compatibility dictionary never
+requires one Arrow string array.
 
 `--compatibility-in <dir>` replaces GAMP and XG and requires the current count-facts bundle and
 whitelist. Exactly one input mode is legal: GAMP/XG or compatibility input. The reader validates

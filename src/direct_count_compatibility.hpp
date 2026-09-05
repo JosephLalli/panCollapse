@@ -19,6 +19,8 @@ namespace pancollapse::direct_count {
 inline constexpr std::string_view kCompatibilityAlgorithmId =
     "pancollapse-ex50pas-compatibility-v1";
 inline constexpr std::uint64_t kMaximumCompatibilityRowsPerBatch = 1U << 20;
+inline constexpr std::uint64_t kMaximumCompatibilityStringBytesPerBatch =
+    1ULL << 30;
 
 // D079's deliberately policy-neutral, complete input denominator.
 enum class MoleculeStatus : std::uint8_t { valid, missing, malformed, unsupported };
@@ -132,6 +134,10 @@ struct CompatibilityTableIdentity {
 struct CompatibilityWriteOptions {
     std::filesystem::path output_directory;
     std::uint64_t parquet_row_group_rows = 65536;
+    // Bounds the combined UTF-8 payload used to build any one fact-table
+    // RecordBatch. This remains below Arrow's 32-bit StringArray offset limit;
+    // tests may lower it to exercise byte-triggered flushing cheaply.
+    std::uint64_t parquet_max_string_bytes_per_batch = 256ULL << 20;
 };
 struct CompatibilityWriteReceipt {
     std::vector<CompatibilityTableIdentity> tables;

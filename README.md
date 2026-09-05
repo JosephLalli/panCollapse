@@ -165,7 +165,8 @@ output schemas are in [`docs/input-output-contract.md`](docs/input-output-contra
   stderr and in its count manifest; graph traversal has already been eliminated from replay.
 - `--compatibility-out <dir>` — atomically publish reusable pre-policy compatibility evidence to
   a destination disjoint from `--out-dir`. Read rows stream through a checksummed ZSTD spool;
-  only canonical unique fact sets remain resident while GAMP is read.
+  only canonical unique fact sets remain resident while GAMP is read, and fact-table publication
+  uses row- and UTF-8-byte-bounded Parquet batches.
 - `--strand both|forward|reverse` — target-relative orientation filter (default `both`, no
   filtering). `forward` keeps only targets the read aligns to in the same (sense) orientation;
   `reverse` keeps only antisense targets. Reads left with no matching target emit no record and
