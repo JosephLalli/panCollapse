@@ -216,8 +216,8 @@ For a diagnostic run, setting `PANCOLLAPSE_PROFILE_TIMING=1` also reports queue 
 producer admission wait, worker compute, ordered wait, and ordered-region time. These intervals
 overlap across workers and must not be added as though they were wall time; leave the variable
 unset for ordinary runs.
-`PANCOLLAPSE_FORCE_WORKER_POOL=1` disables the serial fallback that small exact surfaces
-would otherwise trigger; it exists so the test suite can exercise the worker pool.
+`PANCOLLAPSE_FORCE_WORKER_POOL=1` disables, for `count` only, the serial fallback that small
+exact surfaces would otherwise trigger; it exists so the test suite can exercise the worker pool.
 
 ## Example
 

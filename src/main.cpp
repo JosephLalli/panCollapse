@@ -1132,11 +1132,25 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
     // <prefix>_<CB>_<UMI> shape, so diagnostics can report one QNAME grammar.
     auto failure = [&](MoleculeParseStatus status, std::string message) {
         MoleculeId partial;
-        const size_t last_sep = molecule_name.rfind('_');
-        if (last_sep != std::string::npos && last_sep > 0) {
-            const size_t prior_sep = molecule_name.rfind('_', last_sep - 1);
-            if (prior_sep != std::string::npos) {
-                partial.original_name = molecule_name.substr(0, prior_sep);
+        // A failure in the first (UMI) quality pass leaves a well-formed barcode
+        // quality field attached; drop any trailing quality fields first.
+        std::string_view trimmed = molecule_name;
+        for (int pass = 0; pass < 2; ++pass) {
+            const size_t sep = trimmed.rfind('_');
+            if (sep == std::string_view::npos) {
+                break;
+            }
+            const std::string_view field = trimmed.substr(sep + 1);
+            if (!field.starts_with("cy") && !field.starts_with("uy")) {
+                break;
+            }
+            trimmed = trimmed.substr(0, sep);
+        }
+        const size_t last_sep = trimmed.rfind('_');
+        if (last_sep != std::string_view::npos && last_sep > 0) {
+            const size_t prior_sep = trimmed.rfind('_', last_sep - 1);
+            if (prior_sep != std::string_view::npos) {
+                partial.original_name = std::string(trimmed.substr(0, prior_sep));
             }
         }
         return MoleculeParseResult{status, std::move(partial), std::move(message)};
@@ -4233,9 +4247,12 @@ int run_convert(int argc, char** argv) {
     // surface. Keep toy/small-reference conversions serial even when a larger ceiling was
     // requested; chromosome/pangenome ledgers exceed this threshold by orders of magnitude.
     constexpr size_t kMinExactModelsForWorkerPool = 32;
-    // PANCOLLAPSE_FORCE_WORKER_POOL lets the CLI tests drive the multi-worker path on
-    // a fixture whose exact surface would otherwise be processed serially.
-    const bool force_worker_pool = std::getenv("PANCOLLAPSE_FORCE_WORKER_POOL") != nullptr;
+    // PANCOLLAPSE_FORCE_WORKER_POOL=1 lets the count CLI tests drive the multi-worker
+    // path on a fixture whose exact surface would otherwise be processed serially.
+    // It is count-only so legacy convert keeps its clamp regardless of environment.
+    const char* force_worker_pool_env = std::getenv("PANCOLLAPSE_FORCE_WORKER_POOL");
+    const bool force_worker_pool = options.direct_count && force_worker_pool_env != nullptr &&
+                                   std::string_view(force_worker_pool_env) == "1";
     const size_t processing_threads =
         exact_ex50 && !force_worker_pool &&
                 exact_ex50_models.size() < kMinExactModelsForWorkerPool

@@ -957,7 +957,9 @@ projection, or a custom index.
   every CLI-level finding was re-run empirically on the ex50 fixture. The D076 scientific gates
   (one-million-read subset, chr20, chr21, joint chr20-22) must be rerun before release because
   the raw-guard correction changes molecule tables wherever a UMI collapses away in a gene with
-  more raw reads.
+  more raw reads, and because the restored post-resolution tagged-last-resort retry (D078 item
+  6) changes `pansc-strict-v1` gene assignments, so `counts.parquet` and reason bits can differ
+  on reads with no UMI collapse at all.
 - 2026-09-04: The large scientific release gate is intentionally still pending, not silently
   inferred from fixtures: frozen Python differential on the canonical one-million-read subset,
   full chr20 and chr21, then the immutable joint chr20–22 GAMP without remapping. Run `/reload`

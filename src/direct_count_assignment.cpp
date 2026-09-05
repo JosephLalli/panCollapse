@@ -201,10 +201,14 @@ apply_gene_competition(std::vector<AssignmentCandidate> candidates,
         EquivalenceAggregate& aggregate = found->second;
         // The representative supplies every per-gene field that is not unioned
         // below (nested_host in particular). Choose it by body support, then by
-        // gene identity, so the choice does not depend on candidate order.
+        // gene identity, then by nested_host, so the choice is a pure function of
+        // the candidate multiset rather than of candidate order.
         if (!inserted && (support > aggregate.representative_support ||
                           (support == aggregate.representative_support &&
-                           candidate.gene < aggregate.representative_gene))) {
+                           (candidate.gene < aggregate.representative_gene ||
+                            (candidate.gene == aggregate.representative_gene &&
+                             candidate.nested_host <
+                                 aggregate.representative.nested_host))))) {
             aggregate.representative = candidate;
             aggregate.representative_gene = candidate.gene;
             aggregate.representative_support = support;

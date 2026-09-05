@@ -10,7 +10,8 @@ prescribing the code architecture. The GAMP-to-RAD algorithm is defined by D048 
 and a `panSC-count-facts-v1` bundle. The bundle is authoritative for path identity,
 profile-specific gene policy, Parent categories, projected-nested policy, strong-support
 facts, corrected annotation, and provenance receipts; the command refuses external legacy
-identity/policy, BAM, debug, compact-BAM, and allowlist options. Its default output is an
+identity/policy, BAM, debug, compact-BAM, and allowlist options, and the convert-only policy
+switches `--strand`, `--count-mode`, `--bam-multigene`, and `--no-ex50-score-window`. Its default output is an
 atomic Parquet dataset and manifest; `count` has no BAM sink and no production Python
 dependency. `--10x-mex` and `--rad-out` add compatibility outputs.
 `--read-assignments-out <relative/path.parquet>` optionally adds ordered per-read diagnostic
@@ -23,7 +24,10 @@ The bundle's `MANIFEST.json` binds its `content` object to `content_id`, which i
 keys sorted by code point, no whitespace, integers in decimal, floats in shortest
 round-trip form, and strings ASCII-escaped (`\uXXXX`, surrogate pairs above the BMP). This
 is byte-identical to Python's `json.dumps(content, sort_keys=True, separators=(",", ":"))`;
-the key order and whitespace of the file itself do not affect the identity.
+the key order and whitespace of the file itself do not affect the identity. The loader parses
+standard JSON only: non-finite floats, integers outside the signed or unsigned 64-bit range,
+nesting deeper than 1024 levels, and duplicate object keys are rejected before the identity is
+compared.
 
 Profiles are selected independently: `--cr7` is the `cr7-v1` alias,
 `--pansc-strict-v1` is the identically named frozen custom profile alias, and repeatable

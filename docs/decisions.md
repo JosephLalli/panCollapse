@@ -1923,8 +1923,15 @@ lexicographically smallest gene; both rules are independent of evidence order so
 uncached resolutions agree. (5) `count` parses
 molecule identity exactly as `convert` does (malformed quality suffixes are counted and fatal
 under `--molecule-identity-failures fail`), folds raw barcode and UMI case before the packed
-runtime, rejects convert-only options, canonicalizes `--out-dir`, and canonicalizes profile
-selectors before the repeat check. The frozen profiles' outputs on the ex50 fixture are unchanged.
+runtime, rejects convert-only options (`--strand`, `--count-mode`, `--bam-multigene`,
+`--no-ex50-score-window`), canonicalizes `--out-dir`, and canonicalizes profile selectors before
+the repeat check. (6) The same commit also restored the frozen tagged-last-resort contract inside
+the post-resolution category retry: when the retry filter empties the candidate set and the
+profile tags last-resort rows, the unfiltered rows are retried so an excluded antisense winner
+stays visible as a reverse winner and exact-strand Gene fallback can replace it with a sense
+G-row. This changes `pansc-strict-v1` assignments (its retry categories are non-empty);
+`cr7-v1` has no post-resolution retry categories and is unaffected. The frozen profiles' outputs
+on the ex50 fixture are unchanged.
 
 **Consequences:** The standalone release image remains free of workflow-engine-specific packages.
 The CLI suite forces the worker pool through `PANCOLLAPSE_FORCE_WORKER_POOL` so the thread and

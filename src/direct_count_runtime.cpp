@@ -1311,10 +1311,10 @@ CountRuntimeResult CountRuntime::finalize() {
             impl_->options.spill_directory /
             ("corrected-" + std::to_string(impl_->next_run++) + ".exact.zst");
         const size_t rows = corrected_buffer.size();
+        impl_->exact_runs.push_back(path);
         write_exact_run(path, std::move(corrected_buffer));
         corrected_buffer.clear();
         corrected_buffer.reserve(std::min<size_t>(corrected_limit, 1 << 20));
-        impl_->exact_runs.push_back(path);
         impl_->record_spill(path, rows);
     };
     auto consume_deferred = [&](DeferredRow row) {
@@ -1427,8 +1427,9 @@ CountRuntimeResult CountRuntime::finalize() {
         flush_feature();
         if (!current_barcode) {
             collapsed.clear();
+            std::error_code ignored_removal;
             for (const std::filesystem::path& path : collapsed_runs) {
-                std::filesystem::remove(path);
+                std::filesystem::remove(path, ignored_removal);
             }
             collapsed_runs.clear();
             return;
@@ -1518,8 +1519,9 @@ CountRuntimeResult CountRuntime::finalize() {
             at = end;
         }
         collapsed.clear();
+        std::error_code ignored_removal;
         for (const std::filesystem::path& path : collapsed_runs) {
-            std::filesystem::remove(path);
+            std::filesystem::remove(path, ignored_removal);
         }
         collapsed_runs.clear();
     };
@@ -1558,18 +1560,24 @@ CountRuntimeResult CountRuntime::finalize() {
         result.profile_counters.push_back(profile_counters->snapshot());
     }
 
+    // Cleanup must not discard a completed result: use the non-throwing overloads
+    // and let the destructor retry anything that could not be removed here.
+    std::error_code ignored;
     for (const std::filesystem::path& path : impl_->exact_runs) {
-        std::filesystem::remove(path);
+        std::filesystem::remove(path, ignored);
     }
     for (const std::filesystem::path& path : impl_->deferred_runs) {
-        std::filesystem::remove(path);
+        std::filesystem::remove(path, ignored);
     }
     impl_->exact_runs.clear();
     impl_->deferred_runs.clear();
     // Leave a caller-supplied spill directory in place; only remove one this
     // runtime created itself.
     if (impl_->owns_spill_directory) {
-        std::filesystem::remove(impl_->options.spill_directory);
+        std::filesystem::remove(impl_->options.spill_directory, ignored);
+        // Ownership ends here so the destructor cannot remove a directory that a
+        // caller recreates at the same path after finalize.
+        impl_->owns_spill_directory = false;
     }
     return result;
 }
