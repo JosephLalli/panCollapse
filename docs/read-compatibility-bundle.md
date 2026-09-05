@@ -88,8 +88,7 @@ batches are capped at 1,048,576 rows; the default is 65,536. Fact-table batches 
 combined UTF-8 payload at 256 MiB, well below Arrow's 32-bit string-offset limit. Each structural
 path-list and Parent-list child is independently capped at 67,108,864 values, bounding its 32-bit
 offset buffer to about 256 MiB. Memory is independent of read-row count except for the set of
-**unique** compatibility fact sets; the latter is not yet spillable and must be measured on the
-authoritative large fixture before a production memory bound is claimed.
+**unique** compatibility fact sets; the latter is not yet spillable.
 
 Compatibility publication is an independently terminal stage: a completely validated bundle may
 remain usable if later count finalization fails. A successful count manifest links the produced or
@@ -97,9 +96,27 @@ replayed bundle, but failure of that later output does not invalidate the alread
 compatibility evidence.
 
 Replay currently uses one active read-row worker even if a larger `--threads` ceiling is supplied;
-stderr and the count manifest report one active worker. Eliminating graph/GAMP work is expected to
-be the dominant speedup, but production runtime and storage guidance remains pending a bounded
-benchmark on the current fixed fixture.
+stderr and the count manifest report one active worker.
+
+The accepted one-million-read fixture at
+`/mnt/ssd/lalli/hg002_chr20_chr21_chr22_compatibility_bundle_1m_v2_20260905T093217Z` measures:
+
+| Measurement | Result |
+|---|---:|
+| Bundle size | 696,148,803 bytes |
+| Read rows / unique fact sets | 1,000,000 / 64,275 |
+| Exact E/P/B / structural S/U fact rows | 50,614,005 / 25,684,302 |
+| Direct count plus bundle production | 2,137.01 s; 213,440,576 KiB peak RSS |
+| Replay | 775.92 s; 63,048,652 KiB peak RSS |
+| Direct-plus-production / replay speedup | 2.754162800 |
+| Prior count-only authority / replay speedup | 2.322056398 |
+
+The fixture authority, direct result, and replay result are byte-identical for all biological
+Parquet tables and ordered read diagnostics; normalized biological summaries are identical. The
+37-entry terminal checksum receipt includes those outputs. Production costs 18.6% more wall time
+than the count-only authority and substantially more memory, so it is intended as a one-time
+capture. The serial fact rebind/read scan, not graph traversal, is now the obvious replay-speed
+target.
 
 ## Validation state
 
@@ -126,6 +143,6 @@ Run the focused gate with:
 ctest --test-dir build -R '^direct_count_compatibility_verify$' --output-on-failure
 ```
 
-The fixture is deliberately tiny so filter/tagging methods can be exercised on every iteration.
-A larger prevalence-bearing fixture remains the separate gate for F1, storage, runtime, and
-single-cell QC estimates.
+The graph-backed fixture is deliberately tiny so filter/tagging methods can be exercised in about
+1.4 seconds on every iteration. Use the terminal million-read replay above as the separate
+prevalence-bearing gate for F1, storage, runtime, and single-cell QC estimates.

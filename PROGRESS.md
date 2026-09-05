@@ -26,10 +26,15 @@ opening GAMP or XG. No transcript or exon structure is changed.
   logical content ID and exact manifest SHA-256. Replay validates the current ledger structural
   surface and compatibility algorithm. It does not reopen XG; graph changes require regeneration.
 
-The complete graph-enabled repository suite passes 165/165 tests. Next: benchmark compatibility
-size, production overhead, replay runtime, and unique-fact cardinality on the checksum-validated
-fixed authority. Replay is currently serial and declares one active worker; do not claim a
-production speed or memory bound until that benchmark is recorded.
+The complete graph-enabled repository suite passes 165/165 tests. The checksum-valid one-million
+read benchmark at
+`/mnt/ssd/lalli/hg002_chr20_chr21_chr22_compatibility_bundle_1m_v2_20260905T093217Z` is terminal:
+the 696,148,803-byte bundle contains 1,000,000 read rows, 64,275 unique fact sets, 50,614,005 exact
+facts, and 25,684,302 structural facts. Direct count plus bundle production took 2,137.01 seconds
+at 213,440,576 KiB peak RSS; replay took 775.92 seconds at 63,048,652 KiB, 2.75 times faster than
+direct-plus-production and 2.32 times faster than the prior 1,801.73-second count-only authority.
+Authority, direct, and replay biological Parquet/diagnostic bytes are identical. Replay remains
+serial and is the next clear speed target; unique fact sets remain resident during production.
 
 ## v0.9.0 deterministic performance release (verified 2026-09-03)
 
