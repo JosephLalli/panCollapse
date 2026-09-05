@@ -67,7 +67,10 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --out-dir out
                     [--threads N]
                     [--no-ex50-score-window]
 
-panCollapse count --gamp reads.gamp --xg graph.xg --count-bundle bundle \
+panCollapse count (--gamp reads.gamp --xg graph.xg \
+                   [--compatibility-out compatibility] | \
+                   --compatibility-in compatibility) \
+                  --count-bundle bundle \
                   --barcode-whitelist barcodes.txt PROFILE_SELECTOR [PROFILE_SELECTOR ...] \
                   --out-dir counts [--t2g transcripts.tsv] [--body-t2g bodies.tsv] \
                   [--threads N] [--count-memory-budget 128GiB] \
@@ -84,6 +87,13 @@ and BAM/debug evidence options. At least one unique profile selector is required
 `pansc-strict-v1`; they may be combined in one GAMP pass or mixed with repeatable
 `--profile ID`. Optional `--t2g` and `--body-t2g` inputs are compatibility assertions
 against the bundle, not assignment inputs.
+
+`--compatibility-out` additionally publishes a checksum-bound, non-BAM Parquet
+bundle containing the complete ordered read-group denominator and its policy-neutral
+E/P/B and S/U compatibility facts. A later `--compatibility-in` run rebinds those
+facts to a current corrected count-facts bundle and reapplies the selected profiles
+and barcode whitelist without opening GAMP or XG. This is the fast filter/tagging
+iteration path; see [`docs/read-compatibility-bundle.md`](docs/read-compatibility-bundle.md).
 
 Its default output is a Parquet dataset with barcode, feature, count, and molecule tables
 plus `manifest.json` and `summary.tsv`. `--10x-mex` adds per-profile MEX and
@@ -111,6 +121,10 @@ output schemas are in [`docs/input-output-contract.md`](docs/input-output-contra
   accepted but cannot emit `CY`. Pass `-` to read the GAMP stream from stdin.
 - `--xg` — the `.xg` for the same graph that produced the GAMP, carrying the `vg rna` HST paths
   (`<transcript_id>_H<n>` / `_R<n>`).
+- `--compatibility-in` — a previously published
+  `pancollapse-read-compatibility-v1` directory. It is exclusive with GAMP/XG and
+  with `--compatibility-out`; replay still requires the corrected count-facts
+  bundle, barcode whitelist, and profile selectors.
 - `--path-identity-ledger` — production input using schema `panSC-path-identity-v1`. It maps each
   exact `vg_path_name` through `unique_parent` to `canonical_transcript` and `gene_id`, carries
   exon/body layer identity and graph provenance, and is checked against exact XG path names and
@@ -146,6 +160,12 @@ output schemas are in [`docs/input-output-contract.md`](docs/input-output-contra
   For `convert`, supported requested thread counts produce byte-identical persisted artifacts.
   For native `count`, canonical rows and logical hashes are identical; operational manifest and
   summary fields still report the requested/active threads, timings, cache, and spill behavior.
+  Compatibility production uses this worker count and is byte-deterministic across supported
+  counts. Compatibility replay currently scans with one active worker and reports that fact on
+  stderr and in its count manifest; graph traversal has already been eliminated from replay.
+- `--compatibility-out <dir>` — atomically publish reusable pre-policy compatibility evidence to
+  a destination disjoint from `--out-dir`. Read rows stream through a checksummed ZSTD spool;
+  only canonical unique fact sets remain resident while GAMP is read.
 - `--strand both|forward|reverse` — target-relative orientation filter (default `both`, no
   filtering). `forward` keeps only targets the read aligns to in the same (sense) orientation;
   `reverse` keeps only antisense targets. Reads left with no matching target emit no record and

@@ -327,6 +327,15 @@ CountOutputReceipt write_count_outputs(
         options.parquet_row_group_rows == 0) {
         throw std::invalid_argument("direct-count output metadata is incomplete");
     }
+    if (options.compatibility_bundle &&
+        ((options.compatibility_bundle->mode != "produced" &&
+          options.compatibility_bundle->mode != "replayed") ||
+         options.compatibility_bundle->manifest_path.empty() ||
+         options.compatibility_bundle->content_id.rfind("sha256:", 0) != 0 ||
+         options.compatibility_bundle->manifest_sha256.size() != 64)) {
+        throw std::invalid_argument(
+            "direct-count compatibility provenance is incomplete");
+    }
     if (!options.profile_assignment_terminals.empty() &&
         options.profile_assignment_terminals.size() != runtime.profiles().size()) {
         throw std::invalid_argument(
@@ -804,7 +813,23 @@ CountOutputReceipt write_count_outputs(
                  << options.assignment_cache_misses << ",\"uncached\":"
                  << options.assignment_cache_uncached << "},\"command_line\":"
                  << json_string(options.command_line)
-                 << ",\"counters\":{\"global\":{";
+                 << ",\"compatibility_bundle\":";
+        if (options.compatibility_bundle) {
+            const CountCompatibilityIdentity& compatibility =
+                *options.compatibility_bundle;
+            manifest << "{\"content_id\":"
+                     << json_string(compatibility.content_id)
+                     << ",\"manifest_path\":"
+                     << json_string(compatibility.manifest_path.string())
+                     << ",\"manifest_sha256\":"
+                     << json_string(compatibility.manifest_sha256)
+                     << ",\"manifest_size_bytes\":"
+                     << compatibility.manifest_size_bytes << ",\"mode\":"
+                     << json_string(compatibility.mode) << '}';
+        } else {
+            manifest << "null";
+        }
+        manifest << ",\"counters\":{\"global\":{";
         for (size_t index = 0; index < global.size(); ++index) {
             if (index != 0) manifest << ',';
             manifest << json_string(global[index].first) << ':' << global[index].second;

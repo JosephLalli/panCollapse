@@ -1,0 +1,5 @@
+unique_parent	count_gene	raw_categories	effective_categories	strong_support_tag	protected_primary_protein_host	exempted_categories
+BODY_PARENT_1	GENE	readthrough_transcript	readthrough_transcript	false	false	.
+BODY_PARENT_2	GENE	readthrough_transcript	readthrough_transcript	false	false	.
+EXON_PARENT_1	GENE	readthrough_transcript	readthrough_transcript	false	false	.
+EXON_PARENT_2	GENE	readthrough_transcript	readthrough_transcript	false	false	.

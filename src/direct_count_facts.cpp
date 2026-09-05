@@ -899,4 +899,115 @@ AssignmentCandidate CountFactCatalog::candidate(const EffectiveProfile& effectiv
     return result;
 }
 
+AssignmentFacts CountFactCatalog::assignment_facts(
+    const EffectiveProfile& effective,
+    const CompatibilityFactSet& compatibility) const {
+    AssignmentFacts result;
+    result.has_complete_provenance = compatibility.complete_provenance;
+    result.exact.reserve(compatibility.exact.size());
+    for (const ExactCompatibilityFact& fact : compatibility.exact) {
+        const ParentFact& current = parent(fact.unique_parent);
+        if (current.canonical_transcript != fact.canonical_transcript) {
+            throw std::runtime_error(
+                "compatibility exact Parent changed canonical transcript: " +
+                fact.unique_parent);
+        }
+        result.exact.push_back(candidate(effective, fact.unique_parent, fact.score,
+                                         fact.tier, fact.strand));
+    }
+    for (const StructuralCompatibilityFact& fact : compatibility.structural) {
+        // Frozen exact-strand Gene fallback is defined only on the forward or
+        // reverse spliced (S) surface. U is retained in the compatibility
+        // artifact for diagnosis and future policies, but is not a fallback.
+        if (fact.layer != StructuralLayer::spliced) continue;
+        for (const std::string& unique_parent : fact.winning_parents) {
+            const ParentFact& current = parent(unique_parent);
+            if (current.canonical_transcript != fact.canonical_transcript) {
+                throw std::runtime_error(
+                    "compatibility structural Parent changed canonical transcript: " +
+                    unique_parent);
+            }
+            result.gene_fallback.push_back(
+                candidate(effective, unique_parent, fact.score,
+                          EvidenceTier::gene, fact.strand));
+        }
+    }
+    return result;
+}
+
+void CountFactCatalog::validate_compatibility_structure(
+    const CompatibilityFactSet& compatibility,
+    const path_identity::PathIdentityLedger& path_ledger) const {
+    auto path = [&](const std::string& name)
+        -> const path_identity::PathIdentityRow& {
+        const auto found = path_ledger.rows_by_path.find(name);
+        if (found == path_ledger.rows_by_path.end()) {
+            throw std::runtime_error(
+                "compatibility evidence references missing path " + name);
+        }
+        return found->second;
+    };
+    auto require_parent_transcript = [&](const std::string& unique_parent,
+                                         const std::string& transcript) {
+        const auto identity = path_ledger.identities_by_parent.find(unique_parent);
+        if (identity == path_ledger.identities_by_parent.end() ||
+            identity->second->canonical_transcript != transcript) {
+            throw std::runtime_error(
+                "compatibility Parent/transcript structure changed for " +
+                unique_parent);
+        }
+        if (parent(unique_parent).canonical_transcript != transcript) {
+            throw std::runtime_error(
+                "compatibility count facts changed Parent/transcript structure for " +
+                unique_parent);
+        }
+    };
+
+    for (const ExactCompatibilityFact& fact : compatibility.exact) {
+        const path_identity::PathIdentityRow& observed = path(fact.path);
+        const bool body = fact.tier == EvidenceTier::body;
+        const std::string_view expected_layer = body ? "body" : "exon";
+        if (observed.annotation.feature_layer != expected_layer ||
+            observed.annotation.unique_parent != fact.unique_parent ||
+            observed.annotation.canonical_transcript != fact.canonical_transcript) {
+            throw std::runtime_error(
+                "compatibility exact path structure changed for " + fact.path);
+        }
+        require_parent_transcript(fact.unique_parent, fact.canonical_transcript);
+        require_parent_transcript(fact.locus_parent, fact.canonical_transcript);
+        if ((!body && fact.locus_parent != fact.unique_parent) ||
+            (body && observed.annotation.exon_unique_parent != fact.locus_parent)) {
+            throw std::runtime_error(
+                "compatibility exact body/exon linkage changed for " + fact.path);
+        }
+    }
+
+    for (const StructuralCompatibilityFact& fact : compatibility.structural) {
+        const std::string_view expected_layer =
+            fact.layer == StructuralLayer::spliced ? "exon" : "body";
+        std::set<std::string> observed_parents;
+        for (const std::string& path_name : fact.winning_paths) {
+            const path_identity::PathIdentityRow& observed = path(path_name);
+            if (observed.annotation.feature_layer != expected_layer ||
+                observed.annotation.canonical_transcript !=
+                    fact.canonical_transcript) {
+                throw std::runtime_error(
+                    "compatibility structural path changed layer/transcript: " +
+                    path_name);
+            }
+            observed_parents.insert(observed.annotation.unique_parent);
+        }
+        const std::set<std::string> declared_parents(fact.winning_parents.begin(),
+                                                     fact.winning_parents.end());
+        if (observed_parents != declared_parents) {
+            throw std::runtime_error(
+                "compatibility structural winning Parent surface changed for " +
+                fact.canonical_transcript);
+        }
+        for (const std::string& unique_parent : declared_parents) {
+            require_parent_transcript(unique_parent, fact.canonical_transcript);
+        }
+    }
+}
+
 }  // namespace pancollapse::direct_count

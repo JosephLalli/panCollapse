@@ -31,6 +31,7 @@ This file is intentionally short; load detailed documents only when relevant.
 | Optional BAM output | `docs/bam-export.md` |
 | GeneFull / STARsolo count modes | `docs/genefull.md` |
 | Transcript compatibility semantics | `docs/compatibility-semantics.md` |
+| Reusable tiered compatibility bundle | `docs/read-compatibility-bundle.md` |
 | Settled decisions and open forks | `docs/decisions.md` |
 | Validation and acceptance criteria | `docs/validation-contract.md` |
 | Phase 2 vertical-slice plan | `docs/phase2/implementation-plan.md` |

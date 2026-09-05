@@ -23,10 +23,15 @@ def digest(path: Path) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: make_count_bundle_fixture.py SOURCE_DIR OUTPUT_DIR")
+    if len(sys.argv) not in (3, 4):
+        raise SystemExit(
+            "usage: make_count_bundle_fixture.py SOURCE_DIR OUTPUT_DIR [tagged]"
+        )
     source = Path(sys.argv[1])
     output = Path(sys.argv[2])
+    variant = sys.argv[3] if len(sys.argv) == 4 else None
+    if variant not in (None, "tagged"):
+        raise SystemExit(f"unsupported fixture variant: {variant}")
     if output.exists():
         raise SystemExit(f"refusing existing output directory: {output}")
 
@@ -38,7 +43,12 @@ def main() -> None:
             "panSC-count-profile-gene-policy-v1",
         ),
         "parent_category_ledger": (
-            source / "count_parent_categories.tsv",
+            source
+            / (
+                "count_parent_categories_tagged.tsv"
+                if variant == "tagged"
+                else "count_parent_categories.tsv"
+            ),
             "panSC-parent-category-ledger-v3",
         ),
         "parent_category_receipt": (
@@ -54,7 +64,12 @@ def main() -> None:
             "panSC-projected-nested-host-policy-v1",
         ),
         "strong_support_ledger": (
-            source / "count_strong_support.tsv",
+            source
+            / (
+                "count_strong_support_tagged.tsv"
+                if variant == "tagged"
+                else "count_strong_support.tsv"
+            ),
             "panSC-strong-support-audit-v1",
         ),
         "profile_policy_receipt_cr7_v1": (

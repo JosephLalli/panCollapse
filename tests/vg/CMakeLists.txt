@@ -785,6 +785,7 @@ set_tests_properties(genefull_ex50pas_gamp PROPERTIES
 # the active worker count to one, so the multi-thread runs force the worker pool on
 # and the verifier asserts the manifest's active thread count.
 set(DIRECT_COUNT_BUNDLE "${EX50_DIR}/count_bundle")
+set(DIRECT_COUNT_BUNDLE_TAGGED "${EX50_DIR}/count_bundle_tagged")
 set(DIRECT_COUNT_ONE "${EX50_DIR}/direct_count_threads_1")
 set(DIRECT_COUNT_FOUR "${EX50_DIR}/direct_count_threads_4")
 set(DIRECT_COUNT_FOUR_SPOOL "${EX50_DIR}/direct_count_threads_4_spool")
@@ -792,11 +793,50 @@ set(DIRECT_COUNT_CR7 "${EX50_DIR}/direct_count_cr7_only")
 set(DIRECT_COUNT_PANSC "${EX50_DIR}/direct_count_pansc_only")
 set(DIRECT_COUNT_OVERRIDE "${EX50_DIR}/direct_count_override")
 set(DIRECT_COUNT_EMPTY "${EX50_DIR}/direct_count_empty")
+set(DIRECT_COUNT_COMPATIBILITY "${EX50_DIR}/direct_count_compatibility")
+set(DIRECT_COUNT_COMPATIBILITY_SOURCE "${EX50_DIR}/direct_count_compatibility_source")
+set(DIRECT_COUNT_COMPATIBILITY_ONE "${EX50_DIR}/direct_count_compatibility_one")
+set(DIRECT_COUNT_COMPATIBILITY_ONE_SOURCE
+  "${EX50_DIR}/direct_count_compatibility_one_source")
+set(DIRECT_COUNT_COMPATIBILITY_TAGGED
+  "${EX50_DIR}/direct_count_compatibility_tagged")
+set(DIRECT_COUNT_COMPATIBILITY_TAGGED_SOURCE
+  "${EX50_DIR}/direct_count_compatibility_tagged_source")
+set(DIRECT_COUNT_COMPATIBILITY_TAGGED_REPLAY
+  "${EX50_DIR}/direct_count_compatibility_tagged_replay")
+set(DIRECT_COUNT_COMPATIBILITY_REPLAY "${EX50_DIR}/direct_count_compatibility_replay")
+set(DIRECT_COUNT_COMPATIBILITY_OVERRIDE
+  "${EX50_DIR}/direct_count_compatibility_override")
+set(DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_GAMP
+  "${EX50_DIR}/reads_compatibility_denominator.gamp")
+set(DIRECT_COUNT_COMPATIBILITY_DENOMINATOR
+  "${EX50_DIR}/direct_count_compatibility_denominator")
+set(DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_SOURCE
+  "${EX50_DIR}/direct_count_compatibility_denominator_source")
+set(DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_REPLAY
+  "${EX50_DIR}/direct_count_compatibility_denominator_replay")
 add_test(NAME direct_count_fixture_clean
   COMMAND ${CMAKE_COMMAND} -E rm -rf
-    "${DIRECT_COUNT_BUNDLE}" "${DIRECT_COUNT_ONE}" "${DIRECT_COUNT_FOUR}"
+    "${DIRECT_COUNT_BUNDLE}" "${DIRECT_COUNT_BUNDLE_TAGGED}"
+    "${DIRECT_COUNT_ONE}" "${DIRECT_COUNT_FOUR}"
     "${DIRECT_COUNT_FOUR_SPOOL}" "${DIRECT_COUNT_CR7}" "${DIRECT_COUNT_PANSC}"
-    "${DIRECT_COUNT_OVERRIDE}" "${DIRECT_COUNT_EMPTY}" "${EX50_DIR}/empty.gamp")
+    "${DIRECT_COUNT_OVERRIDE}" "${DIRECT_COUNT_EMPTY}"
+    "${DIRECT_COUNT_COMPATIBILITY}" "${DIRECT_COUNT_COMPATIBILITY_SOURCE}"
+    "${DIRECT_COUNT_COMPATIBILITY_ONE}"
+    "${DIRECT_COUNT_COMPATIBILITY_ONE_SOURCE}"
+    "${DIRECT_COUNT_COMPATIBILITY_TAGGED}"
+    "${DIRECT_COUNT_COMPATIBILITY_TAGGED_SOURCE}"
+    "${DIRECT_COUNT_COMPATIBILITY_TAGGED_REPLAY}"
+    "${DIRECT_COUNT_COMPATIBILITY_REPLAY}"
+    "${DIRECT_COUNT_COMPATIBILITY_OVERRIDE}"
+    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_GAMP}"
+    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR}"
+    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_SOURCE}"
+    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_REPLAY}"
+    "${EX50_DIR}/direct_count_compatibility_forbidden_mixed"
+    "${EX50_DIR}/direct_count_compatibility_mixed.stderr"
+    "${EX50_DIR}/direct_count_compatibility_nested.stderr"
+    "${EX50_DIR}/empty.gamp")
 set_tests_properties(direct_count_fixture_clean PROPERTIES
   LABELS "vg;count;direct-count"
   FIXTURES_REQUIRED genefull_ex50pas_inputs
@@ -810,6 +850,15 @@ set_tests_properties(direct_count_bundle_fixture PROPERTIES
   LABELS "vg;count;direct-count;facts"
   FIXTURES_REQUIRED direct_count_clean
   FIXTURES_SETUP direct_count_bundle)
+
+add_test(NAME direct_count_bundle_tagged_fixture
+  COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/make_count_bundle_fixture.py"
+    "${EX50_FIX}" "${DIRECT_COUNT_BUNDLE_TAGGED}" tagged)
+set_tests_properties(direct_count_bundle_tagged_fixture PROPERTIES
+  LABELS "vg;count;direct-count;facts;compatibility;annotation"
+  FIXTURES_REQUIRED direct_count_clean
+  FIXTURES_SETUP direct_count_bundle_tagged)
 
 add_test(NAME direct_count_threads_1
   COMMAND $<TARGET_FILE:panCollapse> count
@@ -855,6 +904,168 @@ set_tests_properties(direct_count_threads_4_spool PROPERTIES
   ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
   FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
   FIXTURES_SETUP direct_count_four_spool)
+
+# D079: persist policy-neutral E/P/B plus S/U evidence once, then replay it
+# without opening GAMP or XG. The fixture is intentionally nine reads so it is
+# fast enough to run during every filter-method iteration.
+add_test(NAME direct_count_compatibility_source
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --pansc-strict-v1 --threads 4 --count-memory-budget 1MiB
+    --10x-mex --read-assignments-out diagnostics/read_assignments.parquet
+    --compatibility-out "${DIRECT_COUNT_COMPATIBILITY}"
+    --out-dir "${DIRECT_COUNT_COMPATIBILITY_SOURCE}")
+set_tests_properties(direct_count_compatibility_source PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;parquet;threads"
+  ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
+  FIXTURES_SETUP direct_count_compatibility_source_output)
+
+add_test(NAME direct_count_compatibility_source_one
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --pansc-strict-v1 --threads 1 --count-memory-budget 1MiB
+    --10x-mex --read-assignments-out diagnostics/read_assignments.parquet
+    --compatibility-out "${DIRECT_COUNT_COMPATIBILITY_ONE}"
+    --out-dir "${DIRECT_COUNT_COMPATIBILITY_ONE_SOURCE}")
+set_tests_properties(direct_count_compatibility_source_one PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;parquet;threads"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
+  FIXTURES_SETUP direct_count_compatibility_one_source_output)
+
+add_test(NAME direct_count_compatibility_tagged_source
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE_TAGGED}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --pansc-strict-v1 --threads 1 --count-memory-budget 1MiB
+    --read-assignments-out diagnostics/read_assignments.parquet
+    --compatibility-out "${DIRECT_COUNT_COMPATIBILITY_TAGGED}"
+    --out-dir "${DIRECT_COUNT_COMPATIBILITY_TAGGED_SOURCE}")
+set_tests_properties(direct_count_compatibility_tagged_source PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;annotation;parquet"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle_tagged"
+  FIXTURES_SETUP direct_count_compatibility_tagged_source_output)
+
+add_test(NAME direct_count_compatibility_tagged_replay
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --compatibility-in "${DIRECT_COUNT_COMPATIBILITY}"
+    --count-bundle "${DIRECT_COUNT_BUNDLE_TAGGED}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --pansc-strict-v1 --count-memory-budget 1MiB
+    --read-assignments-out diagnostics/read_assignments.parquet
+    --out-dir "${DIRECT_COUNT_COMPATIBILITY_TAGGED_REPLAY}")
+set_tests_properties(direct_count_compatibility_tagged_replay PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;annotation;parquet"
+  FIXTURES_REQUIRED
+    "direct_count_compatibility_source_output;direct_count_bundle_tagged"
+  FIXTURES_SETUP direct_count_compatibility_tagged_replay_output)
+
+add_test(NAME direct_count_compatibility_replay
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --compatibility-in "${DIRECT_COUNT_COMPATIBILITY}"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --pansc-strict-v1 --threads 4 --count-memory-budget 1MiB
+    --10x-mex --read-assignments-out diagnostics/read_assignments.parquet
+    --out-dir "${DIRECT_COUNT_COMPATIBILITY_REPLAY}")
+set_tests_properties(direct_count_compatibility_replay PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;parquet"
+  FIXTURES_REQUIRED direct_count_compatibility_source_output
+  FIXTURES_SETUP direct_count_compatibility_replay_output)
+
+add_test(NAME direct_count_compatibility_override
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --compatibility-in "${DIRECT_COUNT_COMPATIBILITY}"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}/MANIFEST.json"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --analysis-scope sensitivity-analysis
+    --profile-override cr7-v1:score-window=4
+    --count-memory-budget 1MiB
+    --out-dir "${DIRECT_COUNT_COMPATIBILITY_OVERRIDE}")
+set_tests_properties(direct_count_compatibility_override PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;policy;parquet"
+  FIXTURES_REQUIRED direct_count_compatibility_source_output
+  FIXTURES_SETUP direct_count_compatibility_override_output)
+
+# Production-path denominator coverage: malformed aligned evidence remains in
+# the compatibility bundle, while a valid unaligned read remains as an empty
+# fact set. Both must replay with identical counters and diagnostics.
+add_test(NAME direct_count_compatibility_denominator_gamp
+  COMMAND /bin/sh -c
+    "$<SHELL_PATH:${PT_VG}> view -J -K -k '${EX50_FIX}/reads_compatibility_denominator.gamp.json' > '${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_GAMP}'")
+set_tests_properties(direct_count_compatibility_denominator_gamp PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;denominator"
+  FIXTURES_REQUIRED direct_count_clean
+  FIXTURES_SETUP direct_count_compatibility_denominator_input)
+
+add_test(NAME direct_count_compatibility_denominator_source
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_GAMP}"
+    --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --count-memory-budget 1MiB
+    --read-assignments-out diagnostics/read_assignments.parquet
+    --compatibility-out "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR}"
+    --out-dir "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_SOURCE}")
+set_tests_properties(direct_count_compatibility_denominator_source PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;denominator;parquet"
+  FIXTURES_REQUIRED
+    "genefull_ex50pas_inputs;direct_count_bundle;direct_count_compatibility_denominator_input"
+  FIXTURES_SETUP direct_count_compatibility_denominator_source_output)
+
+add_test(NAME direct_count_compatibility_denominator_replay
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --compatibility-in "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR}"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --count-memory-budget 1MiB
+    --read-assignments-out diagnostics/read_assignments.parquet
+    --out-dir "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_REPLAY}")
+set_tests_properties(direct_count_compatibility_denominator_replay PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;denominator;parquet"
+  FIXTURES_REQUIRED direct_count_compatibility_denominator_source_output
+  FIXTURES_SETUP direct_count_compatibility_denominator_replay_output)
+
+add_test(NAME direct_count_compatibility_verify
+  COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_compatibility_verify.py"
+    "${DIRECT_COUNT_COMPATIBILITY}"
+    "${DIRECT_COUNT_COMPATIBILITY_SOURCE}"
+    "${DIRECT_COUNT_COMPATIBILITY_REPLAY}"
+    "${DIRECT_COUNT_OVERRIDE}"
+    "${DIRECT_COUNT_COMPATIBILITY_OVERRIDE}"
+    "${DIRECT_COUNT_COMPATIBILITY_ONE}"
+    "${DIRECT_COUNT_COMPATIBILITY_ONE_SOURCE}"
+    "${DIRECT_COUNT_COMPATIBILITY_TAGGED}"
+    "${DIRECT_COUNT_COMPATIBILITY_TAGGED_SOURCE}"
+    "${DIRECT_COUNT_COMPATIBILITY_TAGGED_REPLAY}"
+    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR}"
+    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_SOURCE}"
+    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_REPLAY}")
+set_tests_properties(direct_count_compatibility_verify PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;policy;parquet"
+  FIXTURES_REQUIRED
+    "direct_count_compatibility_source_output;direct_count_compatibility_one_source_output;direct_count_compatibility_tagged_source_output;direct_count_compatibility_tagged_replay_output;direct_count_compatibility_replay_output;direct_count_override_output;direct_count_compatibility_override_output;direct_count_compatibility_denominator_source_output;direct_count_compatibility_denominator_replay_output")
+
+add_test(NAME direct_count_compatibility_mixed_source_rejected
+  COMMAND /bin/sh -c
+    "'$<TARGET_FILE:panCollapse>' count --compatibility-in '${DIRECT_COUNT_COMPATIBILITY}' --gamp '${EX50_DIR}/reads.gamp' --xg '${EX50_DIR}/graph.xg' --count-bundle '${DIRECT_COUNT_BUNDLE}' --barcode-whitelist '${EX50_FIX}/count_whitelist.txt' --cr7 --out-dir '${EX50_DIR}/direct_count_compatibility_forbidden_mixed' > '${EX50_DIR}/direct_count_compatibility_mixed.stderr' 2>&1; status=$?; test $status -ne 0 && grep -q 'exclusive count input' '${EX50_DIR}/direct_count_compatibility_mixed.stderr'")
+set_tests_properties(direct_count_compatibility_mixed_source_rejected PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;cli"
+  FIXTURES_REQUIRED direct_count_compatibility_source_output)
+
+add_test(NAME direct_count_compatibility_nested_output_rejected
+  COMMAND /bin/sh -c
+    "'$<TARGET_FILE:panCollapse>' count --compatibility-in '${DIRECT_COUNT_COMPATIBILITY}' --count-bundle '${DIRECT_COUNT_BUNDLE}' --barcode-whitelist '${EX50_FIX}/count_whitelist.txt' --cr7 --out-dir '${DIRECT_COUNT_COMPATIBILITY}/nested-output' > '${EX50_DIR}/direct_count_compatibility_nested.stderr' 2>&1; status=$?; test $status -ne 0 && grep -q 'must be disjoint paths' '${EX50_DIR}/direct_count_compatibility_nested.stderr'")
+set_tests_properties(direct_count_compatibility_nested_output_rejected PROPERTIES
+  LABELS "vg;count;direct-count;compatibility;cli"
+  FIXTURES_REQUIRED direct_count_compatibility_source_output)
 
 add_test(NAME direct_count_cr7_only
   COMMAND $<TARGET_FILE:panCollapse> count

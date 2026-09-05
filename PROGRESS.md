@@ -1,5 +1,36 @@
 # Progress
 
+## v0.10 reusable compatibility intermediate (validated branch, 2026-09-05)
+
+The isolated branch `codex/read-compatibility-bundle` implements D079 without modifying the
+shared PanCollapse or panSC worktrees. `panCollapse count --compatibility-out` now captures a
+policy-neutral, non-BAM `pancollapse-read-compatibility-v1` bundle during the ordinary GAMP/XG
+pass. `count --compatibility-in` rebinds those facts through a current corrected count-facts
+bundle and emits normal count matrices, molecules, optional MEX, and per-read diagnostics without
+opening GAMP or XG. No transcript or exon structure is changed.
+
+- The intermediate has four deterministic Parquet tables plus a checksum-bound manifest. It
+  retains exact E/P/B facts, structural S/U facts, raw molecule state, invalid and featureless
+  rows, original order, source GAMP/XG digests, independent record/read-group denominators, and
+  valid/missing/malformed/unsupported totals. It contains no alignment payload.
+- Read rows stream through a checksummed ZSTD spool; repeated fact sets are interned and canonical
+  final IDs make one-worker and forced four-worker bundles byte-identical. Unique fact sets remain
+  resident and are the current unbounded dimension.
+- The focused graph-backed gate passes 17/17 fixture stages. Direct and replay outputs match for
+  biological counters, count/molecule/barcode/feature Parquet, MEX, and per-read diagnostics. A
+  replayed score-window override matches a fresh GAMP/XG override. A separate two-read denominator
+  case retains one malformed aligned read and one valid unaligned read. A separately authenticated
+  Parent-tag variant changes CR7 counts without changing compatibility bytes; its replay matches a
+  fresh direct count, while panSC-strict's configured tag relaxation remains unchanged.
+- Count manifests identify the compatibility bundle as `produced` or `replayed` and bind both its
+  logical content ID and exact manifest SHA-256. Replay validates the current ledger structural
+  surface and compatibility algorithm. It does not reopen XG; graph changes require regeneration.
+
+The complete graph-enabled repository suite passes 165/165 tests. Next: benchmark compatibility
+size, production overhead, replay runtime, and unique-fact cardinality on the checksum-validated
+fixed authority. Replay is currently serial and declares one active worker; do not claim a
+production speed or memory bound until that benchmark is recorded.
+
 ## v0.9.0 deterministic performance release (verified 2026-09-03)
 
 This section supersedes the v0.8.2 next action below. The user explicitly reopened PanCollapse

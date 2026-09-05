@@ -15,6 +15,20 @@ Each node the read aligns to is scored under vg's own alignment scheme (see
 `docs/conversion-algorithm.md`), and that score is added to every HST path crossing the node.
 A transcript's evidence is the score of its best explicit path/Parent identity.
 
+## Reusable pre-policy evidence
+
+The optional compatibility intermediate freezes this compatibility result before
+`CountFactCatalog::candidate`, not the later count assignment. For each read it retains molecule
+identity/status, a canonical interned fact-set reference, and lossless exact E/P/B plus structural
+S/U evidence from which current Gene fallback is reconstructed, with path/Parent/transcript
+provenance. Invalid and featureless reads
+remain rows. The fact-set dictionary makes repeated evidence fast to resolve; read rows preserve
+the complete denominator for matrices and QC. It deliberately excludes alignment payload, so it
+is not BAM. Replay may alter metadata, tagging, whitelist, or count policy. The manifest freezes
+the source GAMP and XG digests; replay validates the current ledger's transcript/exon structural
+surface but deliberately does not reopen XG. Regenerate from GAMP when the graph,
+transcript/exon structure, or compatibility logic changes.
+
 ## Winner selection and collapse
 
 - Score every HST across all of the read's alignments (primary and supplementary/secondary).
