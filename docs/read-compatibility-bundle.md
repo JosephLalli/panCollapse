@@ -85,10 +85,11 @@ sets are interned; final IDs are assigned by canonical sort, making one-worker a
 outputs byte-identical. Read rows, exact facts, and structural facts are written as bounded Arrow
 record batches rather than materialized as whole tables. Final Parquet row groups and replay
 batches are capped at 1,048,576 rows; the default is 65,536. Fact-table batches also cap their
-combined UTF-8 payload at 256 MiB, well below Arrow's 32-bit string-offset limit. Memory is
-independent of read-row count except for the set of **unique** compatibility fact sets; the latter
-is not yet spillable and must be measured on the authoritative large fixture before a production
-memory bound is claimed.
+combined UTF-8 payload at 256 MiB, well below Arrow's 32-bit string-offset limit. Each structural
+path-list and Parent-list child is independently capped at 67,108,864 values, bounding its 32-bit
+offset buffer to about 256 MiB. Memory is independent of read-row count except for the set of
+**unique** compatibility fact sets; the latter is not yet spillable and must be measured on the
+authoritative large fixture before a production memory bound is claimed.
 
 Compatibility publication is an independently terminal stage: a completely validated bundle may
 remain usable if later count finalization fails. A successful count manifest links the produced or
@@ -113,8 +114,9 @@ The repository's fast graph-backed fixture proves:
   count, and panSC-strict's explicit relaxation remains unchanged;
 - malformed aligned and valid unaligned reads survive production capture and replay;
 - batch and streaming writers are byte-identical, equal fact sets intern deterministically, and
-  corrupt physical/logical data is rejected; a low test-only string budget forces multi-row-group
-  exact/structural output and proves bounded read-back without allocating a multi-gigabyte array;
+  corrupt physical/logical data is rejected; low test-only string and list-value budgets force
+  multi-row-group fact output and prove bounded read-back without allocating a multi-gigabyte
+  data or offset array;
 - changed exon/body path structure is rejected while candidate facts are rebound through the
   current count-facts catalog.
 

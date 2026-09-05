@@ -1507,6 +1507,7 @@ void write_fact_tables(const std::filesystem::path& staging,
                        const CompatibilityBundle& bundle,
                        std::uint64_t row_group_rows,
                        std::uint64_t max_string_bytes_per_batch,
+                       std::uint64_t max_list_values_per_batch,
                        const std::map<std::string, std::string>& logical,
                        CompatibilityWriteReceipt& receipt) {
     {
@@ -1569,29 +1570,45 @@ void write_fact_tables(const std::filesystem::path& staging,
         std::vector<StructuralBatchRow> batch;
         batch.reserve(static_cast<size_t>(row_group_rows));
         std::uint64_t batch_string_bytes = 0;
+        std::uint64_t batch_path_values = 0;
+        std::uint64_t batch_parent_values = 0;
         auto flush = [&]() {
             if (batch.empty()) return;
             writer.write(make_structural_batch(batch));
             batch.clear();
             batch_string_bytes = 0;
+            batch_path_values = 0;
+            batch_parent_values = 0;
         };
         for (size_t index = 0; index < bundle.fact_sets.size(); ++index) {
             for (const StructuralCompatibilityFact& fact :
                  bundle.fact_sets[index].structural) {
                 const std::uint64_t row_string_bytes =
                     structural_string_bytes(fact);
+                const std::uint64_t row_path_values = fact.winning_paths.size();
+                const std::uint64_t row_parent_values = fact.winning_parents.size();
                 if (row_string_bytes > max_string_bytes_per_batch) {
                     fail("one structural compatibility fact exceeds the Parquet batch string budget");
+                }
+                if (row_path_values > max_list_values_per_batch ||
+                    row_parent_values > max_list_values_per_batch) {
+                    fail("one structural compatibility fact exceeds the Parquet batch list-value budget");
                 }
                 if (!batch.empty() &&
                     (batch.size() == row_group_rows ||
                      row_string_bytes >
-                         max_string_bytes_per_batch - batch_string_bytes)) {
+                         max_string_bytes_per_batch - batch_string_bytes ||
+                     row_path_values >
+                         max_list_values_per_batch - batch_path_values ||
+                     row_parent_values >
+                         max_list_values_per_batch - batch_parent_values)) {
                     flush();
                 }
                 batch.push_back(
                     {static_cast<std::uint64_t>(index), std::addressof(fact)});
                 batch_string_bytes += row_string_bytes;
+                batch_path_values += row_path_values;
+                batch_parent_values += row_parent_values;
             }
         }
         flush();
@@ -1643,7 +1660,10 @@ struct CompatibilityBundleWriter::Impl {
             options.parquet_row_group_rows > kMaximumCompatibilityRowsPerBatch ||
             options.parquet_max_string_bytes_per_batch == 0 ||
             options.parquet_max_string_bytes_per_batch >
-                kMaximumCompatibilityStringBytesPerBatch) {
+                kMaximumCompatibilityStringBytesPerBatch ||
+            options.parquet_max_list_values_per_batch == 0 ||
+            options.parquet_max_list_values_per_batch >
+                kMaximumCompatibilityListValuesPerBatch) {
             throw std::invalid_argument("compatibility output options are incomplete");
         }
         if (identity.producer_version.empty() ||
@@ -1799,7 +1819,8 @@ CompatibilityWriteReceipt CompatibilityBundleWriter::finalize() {
             impl_->options.parquet_max_string_bytes_per_batch, remap));
         write_fact_tables(
             impl_->staging, canonical, impl_->options.parquet_row_group_rows,
-            impl_->options.parquet_max_string_bytes_per_batch, logical, receipt);
+            impl_->options.parquet_max_string_bytes_per_batch,
+            impl_->options.parquet_max_list_values_per_batch, logical, receipt);
         if (!std::filesystem::remove(impl_->spool_path)) {
             fail("compatibility read spool disappeared before staged publication");
         }
