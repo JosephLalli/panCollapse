@@ -194,5 +194,4 @@ if docker run --rm --entrypoint /bin/sh "$TAG" -c \
   echo "error: release image unexpectedly contains a Python executable" >&2
   exit 1
 fi
-
 echo "done: $TAG"

@@ -1895,6 +1895,43 @@ before the profile fork, so profile zero owns each pass-global increment while e
 its matching audit value. Spill encoding versions the disposition and validates its domain, so
 memory pressure cannot alter stage semantics.
 
+### D078 — Align native count semantics with the frozen rules after code review
+
+**Decision source:** Code review of the v0.10.0 native count commit, 2026-09-04; fixes applied
+with the user's approval of the review findings.
+
+**Decision:** Five review findings changed settled behavior and are recorded here so they are
+not reopened. (1) The runtime MultiGeneUMI_CR raw guard now sees every feature's pre-correction
+read count for the winning UMI sequence, including features where that sequence was 1MM-relabeled
+into a neighbor; the runtime carries such sequences as zero-support shadow candidates so the rule
+survives the per-barcode spill. This matches STARsolo, `count_cr.py`, D058, and the in-repo
+reference `count_observations`; production previously kept molecules the frozen rule discards.
+(2) The count-fact bundle `content_id` is defined over the canonical serialization of `content`
+(keys sorted by code point, no whitespace, ASCII-escaped strings, shortest round-trip floats),
+byte-identical to Python's `json.dumps(content, sort_keys=True, separators=(",", ":"))`; on-disk
+key order and whitespace no longer matter, and the loader implements that form directly.
+(3) `novel-paralog-policy=lump` makes the origin gene both the identity and the equivalence key,
+and `separate` keeps a paralog under its own equivalence key, so the policy is effective under
+either bundle convention. Explicit `equivalence_gene` targets remain closed over the policy;
+Parent identities or novel-paralog origins absent from it receive the frozen oracle's conservative
+`UNKNOWN/missing_from_ledger` row. Production candidates take competition, gene type, and nesting policy
+from the canonical equivalence row after novel-paralog identity resolution, matching the frozen
+Python oracle even when only an alias occurs on a read. (4) Under a `strand=both` override the
+winning strand is library sense whenever any best-tier candidate carries it, and the
+equivalence-group evidence representative is the member with the most body support, then the
+lexicographically smallest gene; both rules are independent of evidence order so cached and
+uncached resolutions agree. (5) `count` parses
+molecule identity exactly as `convert` does (malformed quality suffixes are counted and fatal
+under `--molecule-identity-failures fail`), folds raw barcode and UMI case before the packed
+runtime, rejects convert-only options, canonicalizes `--out-dir`, and canonicalizes profile
+selectors before the repeat check. The frozen profiles' outputs on the ex50 fixture are unchanged.
+
+**Consequences:** The standalone release image remains free of workflow-engine-specific packages.
+The CLI suite forces the worker pool through `PANCOLLAPSE_FORCE_WORKER_POOL` so the thread and
+spool-only runs exercise four workers;
+spill runs are removed by the runtime destructor and a caller-created spill directory is left in
+place. The scientific gates in D076 must be rerun against the corrected raw guard before release.
+
 ## Architecture questions and Phase 0 resolution map
 
 The historical questions below were external-contract facts to resolve from current

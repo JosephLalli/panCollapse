@@ -18,6 +18,13 @@ Parquet. The path must be normalized, relative to `--out-dir`, end in `.parquet`
 collide with a reserved result path. It is opt-in because it is the only count sink with
 per-read-scale I/O.
 
+The bundle's `MANIFEST.json` binds its `content` object to `content_id`, which is
+`sha256:` followed by the hex SHA-256 of the canonical serialization of `content`: object
+keys sorted by code point, no whitespace, integers in decimal, floats in shortest
+round-trip form, and strings ASCII-escaped (`\uXXXX`, surrogate pairs above the BMP). This
+is byte-identical to Python's `json.dumps(content, sort_keys=True, separators=(",", ":"))`;
+the key order and whitespace of the file itself do not affect the identity.
+
 Profiles are selected independently: `--cr7` is the `cr7-v1` alias,
 `--pansc-strict-v1` is the identically named frozen custom profile alias, and repeatable
 `--profile ID` is the extensible form. At least one selector is required, duplicates are errors,
@@ -71,7 +78,10 @@ Parquet tables; cell calling remains downstream. `--rad-out` invokes the existin
 writer once and does not render either profile's final matrix.
 
 The diagnostic sidecar records input ordinal, QNAME, profile, raw/corrected barcode, UMI,
-terminal class, selected gene/tier, and reason bits. It is an audit product, not an input to
+terminal class, selected gene/tier, and reason bits. QNAME is the read-name prefix before
+the last two underscore-separated fields (raw CB and UMI, after any quality suffix), including
+on `invalid_raw_molecule` rows; a name with fewer than two such fields, or an empty prefix,
+records the raw GAMP name instead. It is an audit product, not an input to
 counting or a default production artifact.
 
 ## Runtime inputs

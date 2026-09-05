@@ -781,11 +781,13 @@ set_tests_properties(genefull_ex50pas_gamp PROPERTIES
 
 # Native v0.10 direct counting. The authenticated bundle is rebuilt from repository
 # fixtures for every test run, then one- and four-thread requests must publish the
-# same canonical Parquet/MEX content. The small exact surface may intentionally
-# reduce the active worker count to one; larger fixtures cover the worker pool.
+# same canonical Parquet/MEX content. The small exact surface would normally reduce
+# the active worker count to one, so the multi-thread runs force the worker pool on
+# and the verifier asserts the manifest's active thread count.
 set(DIRECT_COUNT_BUNDLE "${EX50_DIR}/count_bundle")
 set(DIRECT_COUNT_ONE "${EX50_DIR}/direct_count_threads_1")
 set(DIRECT_COUNT_FOUR "${EX50_DIR}/direct_count_threads_4")
+set(DIRECT_COUNT_FOUR_SPOOL "${EX50_DIR}/direct_count_threads_4_spool")
 set(DIRECT_COUNT_CR7 "${EX50_DIR}/direct_count_cr7_only")
 set(DIRECT_COUNT_PANSC "${EX50_DIR}/direct_count_pansc_only")
 set(DIRECT_COUNT_OVERRIDE "${EX50_DIR}/direct_count_override")
@@ -793,7 +795,7 @@ set(DIRECT_COUNT_EMPTY "${EX50_DIR}/direct_count_empty")
 add_test(NAME direct_count_fixture_clean
   COMMAND ${CMAKE_COMMAND} -E rm -rf
     "${DIRECT_COUNT_BUNDLE}" "${DIRECT_COUNT_ONE}" "${DIRECT_COUNT_FOUR}"
-    "${DIRECT_COUNT_CR7}" "${DIRECT_COUNT_PANSC}"
+    "${DIRECT_COUNT_FOUR_SPOOL}" "${DIRECT_COUNT_CR7}" "${DIRECT_COUNT_PANSC}"
     "${DIRECT_COUNT_OVERRIDE}" "${DIRECT_COUNT_EMPTY}" "${EX50_DIR}/empty.gamp")
 set_tests_properties(direct_count_fixture_clean PROPERTIES
   LABELS "vg;count;direct-count"
@@ -834,8 +836,25 @@ add_test(NAME direct_count_threads_4
     --10x-mex --out-dir "${DIRECT_COUNT_FOUR}")
 set_tests_properties(direct_count_threads_4 PROPERTIES
   LABELS "vg;count;direct-count;parquet;mex;threads"
+  ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
   FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
   FIXTURES_SETUP direct_count_four)
+
+# The ordered diagnostics spool is the only ordered sink here, so every worker must
+# retire its output turn from inside the count block.
+add_test(NAME direct_count_threads_4_spool
+  COMMAND $<TARGET_FILE:panCollapse> count
+    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
+    --count-bundle "${DIRECT_COUNT_BUNDLE}"
+    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
+    --cr7 --pansc-strict-v1 --threads 4 --count-memory-budget 1MiB
+    --read-assignments-out diagnostics/read_assignments.parquet
+    --out-dir "${DIRECT_COUNT_FOUR_SPOOL}")
+set_tests_properties(direct_count_threads_4_spool PROPERTIES
+  LABELS "vg;count;direct-count;parquet;threads;diagnostics"
+  ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
+  FIXTURES_SETUP direct_count_four_spool)
 
 add_test(NAME direct_count_cr7_only
   COMMAND $<TARGET_FILE:panCollapse> count
@@ -846,6 +865,7 @@ add_test(NAME direct_count_cr7_only
     --out-dir "${DIRECT_COUNT_CR7}")
 set_tests_properties(direct_count_cr7_only PROPERTIES
   LABELS "vg;count;direct-count;parquet;profiles"
+  ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
   FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
   FIXTURES_SETUP direct_count_cr7)
 
@@ -858,16 +878,18 @@ add_test(NAME direct_count_pansc_only
     --out-dir "${DIRECT_COUNT_PANSC}")
 set_tests_properties(direct_count_pansc_only PROPERTIES
   LABELS "vg;count;direct-count;parquet;profiles"
+  ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
   FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
   FIXTURES_SETUP direct_count_pansc)
 
 add_test(NAME direct_count_verify
   COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_verify.py"
     "${DIRECT_COUNT_ONE}" "${DIRECT_COUNT_FOUR}"
-    "${DIRECT_COUNT_CR7}" "${DIRECT_COUNT_PANSC}")
+    "${DIRECT_COUNT_CR7}" "${DIRECT_COUNT_PANSC}" "${DIRECT_COUNT_FOUR_SPOOL}")
 set_tests_properties(direct_count_verify PROPERTIES
   LABELS "vg;count;direct-count;parquet;mex;threads;profiles"
-  FIXTURES_REQUIRED "direct_count_one;direct_count_four;direct_count_cr7;direct_count_pansc")
+  FIXTURES_REQUIRED
+    "direct_count_one;direct_count_four;direct_count_cr7;direct_count_pansc;direct_count_four_spool")
 
 add_test(NAME direct_count_duplicate_profile_rejected
   COMMAND $<TARGET_FILE:panCollapse> count

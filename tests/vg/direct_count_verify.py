@@ -239,9 +239,10 @@ def validate(root: Path) -> dict:
 
 
 def main() -> None:
-    if len(sys.argv) != 5:
+    if len(sys.argv) not in (5, 6):
         raise SystemExit(
-            "usage: direct_count_verify.py THREADS1 THREADS4 CR7_ONLY PANSC_ONLY"
+            "usage: direct_count_verify.py THREADS1 THREADS4 CR7_ONLY PANSC_ONLY "
+            "[THREADS4_SPOOL]"
         )
     one = Path(sys.argv[1])
     four = Path(sys.argv[2])
@@ -251,6 +252,10 @@ def main() -> None:
     }
     one_manifest = validate(one)
     four_manifest = validate(four)
+    # The manifest reports the active worker count; the four-thread run must have
+    # actually used the worker pool for the byte-identity comparison to mean anything.
+    assert one_manifest["threads"] == 1
+    assert four_manifest["threads"] == 4
     assert {
         name: table["logical_sha256"] for name, table in one_manifest["tables"].items()
     } == {
@@ -276,6 +281,22 @@ def main() -> None:
         assert joint_profiles[profile_id]["logical_tables"] == separate_profile[
             "logical_tables"
         ] == separate_hashes
+    if len(sys.argv) == 6:
+        # Four workers with the ordered diagnostics spool as the only ordered sink:
+        # tables stay byte-identical and the spool preserves input order exactly.
+        four_spool = Path(sys.argv[5])
+        spool_manifest = json.loads((four_spool / "manifest.json").read_text())
+        assert spool_manifest["threads"] == 4
+        assert "read_assignments" in spool_manifest["outputs"]
+        for name in ("barcodes", "features", "counts", "molecules"):
+            assert (one / "parquet" / f"{name}.parquet").read_bytes() == (
+                four_spool / "parquet" / f"{name}.parquet"
+            ).read_bytes()
+        one_rows = pq.read_table(one / "diagnostics/read_assignments.parquet").to_pylist()
+        spool_rows = pq.read_table(
+            four_spool / "diagnostics/read_assignments.parquet"
+        ).to_pylist()
+        assert spool_rows == one_rows
 
 
 if __name__ == "__main__":

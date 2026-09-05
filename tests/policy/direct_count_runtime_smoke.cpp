@@ -259,6 +259,49 @@ int main() {
         expect(corrupt_rejected, "truncated aggregate spill must be rejected");
         std::filesystem::remove_all(corrupt_spill);
 
+        // MultiGeneUMI_CR raw guard: a raw UMI sequence that 1MM-collapses into a
+        // neighbor inside one gene still counts as that gene's pre-correction
+        // support. G2 has more raw ACGT reads than G1, so G1's ACGT molecule is
+        // discarded even though G2 carries ACGT only inside its ACGA label.
+        const auto raw_guard_spill = scratch("raw-guard");
+        std::filesystem::remove_all(raw_guard_spill);
+        CountRuntimeOptions raw_guard_options;
+        raw_guard_options.memory_budget_bytes = 1ULL << 20;
+        raw_guard_options.spill_directory = raw_guard_spill;
+        raw_guard_options.raw_barcode_length = 4;
+        raw_guard_options.raw_umi_length = 4;
+        CountRuntime raw_guard_runtime({effective_profile(ProfileId::cr7_v1)},
+                                       {"AAAA"}, {"G1", "G2"}, raw_guard_options);
+        auto raw_guard_worker = raw_guard_runtime.make_worker();
+        raw_guard_worker.observe_barcode("AAAA");
+        raw_guard_worker.observe_assignment(0, "AAAA", std::nullopt, "ACGT", {"G1"}, 2);
+        raw_guard_worker.observe_assignment(0, "AAAA", std::nullopt, "ACGT", {"G2"}, 3);
+        raw_guard_worker.observe_assignment(0, "AAAA", std::nullopt, "ACGA", {"G2"}, 4);
+        raw_guard_worker.flush();
+        const CountRuntimeResult raw_guard_result = raw_guard_runtime.finalize();
+        expect(raw_guard_result.molecules.size() == 1 &&
+                   raw_guard_result.molecules[0].feature_catalog_index == 1 &&
+                   raw_guard_result.molecules[0].corrected_umi == "ACGA" &&
+                   raw_guard_result.molecules[0].supporting_reads == 7,
+               "raw guard must see pre-correction reads of a collapsed-away sequence");
+        expect(!std::filesystem::exists(raw_guard_spill),
+               "a runtime-created spill directory is removed after finalize");
+
+        // A caller-created spill directory is left in place.
+        const auto owned_spill = scratch("caller-owned-spill");
+        std::filesystem::remove_all(owned_spill);
+        std::filesystem::create_directories(owned_spill);
+        {
+            CountRuntimeOptions owned_options = raw_guard_options;
+            owned_options.spill_directory = owned_spill;
+            CountRuntime owned_runtime({effective_profile(ProfileId::cr7_v1)}, {"AAAA"},
+                                       {"G"}, owned_options);
+            static_cast<void>(owned_runtime.finalize());
+        }
+        expect(std::filesystem::is_directory(owned_spill),
+               "a caller-created spill directory survives finalize");
+        std::filesystem::remove_all(owned_spill);
+
         std::cout << "direct_count_runtime_smoke passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

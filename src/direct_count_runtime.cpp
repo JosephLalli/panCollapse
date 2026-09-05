@@ -713,6 +713,27 @@ struct CountRuntime::Impl {
     std::vector<std::filesystem::path> deferred_runs;
     std::uint64_t next_run = 0;
     bool finalized = false;
+    std::vector<std::filesystem::path> collapsed_runs;
+    bool owns_spill_directory = false;
+
+    ~Impl() {
+        // Best-effort cleanup for a runtime that never reached the end of
+        // finalize(): remove every spill run this instance wrote and the spill
+        // directory when this instance created it.
+        std::error_code ignored;
+        for (const std::filesystem::path& path : exact_runs) {
+            std::filesystem::remove(path, ignored);
+        }
+        for (const std::filesystem::path& path : deferred_runs) {
+            std::filesystem::remove(path, ignored);
+        }
+        for (const std::filesystem::path& path : collapsed_runs) {
+            std::filesystem::remove(path, ignored);
+        }
+        if (owns_spill_directory) {
+            std::filesystem::remove(options.spill_directory, ignored);
+        }
+    }
 
     std::atomic<std::uint64_t> barcode_prior_groups{0};
     std::atomic<std::uint64_t> exact_barcode_prior_groups{0};
@@ -901,8 +922,8 @@ struct CountRuntime::Impl {
                 options.spill_directory /
                 ("aggregate-" + std::to_string(next_run++) + ".exact.zst");
             const size_t rows = exact_rows.size();
-            write_exact_run(path, std::move(exact_rows));
             exact_runs.push_back(path);
+            write_exact_run(path, std::move(exact_rows));
             record_spill(path, rows);
         }
         if (!deferred_rows.empty()) {
@@ -910,8 +931,8 @@ struct CountRuntime::Impl {
                 options.spill_directory /
                 ("aggregate-" + std::to_string(next_run++) + ".deferred.zst");
             const size_t rows = deferred_rows.size();
-            write_deferred_run(path, std::move(deferred_rows));
             deferred_runs.push_back(path);
+            write_deferred_run(path, std::move(deferred_rows));
             record_spill(path, rows);
         }
     }
@@ -1090,6 +1111,7 @@ CountRuntime::CountRuntime(std::vector<EffectiveProfile> profiles,
         !std::filesystem::is_empty(impl_->options.spill_directory)) {
         throw std::invalid_argument("direct count spill directory must be absent or empty");
     }
+    impl_->owns_spill_directory = !std::filesystem::exists(impl_->options.spill_directory);
     std::filesystem::create_directories(impl_->options.spill_directory);
 }
 
@@ -1347,7 +1369,7 @@ CountRuntimeResult CountRuntime::finalize() {
     std::optional<std::uint32_t> current_feature;
     std::map<std::string, std::uint64_t> feature_umis;
     std::vector<CollapsedCandidate> collapsed;
-    std::vector<std::filesystem::path> collapsed_runs;
+    std::vector<std::filesystem::path>& collapsed_runs = impl_->collapsed_runs;
     const size_t collapsed_limit = static_cast<size_t>(
         std::max<std::uint64_t>(1, impl_->options.memory_budget_bytes /
                                       (4 * kExactEntryBytes)));
@@ -1359,10 +1381,10 @@ CountRuntimeResult CountRuntime::finalize() {
             impl_->options.spill_directory /
             ("barcode-" + std::to_string(impl_->next_run++) + ".collapsed.zst");
         const size_t rows = collapsed.size();
+        collapsed_runs.push_back(path);
         write_collapsed_run(path, std::move(collapsed));
         collapsed.clear();
         collapsed.reserve(std::min<size_t>(collapsed_limit, 1 << 20));
-        collapsed_runs.push_back(path);
         impl_->record_spill(path, rows);
     };
 
@@ -1386,6 +1408,15 @@ CountRuntimeResult CountRuntime::finalize() {
             collapsed.push_back({umi, *current_feature, aggregate.supporting_reads,
                                  aggregate.raw_umis, feature_umis.at(umi)});
         }
+        // A raw UMI relabeled into a neighbor leaves no label of its own, yet the
+        // frozen MultiGeneUMI_CR raw guard compares every feature's pre-correction
+        // read count for the winning sequence. Carry those sequences as
+        // zero-support shadow rows so the per-barcode merge can still see them.
+        for (const auto& [umi, count] : feature_umis) {
+            if (labels.at(umi) != umi) {
+                collapsed.push_back({umi, *current_feature, 0, 0, count});
+            }
+        }
         feature_umis.clear();
         if (collapsed.size() >= collapsed_limit) {
             spill_collapsed();
@@ -1408,17 +1439,27 @@ CountRuntimeResult CountRuntime::finalize() {
             if (same_umi.empty()) {
                 return;
             }
-            size_t winner = 0;
+            // Shadow rows (zero supporting reads) never compete for the label;
+            // they only feed the raw guard below.
+            size_t winner = same_umi.size();
             bool tied = false;
-            for (size_t index = 1; index < same_umi.size(); ++index) {
-                if (same_umi[index].supporting_reads >
-                    same_umi[winner].supporting_reads) {
+            for (size_t index = 0; index < same_umi.size(); ++index) {
+                if (same_umi[index].supporting_reads == 0) {
+                    continue;
+                }
+                if (winner == same_umi.size() ||
+                    same_umi[index].supporting_reads >
+                        same_umi[winner].supporting_reads) {
                     winner = index;
                     tied = false;
                 } else if (same_umi[index].supporting_reads ==
                            same_umi[winner].supporting_reads) {
                     tied = true;
                 }
+            }
+            if (winner == same_umi.size()) {
+                same_umi.clear();
+                return;
             }
             const bool raw_guard = std::any_of(
                 same_umi.begin(), same_umi.end(),
@@ -1523,7 +1564,13 @@ CountRuntimeResult CountRuntime::finalize() {
     for (const std::filesystem::path& path : impl_->deferred_runs) {
         std::filesystem::remove(path);
     }
-    std::filesystem::remove(impl_->options.spill_directory);
+    impl_->exact_runs.clear();
+    impl_->deferred_runs.clear();
+    // Leave a caller-supplied spill directory in place; only remove one this
+    // runtime created itself.
+    if (impl_->owns_spill_directory) {
+        std::filesystem::remove(impl_->options.spill_directory);
+    }
     return result;
 }
 

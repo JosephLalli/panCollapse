@@ -84,10 +84,18 @@ class CountFactCatalog {
         return genes_;
     }
 
-    AssignmentCandidate candidate(ProfileId profile_id,
+    AssignmentCandidate candidate(const EffectiveProfile& profile,
                                   std::string_view unique_parent, std::int64_t score,
                                   EvidenceTier tier, EvidenceStrand strand,
                                   std::uint32_t body_sample_support = 0) const;
+
+    AssignmentCandidate candidate(ProfileId profile_id,
+                                  std::string_view unique_parent, std::int64_t score,
+                                  EvidenceTier tier, EvidenceStrand strand,
+                                  std::uint32_t body_sample_support = 0) const {
+        return candidate(effective_profile(profile_id), unique_parent, score, tier,
+                         strand, body_sample_support);
+    }
 
   private:
     std::map<std::string, ParentFact, std::less<>> parents_;

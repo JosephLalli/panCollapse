@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
+#include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <memory>
@@ -12,6 +15,9 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
+#include <utility>
+#include <string_view>
 
 namespace pancollapse::direct_count {
 namespace {
@@ -195,6 +201,200 @@ std::string unqualified(std::string value) {
     return value;
 }
 
+void append_unicode_escape(std::string& out, std::uint32_t unit) {
+    static constexpr char digits[] = "0123456789abcdef";
+    out += "\\u";
+    out.push_back(digits[(unit >> 12U) & 0xFU]);
+    out.push_back(digits[(unit >> 8U) & 0xFU]);
+    out.push_back(digits[(unit >> 4U) & 0xFU]);
+    out.push_back(digits[unit & 0xFU]);
+}
+
+// Python json.dumps(ensure_ascii=True) string escaping: two-character forms for
+// \" \\ \n \r \t \b \f, and \uXXXX for every other control character and every
+// non-ASCII code point (UTF-16 surrogate pairs above the BMP).
+void append_canonical_string(std::string& out, std::string_view value) {
+    out.push_back('"');
+    size_t index = 0;
+    while (index < value.size()) {
+        const unsigned char byte = static_cast<unsigned char>(value[index]);
+        if (byte < 0x80U) {
+            switch (byte) {
+                case '"': out += "\\\""; break;
+                case '\\': out += "\\\\"; break;
+                case '\n': out += "\\n"; break;
+                case '\r': out += "\\r"; break;
+                case '\t': out += "\\t"; break;
+                case '\b': out += "\\b"; break;
+                case '\f': out += "\\f"; break;
+                default:
+                    if (byte >= 0x20U && byte < 0x7FU) {
+                        out.push_back(static_cast<char>(byte));
+                    } else {
+                        append_unicode_escape(out, byte);
+                    }
+            }
+            ++index;
+            continue;
+        }
+        // simdjson validated the UTF-8, so the lead byte fixes the sequence length.
+        size_t length = 2;
+        std::uint32_t code_point = byte & 0x1FU;
+        if ((byte & 0xF0U) == 0xE0U) {
+            length = 3;
+            code_point = byte & 0x0FU;
+        } else if ((byte & 0xF8U) == 0xF0U) {
+            length = 4;
+            code_point = byte & 0x07U;
+        }
+        for (size_t offset = 1; offset < length && index + offset < value.size(); ++offset) {
+            code_point = (code_point << 6U) |
+                         (static_cast<unsigned char>(value[index + offset]) & 0x3FU);
+        }
+        index += length;
+        if (code_point >= 0x10000U) {
+            code_point -= 0x10000U;
+            append_unicode_escape(out, 0xD800U + (code_point >> 10U));
+            append_unicode_escape(out, 0xDC00U + (code_point & 0x3FFU));
+        } else {
+            append_unicode_escape(out, code_point);
+        }
+    }
+    out.push_back('"');
+}
+
+// Python float.__repr__: shortest round-trip digits, fixed notation while the
+// decimal point position is in [-3, 16], otherwise d.ddde[+-]XX with at least
+// two exponent digits.
+void append_python_float_repr(std::string& out, double value) {
+    if (std::isnan(value) || std::isinf(value)) {
+        throw std::runtime_error("count-fact bundle content contains a non-finite number");
+    }
+    std::array<char, 64> buffer{};
+    const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value,
+                                         std::chars_format::scientific);
+    std::string_view text(buffer.data(), static_cast<size_t>(converted.ptr - buffer.data()));
+    if (!text.empty() && text.front() == '-') {
+        out.push_back('-');
+        text.remove_prefix(1);
+    }
+    const size_t exponent_at = text.find('e');
+    std::string digits;
+    for (const char character : text.substr(0, exponent_at)) {
+        if (character != '.') {
+            digits.push_back(character);
+        }
+    }
+    const char* exponent_begin = text.data() + exponent_at + 1;
+    if (*exponent_begin == '+') {
+        ++exponent_begin;
+    }
+    int exponent = 0;
+    std::from_chars(exponent_begin, text.data() + text.size(), exponent);
+    const int point = exponent + 1;
+    const int count = static_cast<int>(digits.size());
+    if (point <= -4 || point > 16) {
+        out.push_back(digits[0]);
+        if (count > 1) {
+            out.push_back('.');
+            out.append(digits, 1, std::string::npos);
+        }
+        const int shown = point - 1;
+        out.push_back('e');
+        out.push_back(shown < 0 ? '-' : '+');
+        const int magnitude = shown < 0 ? -shown : shown;
+        if (magnitude < 10) {
+            out.push_back('0');
+        }
+        out += std::to_string(magnitude);
+    } else if (point <= 0) {
+        out += "0.";
+        out.append(static_cast<size_t>(-point), '0');
+        out += digits;
+    } else if (point < count) {
+        out.append(digits, 0, static_cast<size_t>(point));
+        out.push_back('.');
+        out.append(digits, static_cast<size_t>(point), std::string::npos);
+    } else {
+        out += digits;
+        out.append(static_cast<size_t>(point - count), '0');
+        out += ".0";
+    }
+}
+
+void append_canonical_json(std::string& out, const simdjson::dom::element& element) {
+    switch (element.type()) {
+        case simdjson::dom::element_type::ARRAY: {
+            out.push_back('[');
+            bool first = true;
+            const simdjson::dom::array array = element.get_array().value();
+            for (const simdjson::dom::element child : array) {
+                if (!first) {
+                    out.push_back(',');
+                }
+                first = false;
+                append_canonical_json(out, child);
+            }
+            out.push_back(']');
+            return;
+        }
+        case simdjson::dom::element_type::OBJECT: {
+            std::vector<std::pair<std::string_view, simdjson::dom::element>> members;
+            const simdjson::dom::object object = element.get_object().value();
+            for (const auto field : object) {
+                members.emplace_back(field.key, field.value);
+            }
+            std::sort(members.begin(), members.end(),
+                      [](const auto& left, const auto& right) { return left.first < right.first; });
+            out.push_back('{');
+            bool first = true;
+            for (const auto& [key, value] : members) {
+                if (!first) {
+                    out.push_back(',');
+                }
+                first = false;
+                append_canonical_string(out, key);
+                out.push_back(':');
+                append_canonical_json(out, value);
+            }
+            out.push_back('}');
+            return;
+        }
+        case simdjson::dom::element_type::INT64:
+            out += std::to_string(element.get_int64().value());
+            return;
+        case simdjson::dom::element_type::UINT64:
+            out += std::to_string(element.get_uint64().value());
+            return;
+        case simdjson::dom::element_type::DOUBLE:
+            append_python_float_repr(out, element.get_double().value());
+            return;
+        case simdjson::dom::element_type::STRING:
+            append_canonical_string(out, element.get_string().value());
+            return;
+        case simdjson::dom::element_type::BOOL:
+            out += element.get_bool().value() ? "true" : "false";
+            return;
+        case simdjson::dom::element_type::NULL_VALUE:
+            out += "null";
+            return;
+        case simdjson::dom::element_type::BIGINT:
+            throw std::runtime_error(
+                "count-fact bundle content contains an integer beyond 64 bits");
+    }
+    throw std::runtime_error("count-fact bundle content has an unsupported JSON value");
+}
+
+// Canonical form of the manifest `content` object: keys sorted by code point, no
+// whitespace, ASCII-only strings, shortest round-trip floats. Byte-identical to
+// Python's json.dumps(content, sort_keys=True, separators=(",", ":")), so a
+// producer's key order and whitespace never affect content_id.
+std::string canonical_json(const simdjson::dom::element& element) {
+    std::string out;
+    append_canonical_json(out, element);
+    return out;
+}
+
 struct EnsemblIdentity {
     std::string stable_gene;
     std::string discriminator;
@@ -312,7 +512,7 @@ CountFactBundle load_count_fact_bundle(const std::filesystem::path& requested_ro
             throw std::runtime_error("count-fact bundle has a malformed content_id");
         }
         simdjson::dom::element content = document["content"];
-        const std::string canonical_content = simdjson::minify(content);
+        const std::string canonical_content = canonical_json(content);
         if (bundle.content_id != "sha256:" + digest_bytes(canonical_content)) {
             throw std::runtime_error("count-fact bundle content_id does not match content");
         }
@@ -445,6 +645,32 @@ CountFactCatalog CountFactCatalog::load(
             }
         }
     }
+    // Assignment resolves reads to equivalence_gene, so every target must be a count
+    // gene now rather than failing on the first read that reaches it.
+    for (const auto& [profile_id, facts] : result.profile_genes_) {
+        for (const auto& [count_gene, fact] : facts) {
+            const auto canonical = facts.find(fact.equivalence_gene);
+            if (canonical == facts.end()) {
+                throw std::runtime_error("gene-policy equivalence_gene " +
+                                         fact.equivalence_gene + " for " + count_gene +
+                                         " is not a count gene");
+            }
+            if (canonical->second.equivalence_gene != fact.equivalence_gene) {
+                throw std::runtime_error("gene-policy equivalence_gene " +
+                                         fact.equivalence_gene + " for " + count_gene +
+                                         " is not self-canonical");
+            }
+            if (canonical->second.competition != fact.competition) {
+                throw std::runtime_error("equivalent genes " + count_gene + " and " +
+                                         fact.equivalence_gene +
+                                         " have conflicting competition classes");
+            }
+            // A nested-host identifier may name an annotation gene outside the
+            // countable policy universe.  The frozen Python resolver retains that
+            // edge as provenance but it is inert unless the host is also retained
+            // for the read; do not manufacture a policy row or reject the bundle.
+        }
+    }
 
     const auto metadata_file = bundle.files.find("gene_metadata");
     if (metadata_file != bundle.files.end()) {
@@ -521,6 +747,23 @@ CountFactCatalog CountFactCatalog::load(
         strong.size() != path_ledger.identities_by_parent.size()) {
         throw std::runtime_error("Parent fact caches do not exactly cover the path ledger");
     }
+    const auto ensure_unknown_policy_gene = [&result](const std::string& count_gene) {
+        if (result.genes_.contains(count_gene)) {
+            return;
+        }
+        result.genes_.emplace(count_gene,
+                              GeneFact{count_gene, {}, std::nullopt});
+        for (auto& [profile_id, profile_facts] : result.profile_genes_) {
+            ProfileGeneFact missing;
+            missing.profile_id = profile_id;
+            missing.count_gene = count_gene;
+            missing.competition = CompetitionClass::unknown;
+            missing.competition_reason = "missing_from_ledger";
+            missing.equivalence_gene = count_gene;
+            missing.source_annotation = "missing_from_ledger";
+            profile_facts.emplace(count_gene, std::move(missing));
+        }
+    };
     for (const auto& [parent, identity_pointer] : path_ledger.identities_by_parent) {
         const auto category = categories.find(parent);
         const auto support = strong.find(parent);
@@ -542,17 +785,22 @@ CountFactCatalog CountFactCatalog::load(
             throw std::runtime_error("strong-support raw categories disagree for Parent " +
                                      parent);
         }
-        if (support->second.count_gene != fact.count_gene) {
-            throw std::runtime_error("strong-support count_gene disagrees for Parent " + parent);
-        }
-        if (result.genes_.count(fact.count_gene) == 0) {
-            throw std::runtime_error("gene-policy ledger lacks Parent count identity " +
-                                     fact.count_gene);
-        }
+        std::string strong_support_gene = fact.count_gene;
         if (const auto parsed = ensembl_identity(identity.source_gene);
             parsed && !parsed->discriminator.empty()) {
             fact.novel_paralog = true;
             fact.novel_origin_gene = parsed->stable_gene;
+            strong_support_gene = fact.novel_origin_gene;
+            // Frozen profiles look up a lumped copy through its origin. A
+            // sensitivity profile that separates the copy sees the same
+            // missing-ledger UNKNOWN row that count_cr.py constructs.
+            ensure_unknown_policy_gene(fact.novel_origin_gene);
+            ensure_unknown_policy_gene(fact.count_gene);
+        } else {
+            ensure_unknown_policy_gene(fact.count_gene);
+        }
+        if (support->second.count_gene != strong_support_gene) {
+            throw std::runtime_error("strong-support count_gene disagrees for Parent " + parent);
         }
         result.parents_.emplace(parent, std::move(fact));
     }
@@ -590,25 +838,52 @@ const ProfileGeneFact& CountFactCatalog::profile_gene(
     return found->second;
 }
 
-AssignmentCandidate CountFactCatalog::candidate(ProfileId profile_id,
+AssignmentCandidate CountFactCatalog::candidate(const EffectiveProfile& effective,
                                                 std::string_view unique_parent,
                                                 std::int64_t score,
                                                 EvidenceTier tier,
                                                 EvidenceStrand strand,
                                                 std::uint32_t body_sample_support) const {
     const ParentFact& parent_fact = parent(unique_parent);
-    const GeneFact& gene_fact = gene(parent_fact.count_gene);
-    const ProfileGeneFact& policy_fact = profile_gene(profile_id, parent_fact.count_gene);
+    const ProfileId profile_id = profile_policy_source(effective);
+
+    // count_cr applies novel-paralog identity policy before consulting the gene-policy
+    // ledger. Mirror that order here so a derived lump/separate profile reads policy
+    // from the same final identity as the Python oracle.
+    std::string resolved_gene = parent_fact.count_gene;
+    bool force_self_equivalence = false;
+    if (parent_fact.novel_paralog) {
+        switch (effective.profile.assignment.novel_paralog) {
+            case NovelParalogPolicy::lump:
+                resolved_gene = parent_fact.novel_origin_gene;
+                force_self_equivalence = true;
+                break;
+            case NovelParalogPolicy::separate:
+                force_self_equivalence = true;
+                break;
+            case NovelParalogPolicy::ignore:
+                break;
+        }
+    }
+
+    const ProfileGeneFact& resolved_policy = profile_gene(profile_id, resolved_gene);
+    const std::string& equivalence_gene = force_self_equivalence
+                                              ? resolved_gene
+                                              : resolved_policy.equivalence_gene;
+    // The frozen oracle performs competition, nesting, and body-type tests on the
+    // canonical equivalence row, even when only an alias occurs on this read.
+    const ProfileGeneFact& canonical_policy = profile_gene(profile_id, equivalence_gene);
+    const GeneFact& canonical_gene = gene(equivalence_gene);
     AssignmentCandidate result;
-    result.gene = parent_fact.count_gene;
-    result.equivalence_gene = policy_fact.equivalence_gene;
-    result.nested_host = policy_fact.nested_host;
+    result.gene = resolved_gene;
+    result.equivalence_gene = equivalence_gene;
+    result.nested_host = canonical_policy.nested_host;
     result.score = score;
     result.tier = tier;
     result.strand = strand;
-    result.competition = policy_fact.competition;
+    result.competition = canonical_policy.competition;
     result.categories = parent_fact.raw_categories;
-    result.gene_types = gene_fact.gene_types;
+    result.gene_types = canonical_gene.gene_types;
     result.body_sample_support = body_sample_support;
     if (tier == EvidenceTier::body && !parent_fact.sample.empty() &&
         parent_fact.sample != "." && parent_fact.sample != "NA" &&

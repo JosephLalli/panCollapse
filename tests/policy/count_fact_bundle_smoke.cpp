@@ -70,44 +70,64 @@ int main() {
                                  common +
                                  "body\tselected\tnone\texon-parent\tENSG000001.2\t"
                                  "ENSG000001.2\tENST1\tortholog\t+\t1\t200\n";
-        write_file(root / "files/path_identity_ledger.tsv", path_header + exon + body);
+        const std::string copy_common =
+            "\tsource-parent-copy\tinput-parent-copy\tTX4\tRUNTIME4\tchr1\tSAMPLE\t1\tCAT\t";
+        const std::string copy_exon =
+            "panSC-path-identity-v1\tcopy-path\t100\torigin\tcopy-parent" +
+            copy_common +
+            "exon\tselected\tnone\tcopy-parent\tENSG000005.1_2\t"
+            "ENSG000005.1_2\tENST5\tortholog\t+\t1\t100\n";
+        write_file(root / "files/path_identity_ledger.tsv",
+                   path_header + exon + body + copy_exon);
         write_file(root / "files/profile_gene_policy.tsv",
                    "profile_id\tcount_gene\tgene_type\tcompetition_class\tcompetition_reason\t"
                    "equivalence_gene\tsource_annotation\tnested_host\n"
                    "cr7-v1\tENSG000001\tprotein_coding\tPRIMARY\tallowed\t"
-                   "ENSG000001\tCAT\t.\n"
+                   "ENSG000002\tCAT\t.\n"
+                   "cr7-v1\tENSG000002\tprotein_coding\tPRIMARY\tallowed\t"
+                   "ENSG000002\tGENCODE\tENSG000003\n"
+                   "cr7-v1\tENSG000003\tprotein_coding\tPRIMARY\tallowed\t"
+                   "ENSG000003\tGENCODE\t.\n"
+                   "cr7-v1\tENSG000004\tprotein_coding\tPRIMARY\tallowed\t"
+                   "ENSG000004\tGENCODE\thost_outside_count_policy\n"
                    "pansc-strict-v1\tENSG000001\tprotein_coding\tFALLBACK\t"
-                   "profile-specific-fixture\tENSG000001\tCAT\t.\n");
+                   "profile-specific-fixture\tENSG000002\tCAT\t.\n"
+                   "pansc-strict-v1\tENSG000002\tprotein_coding\tFALLBACK\t"
+                   "profile-specific-fixture\tENSG000002\tGENCODE\tENSG000003\n"
+                   "pansc-strict-v1\tENSG000003\tprotein_coding\tPRIMARY\t"
+                   "allowed\tENSG000003\tGENCODE\t.\n"
+                   "pansc-strict-v1\tENSG000004\tprotein_coding\tFALLBACK\t"
+                   "profile-specific-fixture\tENSG000004\tGENCODE\t"
+                   "host_outside_count_policy\n");
         write_file(root / "files/profile_policy_receipt_cr7_v1.json", "{}\n");
         write_file(root / "files/profile_policy_receipt_pansc_strict_v1.json", "{}\n");
         write_file(root / "files/gene_metadata.tsv",
                    "count_gene\tgene_name\tgene_type\n"
-                   "ENSG000001\tFIXTURE1\tprotein_coding\n");
+                   "ENSG000001\tFIXTURE1\tprotein_coding\n"
+                   "ENSG000002\tFIXTURE2\tprotein_coding\n"
+                   "ENSG000003\tFIXTURE3\tprotein_coding\n"
+                   "ENSG000004\tFIXTURE4\tprotein_coding\n");
         write_file(root / "files/parent_category_ledger.tsv",
-                   "unique_parent\tcategories\nbody-parent\t.\nexon-parent\t.\n");
+                   "unique_parent\tcategories\nbody-parent\t.\ncopy-parent\t.\n"
+                   "exon-parent\t.\n");
         write_file(root / "files/parent_category_receipt.json",
                    "{\"schema\":\"panSC-parent-category-ledger-v3\"}\n");
         write_file(root / "files/strong_support_ledger.tsv",
                    "unique_parent\tcount_gene\traw_categories\teffective_categories\t"
                    "strong_support_tag\tprotected_primary_protein_host\texempted_categories\n"
                    "body-parent\tENSG000001\t.\t.\tfalse\tfalse\t.\n"
+                   "copy-parent\tENSG000005\t.\t.\tfalse\tfalse\t.\n"
                    "exon-parent\tENSG000001\t.\t.\tfalse\tfalse\t.\n");
         write_file(root / "files/projected_nested_policy.json",
                    "{\"schema\":\"panSC-projected-nested-host-policy-v1\"}\n");
         write_file(root / "files/corrected_annotation.gff3", "##gff-version 3\n");
 
+        // content_id is defined over the canonical serialization (keys sorted by
+        // code point, no whitespace), so the digest input below is written in that
+        // order while the on-disk manifest may use any order or whitespace.
         const std::string files =
             "{\"corrected_annotation\":" +
             file_record(root, "files/corrected_annotation.gff3", "annotation") +
-            ",\"profile_gene_policy\":" +
-            file_record(root, "files/profile_gene_policy.tsv",
-                        "panSC-count-profile-gene-policy-v1") +
-            ",\"profile_policy_receipt_cr7_v1\":" +
-            file_record(root, "files/profile_policy_receipt_cr7_v1.json",
-                        "panSC-count-cr-gene-policy-only-v2") +
-            ",\"profile_policy_receipt_pansc_strict_v1\":" +
-            file_record(root, "files/profile_policy_receipt_pansc_strict_v1.json",
-                        "panSC-projected-nested-host-policy-v1") +
             ",\"gene_metadata\":" +
             file_record(root, "files/gene_metadata.tsv", "panSC-gene-metadata-v1") +
             ",\"parent_category_ledger\":" +
@@ -118,26 +138,39 @@ int main() {
                         "panSC-parent-category-ledger-v3") +
             ",\"path_identity_ledger\":" +
             file_record(root, "files/path_identity_ledger.tsv", "panSC-path-identity-v1") +
+            ",\"profile_gene_policy\":" +
+            file_record(root, "files/profile_gene_policy.tsv",
+                        "panSC-count-profile-gene-policy-v1") +
+            ",\"profile_policy_receipt_cr7_v1\":" +
+            file_record(root, "files/profile_policy_receipt_cr7_v1.json",
+                        "panSC-count-cr-gene-policy-only-v2") +
+            ",\"profile_policy_receipt_pansc_strict_v1\":" +
+            file_record(root, "files/profile_policy_receipt_pansc_strict_v1.json",
+                        "panSC-projected-nested-host-policy-v1") +
             ",\"projected_nested_policy\":" +
             file_record(root, "files/projected_nested_policy.json",
                         "panSC-projected-nested-host-policy-v1") +
             ",\"strong_support_ledger\":" +
             file_record(root, "files/strong_support_ledger.tsv",
                         "panSC-strong-support-audit-v1") + "}";
-        const std::string content =
-            "{\"assignment_contract\":{\"nested_host_interpretation\":"
-            "\"relation-owner-loses\",\"profile_policy_source\":"
-            "\"profile-specific-certified-ledgers\",\"score_window_order\":"
-            "\"before-parent-category-filter\",\"transcript_filter_mode\":"
-            "\"parent-category-ledger-v3\"},\"files\":" + files +
-            ",\"validation\":{\"gene_policy_genes\":1,"
-            "\"parent_category_coverage\":\"exact\",\"path_identity_parents\":2,"
-            "\"strong_support_coverage\":\"exact\"}}";
+        const std::string assignment_contract =
+            "{\"nested_host_interpretation\":\"relation-owner-loses\","
+            "\"profile_policy_source\":\"profile-specific-certified-ledgers\","
+            "\"score_window_order\":\"before-parent-category-filter\","
+            "\"transcript_filter_mode\":\"parent-category-ledger-v3\"}";
+        const std::string validation =
+            "{\"gene_policy_genes\":4,\"parent_category_coverage\":\"exact\","
+            "\"path_identity_parents\":3,\"strong_support_coverage\":\"exact\"}";
+        const std::string content = "{\"assignment_contract\":" + assignment_contract +
+                                    ",\"files\":" + files + ",\"validation\":" +
+                                    validation + "}";
+        const std::string content_id = "sha256:" + digest_text(root, content);
+        // On disk, use a different key order and whitespace than the canonical form.
         const std::string manifest =
-            "{\"content\":" + content + ",\"content_id\":\"sha256:" +
-            digest_text(root, content) +
-            "\",\"created_by\":{\"program\":\"fixture\",\"version\":\"1\"},"
-            "\"schema\":\"panSC-count-facts-v1\"}\n";
+            "{\n  \"schema\": \"panSC-count-facts-v1\",\n  \"content_id\": \"" + content_id +
+            "\",\n  \"content\": {\"validation\": " + validation + ", \"files\": " + files +
+            ", \"assignment_contract\": " + assignment_contract +
+            "},\n  \"created_by\": {\"version\": \"1\", \"program\": \"fixture\"}\n}\n";
         write_file(root / "MANIFEST.json", manifest);
 
         const CountFactBundle bundle = load_count_fact_bundle(root);
@@ -158,12 +191,36 @@ int main() {
             ProfileId::pansc_strict_v1, "exon-parent", 100, EvidenceTier::exon,
             EvidenceStrand::forward);
         if (candidate.gene != "ENSG000001" ||
+            candidate.equivalence_gene != "ENSG000002" ||
+            candidate.nested_host != "ENSG000003" ||
             candidate.competition != CompetitionClass::primary ||
+            pansc_candidate.equivalence_gene != "ENSG000002" ||
+            pansc_candidate.nested_host != "ENSG000003" ||
             pansc_candidate.competition != CompetitionClass::fallback ||
             candidate.gene_types != std::vector<std::string>{"protein_coding"} ||
             catalog.gene("ENSG000001").gene_name !=
                 std::optional<std::string>{"FIXTURE1"}) {
             throw std::runtime_error("catalog candidate differs from fixture facts");
+        }
+        const AssignmentCandidate lumped_copy = catalog.candidate(
+            ProfileId::cr7_v1, "copy-parent", 100, EvidenceTier::exon,
+            EvidenceStrand::forward);
+        const EffectiveProfile separate_profile = effective_profile(
+            ProfileId::pansc_strict_v1,
+            {parse_profile_override(
+                "pansc-strict-v1:novel-paralog-policy=separate")});
+        const AssignmentCandidate separated_copy = catalog.candidate(
+            separate_profile, "copy-parent", 100, EvidenceTier::exon,
+            EvidenceStrand::forward);
+        if (lumped_copy.gene != "ENSG000005" ||
+            lumped_copy.equivalence_gene != "ENSG000005" ||
+            lumped_copy.competition != CompetitionClass::unknown ||
+            separated_copy.gene != "ENSG000005_2" ||
+            separated_copy.equivalence_gene != "ENSG000005_2" ||
+            separated_copy.competition != CompetitionClass::unknown ||
+            !separated_copy.gene_types.empty()) {
+            throw std::runtime_error(
+                "novel-copy catalog policy differs from frozen lump/separate semantics");
         }
 
         CountRuntimeOptions runtime_options;

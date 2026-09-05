@@ -83,7 +83,19 @@ void apply_novel_paralog_policy(std::vector<AssignmentCandidate>& candidates,
     } else if (policy == NovelParalogPolicy::lump) {
         for (AssignmentCandidate& candidate : candidates) {
             if (candidate.novel_paralog && !candidate.novel_origin_gene.empty()) {
+                // Gene competition regroups by equivalence_gene, so the lumped
+                // identity must also become the equivalence key; otherwise a
+                // per-paralog equivalence row silently restores the paralog.
                 candidate.gene = candidate.novel_origin_gene;
+                candidate.equivalence_gene = candidate.novel_origin_gene;
+            }
+        }
+    } else if (policy == NovelParalogPolicy::separate) {
+        for (AssignmentCandidate& candidate : candidates) {
+            if (candidate.novel_paralog) {
+                // A bundle may map a paralog's equivalence to its origin gene;
+                // separate keeps the paralog distinct under its own identity.
+                candidate.equivalence_gene = candidate.gene;
             }
         }
     }
@@ -117,7 +129,16 @@ RankSelection select_rank(const std::vector<AssignmentCandidate>& candidates,
             }
         }
         result.tier = result.candidates.front().tier;
-        result.strand = result.candidates.front().strand;
+        // Candidate order follows evidence-set iteration, which the assignment
+        // cache key deliberately ignores. Derive the winning strand from the
+        // selected strand set rather than from whichever candidate is first:
+        // library sense wins whenever any best-tier candidate carries it.
+        result.strand = std::any_of(result.candidates.begin(), result.candidates.end(),
+                                    [](const AssignmentCandidate& candidate) {
+                                        return candidate.strand == EvidenceStrand::forward;
+                                    })
+                            ? EvidenceStrand::forward
+                            : EvidenceStrand::reverse;
         return result;
     }
 
@@ -148,10 +169,19 @@ RankSelection select_rank(const std::vector<AssignmentCandidate>& candidates,
 
 struct EquivalenceAggregate {
     AssignmentCandidate representative;
+    std::string representative_gene;
+    std::uint32_t representative_support = 0;
     std::set<CompetitionClass> competition_classes;
     std::set<std::string> gene_types;
     std::set<std::string> body_support_units;
 };
+
+// Production candidates carry sample units; compact fixtures carry the count.
+std::uint32_t candidate_body_support(const AssignmentCandidate& candidate) {
+    return candidate.body_support_units.empty()
+               ? candidate.body_sample_support
+               : static_cast<std::uint32_t>(candidate.body_support_units.size());
+}
 
 std::vector<AssignmentCandidate>
 apply_gene_competition(std::vector<AssignmentCandidate> candidates,
@@ -165,12 +195,19 @@ apply_gene_competition(std::vector<AssignmentCandidate> candidates,
         if (key != candidate.gene) {
             reasons |= reason_equivalence_collapsed;
         }
+        const std::uint32_t support = candidate_body_support(candidate);
         auto [found, inserted] = groups.try_emplace(
-            key, EquivalenceAggregate{candidate, {}, {}, {}});
+            key, EquivalenceAggregate{candidate, candidate.gene, support, {}, {}, {}});
         EquivalenceAggregate& aggregate = found->second;
-        if (!inserted && candidate.body_sample_support >
-                             aggregate.representative.body_sample_support) {
+        // The representative supplies every per-gene field that is not unioned
+        // below (nested_host in particular). Choose it by body support, then by
+        // gene identity, so the choice does not depend on candidate order.
+        if (!inserted && (support > aggregate.representative_support ||
+                          (support == aggregate.representative_support &&
+                           candidate.gene < aggregate.representative_gene))) {
             aggregate.representative = candidate;
+            aggregate.representative_gene = candidate.gene;
+            aggregate.representative_support = support;
         }
         aggregate.representative.gene = key;
         aggregate.competition_classes.insert(candidate.competition);
@@ -394,6 +431,14 @@ AssignmentResult resolve_assignment(const EffectiveProfile& effective,
         std::vector<AssignmentCandidate> retry = filter_categories(
             unfiltered, policy, result.reasons,
             policy.post_resolution_fallback_categories);
+        // The frozen Python retry preserves the profile's all-tagged
+        // last-resort contract. In particular, an excluded antisense winner
+        // must remain visible as a reverse winner so exact-strand Gene
+        // fallback can replace it with a sense G-row explanation.
+        if (retry.empty() && policy.tagged_last_resort && !unfiltered.empty()) {
+            retry = unfiltered;
+            result.reasons |= reason_tagged_last_resort;
+        }
         RankSelection retried = select_rank(retry, policy.strand);
         remove_missing_identity(retried.candidates);
         selected = std::move(retried);

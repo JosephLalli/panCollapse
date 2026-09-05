@@ -945,6 +945,19 @@ projection, or a custom index.
   executable or `libpython` enters the image. Full PanCollapse CTest passes 150/150; the separate
   panSC annotation-fact compiler passes 9/9 pytest cases; `git diff --check` and release-script
   syntax checks pass.
+- 2026-09-04: Applied the fifteen code-review findings against the v0.10.0 native count commit
+  `88d963f` (D078). The runtime MultiGeneUMI_CR raw guard now matches the frozen rule for
+  sequences relabeled inside one gene, `content_id` has a documented canonical form the loader
+  implements, novel-paralog lump/separate are effective, strand and representative selection
+  are evidence-order independent, and `count` parses identity, folds case, canonicalizes
+  `--out-dir` and profile selectors, and rejects convert-only options like `convert` would.
+  The bundle loader validates equivalence and paralog-origin closure, spill cleanup is RAII, and
+  the CLI thread tests force the worker pool (new
+  `direct_count_threads_4_spool` covers the spool-only ordered path). 151/151 CTests pass;
+  every CLI-level finding was re-run empirically on the ex50 fixture. The D076 scientific gates
+  (one-million-read subset, chr20, chr21, joint chr20-22) must be rerun before release because
+  the raw-guard correction changes molecule tables wherever a UMI collapses away in a gene with
+  more raw reads.
 - 2026-09-04: The large scientific release gate is intentionally still pending, not silently
   inferred from fixtures: frozen Python differential on the canonical one-million-read subset,
   full chr20 and chr21, then the immutable joint chr20–22 GAMP without remapping. Run `/reload`

@@ -408,6 +408,7 @@ Options parse_options(int argc, char** argv) {
     }
 
     Options options;
+    std::string convert_only_option;
     options.direct_count = std::string(argv[1]) == "count";
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -454,6 +455,7 @@ Options parse_options(int argc, char** argv) {
             }
         } else if (arg == "--strand") {
             const std::string value = require_value("--strand");
+            convert_only_option = "--strand";
             if (value == "both") {
                 options.strand = StrandFilter::Both;
             } else if (value == "forward") {
@@ -465,6 +467,7 @@ Options parse_options(int argc, char** argv) {
             }
         } else if (arg == "--count-mode") {
             const std::string value = require_value("--count-mode");
+            convert_only_option = "--count-mode";
             if (value == "score") {
                 options.count_mode = pathtally::CountMode::Score;
             } else if (value == "gene") {
@@ -484,6 +487,7 @@ Options parse_options(int argc, char** argv) {
             options.bam_out = require_value("--bam-out");
         } else if (arg == "--bam-multigene") {
             const std::string value = require_value("--bam-multigene");
+            convert_only_option = "--bam-multigene";
             if (value == "omit") {
                 options.bam_multigene = BamMultiGenePolicy::Omit;
             } else if (value == "first") {
@@ -499,6 +503,7 @@ Options parse_options(int argc, char** argv) {
             options.threads = parse_size_option("--threads", require_value("--threads"));
         } else if (arg == "--no-ex50-score-window") {
             options.exact_ex50_score_window_enabled = false;
+            convert_only_option = "--no-ex50-score-window";
         } else if (arg == "--compact-exact-count-bam") {
             const std::string value = require_value("--compact-exact-count-bam");
             if (value == "forward") {
@@ -573,6 +578,11 @@ Options parse_options(int argc, char** argv) {
                 "panCollapse count obtains identity/policy from --count-bundle and cannot use "
                 "legacy, BAM, debug, compact-BAM, or external allowlist options");
         }
+        if (!convert_only_option.empty()) {
+            throw std::runtime_error(
+                "panCollapse count does not accept " + convert_only_option +
+                "; counting follows the frozen profile policy and --rad-out is unfiltered");
+        }
         if (!options.read_assignments_out.empty()) {
             const std::filesystem::path normalized =
                 options.read_assignments_out.lexically_normal();
@@ -599,6 +609,13 @@ Options parse_options(int argc, char** argv) {
         }
         if (options.requested_profiles.empty()) {
             throw std::runtime_error("panCollapse count requires at least one profile");
+        }
+        // Canonicalize selectors before checking for repeats so an alias such as
+        // "cr7" cannot slip past as a second copy of cr7-v1.
+        for (std::string& requested : options.requested_profiles) {
+            requested = pancollapse::direct_count::profile(
+                            pancollapse::direct_count::parse_profile_id(requested))
+                            .id_string;
         }
         std::sort(options.requested_profiles.begin(), options.requested_profiles.end());
         if (std::adjacent_find(options.requested_profiles.begin(),
@@ -639,6 +656,13 @@ Options parse_options(int argc, char** argv) {
         }
         if (options.count_memory_budget < (1ULL << 20)) {
             throw std::runtime_error("--count-memory-budget must be at least 1MiB");
+        }
+        // Canonicalize the destination so "counts", "./counts", and "counts/" all
+        // derive the same parent, name, and staging sibling; the atomic publish
+        // compares normalized parent paths byte for byte.
+        options.out_dir = std::filesystem::absolute(options.out_dir).lexically_normal();
+        if (!options.out_dir.has_filename()) {
+            options.out_dir = options.out_dir.parent_path();
         }
         options.count_mode = pathtally::CountMode::GeneFullEx50pAS;
         options.bam_multigene = BamMultiGenePolicy::All;
@@ -1056,8 +1080,7 @@ std::string molecule_status_counter(MoleculeParseStatus status) {
 }
 
 MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
-                                      size_t umi_length,
-                                      bool ignore_malformed_quality = false) {
+                                      size_t umi_length) {
     // New RNA carry-along names end in _cy<hex(CY)>_uy<hex(UY)>. Hex keeps arbitrary printable
     // FASTQ quality characters out of the QNAME delimiter/whitespace grammar. Legacy names with
     // neither quality, and the transitional CY-only form, remain accepted.
@@ -1073,11 +1096,7 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
         }
         const std::string encoded = molecule_name.substr(quality_sep + 1 + prefix.size());
         if (encoded.size() != expected_length * 2) {
-            if (ignore_malformed_quality) {
-                decoded.clear();
-                molecule_name.resize(quality_sep);
-                return true;
-            }
+            molecule_name.resize(quality_sep);
             throw std::invalid_argument("hex-encoded raw " + label +
                                         " quality length does not match configured length");
         }
@@ -1093,22 +1112,14 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
             const int hi = hex_value(encoded[i]);
             const int lo = hex_value(encoded[i + 1]);
             if (hi < 0 || lo < 0) {
-                if (ignore_malformed_quality) {
-                    decoded.clear();
-                    molecule_name.resize(quality_sep);
-                    return true;
-                }
+                molecule_name.resize(quality_sep);
                 throw std::invalid_argument("raw " + label +
                                             " quality contains non-hexadecimal text");
             }
             const char quality = static_cast<char>((hi << 4) | lo);
             const unsigned char printable = static_cast<unsigned char>(quality);
             if (printable < 33 || printable > 126) {
-                if (ignore_malformed_quality) {
-                    decoded.clear();
-                    molecule_name.resize(quality_sep);
-                    return true;
-                }
+                molecule_name.resize(quality_sep);
                 throw std::invalid_argument("decoded raw " + label +
                                             " quality is not printable FASTQ quality text");
             }
@@ -1117,19 +1128,28 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
         molecule_name.resize(quality_sep);
         return true;
     };
+    // Failure results still carry the read-name prefix when the name has the
+    // <prefix>_<CB>_<UMI> shape, so diagnostics can report one QNAME grammar.
+    auto failure = [&](MoleculeParseStatus status, std::string message) {
+        MoleculeId partial;
+        const size_t last_sep = molecule_name.rfind('_');
+        if (last_sep != std::string::npos && last_sep > 0) {
+            const size_t prior_sep = molecule_name.rfind('_', last_sep - 1);
+            if (prior_sep != std::string::npos) {
+                partial.original_name = molecule_name.substr(0, prior_sep);
+            }
+        }
+        return MoleculeParseResult{status, std::move(partial), std::move(message)};
+    };
     try {
         const bool has_uy = decode_quality_suffix("uy", umi_length, umi_quality, "UMI");
         const bool has_cy = decode_quality_suffix("cy", cb_length, barcode_quality, "barcode");
         if (has_uy && !has_cy) {
-            if (ignore_malformed_quality) {
-                umi_quality.clear();
-            } else {
-            return {MoleculeParseStatus::Malformed, {},
-                    "raw UMI quality suffix requires the preceding barcode quality suffix"};
-            }
+            return failure(MoleculeParseStatus::Malformed,
+                           "raw UMI quality suffix requires the preceding barcode quality suffix");
         }
     } catch (const std::invalid_argument& error) {
-        return {MoleculeParseStatus::Malformed, {}, error.what()};
+        return failure(MoleculeParseStatus::Malformed, error.what());
     }
 
     const size_t umi_sep = molecule_name.rfind('_');
@@ -1137,33 +1157,33 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
         return {MoleculeParseStatus::Missing, {}, "GAMP name does not contain raw UMI"};
     }
     if (umi_sep == 0 || umi_sep + 1 == molecule_name.size()) {
-        return {MoleculeParseStatus::Missing, {}, "GAMP name has an empty raw CB or UMI field"};
+        return failure(MoleculeParseStatus::Missing, "GAMP name has an empty raw CB or UMI field");
     }
     const size_t cb_sep = molecule_name.rfind('_', umi_sep - 1);
     if (cb_sep == std::string::npos) {
-        return {MoleculeParseStatus::Missing, {}, "GAMP name does not contain raw CB"};
+        return failure(MoleculeParseStatus::Missing, "GAMP name does not contain raw CB");
     }
 
     MoleculeId id{molecule_name.substr(0, cb_sep),
                   molecule_name.substr(cb_sep + 1, umi_sep - cb_sep - 1),
                   molecule_name.substr(umi_sep + 1), barcode_quality, umi_quality};
     if (id.barcode.empty() || id.umi.empty()) {
-        return {MoleculeParseStatus::Missing, {}, "GAMP name has an empty raw CB or UMI field"};
+        return {MoleculeParseStatus::Missing, MoleculeId{id.original_name, {}, {}, {}, {}}, "GAMP name has an empty raw CB or UMI field"};
     }
     if (id.original_name.empty()) {
-        return {MoleculeParseStatus::Malformed, {}, "GAMP name has no original read-name prefix"};
+        return {MoleculeParseStatus::Malformed, MoleculeId{id.original_name, {}, {}, {}, {}}, "GAMP name has no original read-name prefix"};
     }
     if (id.barcode.size() != cb_length || id.umi.size() != umi_length) {
-        return {MoleculeParseStatus::Malformed, {}, "raw CB/UMI lengths do not match configured lengths"};
+        return {MoleculeParseStatus::Malformed, MoleculeId{id.original_name, {}, {}, {}, {}}, "raw CB/UMI lengths do not match configured lengths"};
     }
     for (const char base : id.barcode) {
         if (!is_supported_molecule_base(base)) {
-            return {MoleculeParseStatus::Unsupported, {}, "raw CB contains unsupported base"};
+            return {MoleculeParseStatus::Unsupported, MoleculeId{id.original_name, {}, {}, {}, {}}, "raw CB contains unsupported base"};
         }
     }
     for (const char base : id.umi) {
         if (!is_supported_molecule_base(base)) {
-            return {MoleculeParseStatus::Unsupported, {}, "raw UMI contains unsupported base"};
+            return {MoleculeParseStatus::Unsupported, MoleculeId{id.original_name, {}, {}, {}, {}}, "raw UMI contains unsupported base"};
         }
     }
     return {MoleculeParseStatus::Ok, id, {}};
@@ -4182,13 +4202,25 @@ int run_convert(int argc, char** argv) {
         ++input_read_groups;
         const MoleculeParseResult molecule =
             parse_molecule_id(alignment.name(), options.raw_cb_length,
-                              options.raw_umi_length, options.direct_count);
+                              options.raw_umi_length);
         if (molecule.status == MoleculeParseStatus::Ok) {
             current_group.molecule = molecule.id;
+            if (options.direct_count) {
+                // parse_molecule_id accepts either case and the RAD path folds it;
+                // the count runtime packs uppercase bases only.
+                for (std::string* field :
+                     {&current_group.molecule.barcode, &current_group.molecule.umi}) {
+                    std::transform(field->begin(), field->end(), field->begin(),
+                                   [](unsigned char base) {
+                                       return static_cast<char>(std::toupper(base));
+                                   });
+                }
+            }
         } else {
             current_group.skip_for_molecule_identity = true;
             current_group.molecule_status = molecule.status;
             current_group.molecule_message = molecule.message;
+            current_group.molecule.original_name = molecule.id.original_name;
             if (options.molecule_identity_failures == MoleculeIdentityFailurePolicy::Fail) {
                 throw std::runtime_error(molecule_status_counter(molecule.status) + "=1: " + molecule.message);
             }
@@ -4201,8 +4233,12 @@ int run_convert(int argc, char** argv) {
     // surface. Keep toy/small-reference conversions serial even when a larger ceiling was
     // requested; chromosome/pangenome ledgers exceed this threshold by orders of magnitude.
     constexpr size_t kMinExactModelsForWorkerPool = 32;
+    // PANCOLLAPSE_FORCE_WORKER_POOL lets the CLI tests drive the multi-worker path on
+    // a fixture whose exact surface would otherwise be processed serially.
+    const bool force_worker_pool = std::getenv("PANCOLLAPSE_FORCE_WORKER_POOL") != nullptr;
     const size_t processing_threads =
-        exact_ex50 && exact_ex50_models.size() < kMinExactModelsForWorkerPool
+        exact_ex50 && !force_worker_pool &&
+                exact_ex50_models.size() < kMinExactModelsForWorkerPool
             ? 1 : options.threads;
     if (processing_threads != options.threads) {
         std::cerr << "panCollapse: processing workers: requested=" << options.threads
@@ -4302,7 +4338,10 @@ int run_convert(int argc, char** argv) {
                 for (size_t profile_index = 0;
                      profile_index < options.count_profiles.size(); ++profile_index) {
                     diagnostics_spool->append(
-                        {ordinal, current_group.name,
+                        {ordinal,
+                         current_group.molecule.original_name.empty()
+                             ? current_group.name
+                             : current_group.molecule.original_name,
                          static_cast<std::uint32_t>(profile_index), std::nullopt,
                          std::nullopt, std::nullopt, "invalid_raw_molecule",
                          std::nullopt, std::nullopt, 0});
@@ -4667,8 +4706,7 @@ int run_convert(int argc, char** argv) {
                          profile_index < selected_profiles.size(); ++profile_index) {
                         profile_assignment_facts[profile_index].exact.push_back(
                             count_facts->candidate(
-                                pancollapse::direct_count::profile_policy_source(
-                                    selected_profiles[profile_index]),
+                                selected_profiles[profile_index],
                                 *evidence.parent, evidence.score, tier,
                                 evidence.direction == 'F' ? EvidenceStrand::forward
                                                           : EvidenceStrand::reverse));
@@ -4697,8 +4735,7 @@ int run_convert(int argc, char** argv) {
                              profile_index < selected_profiles.size(); ++profile_index) {
                             profile_assignment_facts[profile_index]
                                 .gene_fallback.push_back(count_facts->candidate(
-                                    pancollapse::direct_count::profile_policy_source(
-                                        selected_profiles[profile_index]),
+                                    selected_profiles[profile_index],
                                     *parent, evidence->second.score,
                                     EvidenceTier::gene, direction));
                         }
