@@ -252,7 +252,7 @@ docker run --rm \
 ```
 
 It also reads a GAMP stream on stdin (`--gamp -`). To build the image locally after compiling
-the binary, run [`scripts/build-docker-image.sh`](scripts/build-docker-image.sh), which stages
+the binary, run [`scripts/tooling/build-docker-image.sh`](scripts/tooling/build-docker-image.sh), which stages
 the binary, Arrow/Parquet/Zstandard closure, and tags `josephlalli/pancollapse:v0.10.0`. The
 release gate refuses a missing native-output library or any `libpython` runtime dependency;
 Python is not required in the image.

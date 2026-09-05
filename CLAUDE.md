@@ -28,8 +28,8 @@ an index, not the full manual; read detailed files only when working in their ar
 - `/session-start`
 - `/plan-next-increment`
 - `/evaluate-gate`
-- `./scripts/install-git-hooks.sh`
-- `./scripts/verify-workspace.sh`
+- `./scripts/tooling/install-git-hooks.sh`
+- `./scripts/tooling/verify-workspace.sh`
 
 ## Read on demand
 

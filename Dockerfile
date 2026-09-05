@@ -8,7 +8,7 @@
 # and launches it through the bundled dynamic loader. The binary therefore does
 # not depend on the base image's C/C++ runtime.
 #
-# The build context (./bin and ./lib) is assembled by scripts/build-docker-image.sh,
+# The build context (./bin and ./lib) is assembled by scripts/tooling/build-docker-image.sh,
 # which resolves the closure with ldd from the freshly built binary. Do not run
 # `docker build` against the repository root directly; use that script.
 

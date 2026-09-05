@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 dry_run=0
 if [[ "${1:-}" == "--dry-run" ]]; then
   dry_run=1
@@ -17,10 +17,10 @@ paths=(
   PROGRESS.md
   TASKS.md
   .githooks
-  scripts/install-git-hooks.sh
-  scripts/provenance-guard.sh
-  scripts/remove-agent-workspace.sh
-  scripts/verify-workspace.sh
+  scripts/tooling/install-git-hooks.sh
+  scripts/tooling/provenance-guard.sh
+  scripts/tooling/remove-agent-workspace.sh
+  scripts/tooling/verify-workspace.sh
 )
 
 for rel in "${paths[@]}"; do
