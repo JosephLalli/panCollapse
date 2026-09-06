@@ -22,6 +22,7 @@ an index, not the full manual; read detailed files only when working in their ar
 @.claude/rules/languages.md
 @.claude/rules/scope.md
 @.claude/rules/provenance.md
+@.claude/rules/annotation-identifiers.md
 
 ## Common commands
 
