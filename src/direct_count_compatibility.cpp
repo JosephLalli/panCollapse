@@ -1838,12 +1838,19 @@ CompatibilityWriteReceipt CompatibilityBundleWriter::finalize() {
     canonical.molecule_status_counts = impl_->molecule_status_counts;
     canonical.fact_sets.reserve(impl_->fact_ids.size());
     std::vector<std::uint64_t> remap(impl_->fact_ids.size());
-    for (const auto& [facts, provisional_id] : impl_->fact_ids) {
-        if (provisional_id >= remap.size()) {
+    // Drain rather than copy. fact_ids owns every fact set as a map key, and copying it
+    // duplicated the bundle's dominant payload while the map stayed live: tens of millions
+    // of strings and their vectors, tens of gigabytes on a million-read bundle, allocated
+    // at the very end of an expensive build. extract() hands back a node whose key() is a
+    // non-const reference, so the fact set moves. Ascending map order is unchanged, so the
+    // emitted order and every downstream digest are identical.
+    while (!impl_->fact_ids.empty()) {
+        auto node = impl_->fact_ids.extract(impl_->fact_ids.begin());
+        if (node.mapped() >= remap.size()) {
             fail("compatibility provisional fact-set ID is invalid");
         }
-        remap[provisional_id] = canonical.fact_sets.size();
-        canonical.fact_sets.push_back(facts);
+        remap[node.mapped()] = canonical.fact_sets.size();
+        canonical.fact_sets.push_back(std::move(node.key()));
     }
     const std::map<std::string, std::string> logical = logical_hashes(canonical);
 
@@ -1881,6 +1888,12 @@ CompatibilityWriteReceipt CompatibilityBundleWriter::finalize() {
             if (!manifest_output) fail("cannot close compatibility manifest output");
         }
         receipt.manifest_sha256 = sha256_file(impl_->staging / "manifest.json");
+
+        // canonical is dead after build_manifest_content above, and the staged reader is
+        // about to decode the whole fact index again. Release the payload first so the two
+        // are never resident together.
+        canonical.fact_sets.clear();
+        canonical.fact_sets.shrink_to_fit();
 
         CompatibilityBundleReader staged(impl_->staging);
         staged.for_each_read_batch([](std::span<const ReadCompatibilityRow>) {});

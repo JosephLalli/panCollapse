@@ -31,6 +31,11 @@ void require_zstd(size_t result, std::string_view operation) {
     }
 }
 
+// Spill streaming buffers. Sized to one Zstd block rather than a megabyte, and matched by
+// the encoder's window above, because merge_runs holds every run's reader live at once.
+constexpr int kSpillWindowLog = 17;
+constexpr std::size_t kSpillStreamBufferBytes = std::size_t{1} << kSpillWindowLog;
+
 class ZstdOutput {
   public:
     explicit ZstdOutput(const std::filesystem::path& path) : output_(path, std::ios::binary) {
@@ -45,6 +50,13 @@ class ZstdOutput {
                      "cannot set ZSTD compression level");
         require_zstd(ZSTD_CCtx_setParameter(context_, ZSTD_c_checksumFlag, 1),
                      "cannot enable ZSTD checksum");
+        // Bound the window the decoder must allocate. merge_runs opens one reader per spill
+        // run at once, and a decompression context sized for level 3's default 2 MiB window
+        // grows to about 2.5 MiB on first use, so the merge paid several MiB per run no
+        // matter how small --count-memory-budget was. Spill runs are transient intermediates,
+        // so a smaller window costs only spill bytes and never reaches an output.
+        require_zstd(ZSTD_CCtx_setParameter(context_, ZSTD_c_windowLog, kSpillWindowLog),
+                     "cannot set ZSTD window log");
     }
 
     ZstdOutput(const ZstdOutput&) = delete;
@@ -88,7 +100,7 @@ class ZstdOutput {
   private:
     std::ofstream output_;
     ZSTD_CCtx* context_ = nullptr;
-    std::array<char, 1 << 20> buffer_{};
+    std::array<char, kSpillStreamBufferBytes> buffer_{};
     bool finished_ = false;
 };
 
@@ -208,8 +220,8 @@ class ZstdInput {
 
     std::ifstream input_;
     ZSTD_DCtx* context_ = nullptr;
-    std::array<char, 1 << 20> encoded_{};
-    std::array<char, 1 << 20> decoded_{};
+    std::array<char, kSpillStreamBufferBytes> encoded_{};
+    std::array<char, kSpillStreamBufferBytes> decoded_{};
     size_t encoded_at_ = 0;
     size_t encoded_size_ = 0;
     size_t decoded_at_ = 0;

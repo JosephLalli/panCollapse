@@ -2190,6 +2190,65 @@ a biological question about the t2g rather than an identifier bug, and it is lef
 
 **Acceptance:** 165/165 CTests pass, unchanged, since no test exercises these scripts.
 
+### D084 — Stop duplicating the fact index, bound the spill merge, and resolve child rows by Parent
+
+**Decision source:** Adversarial review plus independent measurement, 2026-09-11.
+
+**Decision, four changes.**
+
+`CompatibilityBundleWriter::finalize` drains `fact_ids` into `canonical.fact_sets` with
+`extract()` and a move instead of copying each map key, and releases `canonical.fact_sets` before
+constructing the staged reader. `fact_ids` owns every fact set as a map key; copying it duplicated
+the bundle's dominant payload while the map stayed live, and the staged reader then decoded a
+third copy from Parquet. Ascending map order is unchanged, so emitted order and every digest are
+identical by construction.
+
+`ZstdOutput` sets `ZSTD_c_windowLog` to 17 and the three spill stream buffers are one window
+rather than one mebibyte each. `merge_runs` opens one reader per spill run before consuming any,
+and a context sized for level 3's default 2 MiB window grows to about 2.5 MiB on first decode, so
+the merge paid several MiB per run however small `--count-memory-budget` was. Spill runs are
+transient intermediates, so a smaller window costs spill bytes and never reaches an output.
+
+`filter_cellranger_annotation.py` `filter_annotation` resolves a child row's gene through its
+transcript `Parent` before falling back to the bare `gene_id`. `allowed_genes` holds qualified
+identities after D083, so consulting the bare `gene_id` first compared across namespaces; because
+it is non-null the correct fallback never ran.
+
+`filter_cellranger_annotation.py` `parse_attributes` accepts unquoted GTF attribute values.
+GENCODE writes `level 2;` and `exon_number 1;` bare, and the parser refused them.
+
+**Measurement.** One in-memory fact index for the accepted million-read bundle is about 25 GiB,
+triangulated three ways that agree within 5 percent: a byte model over the actual struct layouts
+and measured string-length profile gives 24.9 GiB; a 1/50 scale model of the handoff measured
++99.4 percent RSS across the copy loop, extrapolating to 24.4 GiB; and D082, which removed one
+whole-index copy on the reader side of the same bundle, moved peak RSS by 25.5 GiB. The scale
+model puts finalize at three simultaneous copies before this change and one after, so roughly
+49 GiB of the recorded 203.5 GiB producer peak was redundant. For the spill merge, a scratch
+program at a 1 MiB budget with one million distinct keys measured 87 file descriptors and
+254,588 KiB peak, against 220 MB for the same job with the budget raised high enough never to
+spill: the merge handed back more memory than the budget saved. Bounding the window measured
+peak 254,588 to 103,816 KiB, 2.45x, with identical output and 9.5 percent more spill bytes.
+
+**Not done.** A bounded fan-in multi-pass merge would bound descriptors and buffers rather than
+lowering a constant, and it was prototyped at K=3 and shown to produce byte-identical output, but
+it needs the run row count moved out of the compressed frame to be written properly. File
+descriptors are not reachable on this host, where both limits are 1048576; at a stock 1024 limit
+they are, at about 12.4 million distinct keys on a 1 MiB budget.
+
+**Correction to D083.** Its evidence line "on a reference GTF both filters are byte-identical
+before and after" was measured on a synthetic GTF whose attribute values were all quoted. The
+parser could not read a real GENCODE GTF at all, so the no-op constraint had never been exercised
+against one. It now is: the pre-fix script dies on the first gene row of GENCODE v47 with
+`malformed GTF attribute 'level 2'`, the fixed script processes 199,995 rows and yields 2,494
+allowlisted genes, and output on the quoted-only input is unchanged.
+
+**Acceptance:** 165/165 CTests pass, including the fourteen that exercise the spill path at a
+1 MiB budget. Replaying the accepted bundle reproduces its receipt: `summary.tsv` and all five
+Parquet tables, including `read_assignments.parquet`, are byte-identical, at 221.01 s and
+37,351,368 KiB against the A/B optimized mean of 220.62 s and 37,335,760 KiB. The writer-side
+saving is not yet confirmed end to end, because that needs a producer run with
+`--compatibility-out`.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.

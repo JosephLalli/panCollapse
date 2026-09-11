@@ -123,7 +123,10 @@ def parse_attributes(text: str) -> dict[str, list[str]]:
             key, value = raw.split("=", 1)
             value = urllib.parse.unquote(value.strip())
         else:
-            match = re.fullmatch(r'(\S+)\s+"(.*)"', raw)
+            # GENCODE GTF quotes most values but writes numeric ones bare, as in
+            # `level 2;` and `exon_number 1;`. Accept both rather than refusing the
+            # first gene row of a real reference.
+            match = re.fullmatch(r'(\S+)\s+"(.*)"', raw) or re.fullmatch(r"(\S+)\s+(\S+)", raw)
             if match is None:
                 raise ValueError(f"malformed GTF attribute {raw!r}")
             key, value = match.groups()
@@ -314,15 +317,19 @@ def filter_annotation(
             if len(fields) != 9:
                 raise ValueError(f"{source}:{line_number}: expected 9 columns")
             attrs = parse_attributes(fields[8])
-            gene = local_gene_for(fields[2], attrs)
+            # allowed_genes is built from gene ID and transcript Parent, both qualified.
+            # An exon or other child row carries only a bare, assembly-local gene_id, so
+            # resolving it through its own transcript is what puts it in the same
+            # namespace; falling back to gene_id first would compare across namespaces
+            # and drop every child of a retained gene.
+            genes = {
+                transcript_gene[transcript]
+                for transcript in transcript_ids(fields[2], attrs)
+                if transcript in transcript_gene
+            }
+            gene = next(iter(genes)) if len(genes) == 1 else None
             if gene is None:
-                genes = {
-                    transcript_gene[transcript]
-                    for transcript in transcript_ids(fields[2], attrs)
-                    if transcript in transcript_gene
-                }
-                if len(genes) == 1:
-                    gene = next(iter(genes))
+                gene = local_gene_for(fields[2], attrs)
             if gene is None:
                 unresolved += 1
                 dropped += 1

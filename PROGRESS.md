@@ -1060,4 +1060,16 @@ projection, or a custom index.
   haplotype pair to the other haplotype's `readthrough_transcript` tag. Left open: the body
   gene in `gff3_to_genebody.py` still comes from bare `gene_id`, which is a t2g question rather
   than an identifier bug.
+- 2026-09-11: Acted on an adversarial review of the branch (D084). Confirmed and fixed the
+  writer-side duplication of the whole fact index, bounded the spill decompression window and
+  buffers, and repaired two defects in `filter_cellranger_annotation.py`: child rows were being
+  resolved in the bare `gene_id` namespace while the allowlist held qualified identities, which
+  dropped every exon of a retained gene (a regression introduced by D083), and the GTF parser
+  rejected GENCODE's unquoted attribute values so no real reference GTF could be read. One fact
+  index is about 25 GiB by three agreeing estimates, and finalize held three copies; the spill
+  merge measured 254,588 KiB peak at a 1 MiB budget against 220 MB for the same job that never
+  spilled, improving 2.45x once the window was bounded. 165/165 CTests pass and the accepted
+  receipt reproduces byte for byte at 221.01 s and 37,351,368 KiB. The writer saving still needs
+  a producer run to confirm end to end. A bounded fan-in merge was prototyped and shown
+  output-identical but not adopted; it needs the run row count moved out of the compressed frame.
 
