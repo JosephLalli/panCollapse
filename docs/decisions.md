@@ -2132,6 +2132,19 @@ than in the one before it under heavier load, so the saving is a lower bound.
 including `read_assignments.parquet`, are byte-identical, and `manifest.json` differs only in
 provenance and timing fields. 165/165 CTests pass.
 
+**Measurement update, same day:** the figures above compare single runs taken under different
+machine states, so they were re-measured as an interleaved A/B against the pre-optimization
+commit `02f717e` built in its own worktree, alternating arms with two repetitions each and
+re-verifying the receipt on every run. Baseline wall was 834.59 s and 729.33 s, mean 781.96 s,
+spread 105.26 s. Optimized wall was 246.71 s and 194.53 s, mean 220.62 s, spread 52.18 s. The
+speedup is 3.544x on means, 3.170x restricted to the three runs sharing a load of 28 to 31, and
+2.956x on the most conservative pairing of the fastest baseline against the slowest optimized
+run. The gap between the fastest baseline and the slowest optimized run is 482.62 s, 4.6 times
+the largest within-arm spread, so the difference clears the noise floor. Peak RSS was 63,039,050
+KiB against 37,335,760 KiB, a reduction of 25,703,290 KiB or 40.8 percent, against a largest
+within-arm RSS spread of 35,888 KiB. All four runs reproduced the accepted receipt. The single-run
+3.09x quoted above is superseded by these figures; take 2.956x as the defensible floor.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.

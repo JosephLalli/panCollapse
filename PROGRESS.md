@@ -1038,4 +1038,16 @@ projection, or a custom index.
   disagreement. Remaining phases are the Parquet fact decodes at roughly 37 s and 29 s under
   load, the count fact catalog and identity ledger reads at roughly 29 s each, and the
   streaming read loop at 14 s.
+- 2026-09-11: Confirmed the replay speedup with an interleaved A/B rather than single runs taken
+  under different machine states. The pre-optimization commit `02f717e` was built in its own
+  worktree and the two binaries were run alternately, twice each, re-verifying the accepted
+  receipt every time; all four runs reproduced it. Baseline wall 834.59 s and 729.33 s, mean
+  781.96 s, spread 105.26 s; optimized 246.71 s and 194.53 s, mean 220.62 s, spread 52.18 s.
+  That is 3.544x on means, 3.170x across the three runs sharing a load of 28 to 31, and 2.956x
+  on the most conservative pairing; the 482.62 s gap between the fastest baseline and the
+  slowest optimized run is 4.6 times the largest within-arm spread, so it clears the noise
+  floor. Peak RSS fell from a mean 63,039,050 KiB to 37,335,760 KiB, 40.8 percent, against a
+  largest within-arm spread of 35,888 KiB. The machine was never idle: unrelated `zstd` and `vg`
+  jobs held the load average near 29, so these are shared-machine figures, and the quietest run
+  (load 12.56) was also the fastest at 194.53 s.
 
