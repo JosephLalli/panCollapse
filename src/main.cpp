@@ -2404,7 +2404,8 @@ int run_compatibility_replay(int argc, char** argv, const Options& options) {
     if (options.threads != 1) {
         std::cerr << "panCollapse: compatibility replay: requested_workers="
                   << options.threads
-                  << " active_workers=1 (streaming replay is currently serial)\n";
+                  << " (initialization uses them; the streaming read loop is"
+                     " currently serial)\n";
     }
     const auto count_bundle_load_started = std::chrono::steady_clock::now();
     const auto count_bundle = pancollapse::direct_count::load_count_fact_bundle(
@@ -2464,24 +2465,64 @@ int run_compatibility_replay(int argc, char** argv, const Options& options) {
 
     using pancollapse::direct_count::AssignmentResult;
     const auto fact_set_resolve_started = std::chrono::steady_clock::now();
-    std::vector<std::vector<AssignmentResult>> resolved(
-        compatibility.index().fact_sets.size());
-    for (size_t fact_set_id = 0;
-         fact_set_id < compatibility.index().fact_sets.size(); ++fact_set_id) {
-        const auto& facts = compatibility.index().fact_sets[fact_set_id];
-        count_facts.validate_compatibility_structure(facts, identity_ledger);
-        resolved[fact_set_id].reserve(options.count_profiles.size());
-        for (const auto& profile : options.count_profiles) {
-            resolved[fact_set_id].push_back(
-                pancollapse::direct_count::resolve_assignment(
-                    profile, count_facts.assignment_facts(profile, facts)));
-        }
-    }
+    const std::vector<pancollapse::direct_count::CompatibilityFactSet>& fact_sets =
+        compatibility.index().fact_sets;
+    std::vector<std::vector<AssignmentResult>> resolved(fact_sets.size());
+    // Resolving a fact set reads only const catalog and ledger state and writes one
+    // slot of its own, so blocks are independent. Ordered blocks keep the structural
+    // validation failure that is reported first a property of the input rather than of
+    // scheduling.
+    constexpr size_t kMaxFactSetBlockSize = 32;
+    constexpr size_t kFactSetBlocksPerWorker = 4;
+    const size_t desired_fact_set_blocks = fact_sets.empty()
+        ? 0
+        : std::min(fact_sets.size(),
+                   options.threads > std::numeric_limits<size_t>::max() /
+                                         kFactSetBlocksPerWorker
+                       ? fact_sets.size()
+                       : options.threads * kFactSetBlocksPerWorker);
+    const size_t fact_set_block_size = fact_sets.empty()
+        ? 1
+        : std::min(kMaxFactSetBlockSize,
+                   1 + (fact_sets.size() - 1) / desired_fact_set_blocks);
+    const size_t fact_set_worker_count = fact_sets.empty()
+        ? 1
+        : std::min(options.threads,
+                   1 + (fact_sets.size() - 1) / fact_set_block_size);
+    parallel_transform_ordered_blocks(
+        fact_sets.size(), options.threads, fact_set_block_size,
+        [&](size_t block, size_t begin, size_t end) {
+            static_cast<void>(block);
+            std::vector<std::vector<AssignmentResult>> block_resolved;
+            block_resolved.reserve(end - begin);
+            for (size_t fact_set_id = begin; fact_set_id < end; ++fact_set_id) {
+                const auto& facts = fact_sets[fact_set_id];
+                count_facts.validate_compatibility_structure(facts, identity_ledger);
+                std::vector<AssignmentResult> per_profile;
+                per_profile.reserve(options.count_profiles.size());
+                for (const auto& profile : options.count_profiles) {
+                    per_profile.push_back(
+                        pancollapse::direct_count::resolve_assignment(
+                            profile, count_facts.assignment_facts(profile, facts)));
+                }
+                block_resolved.push_back(std::move(per_profile));
+            }
+            return block_resolved;
+        },
+        [&](size_t block, size_t begin, size_t end,
+            std::vector<std::vector<AssignmentResult>> block_resolved) {
+            static_cast<void>(block);
+            static_cast<void>(end);
+            for (size_t offset = 0; offset < block_resolved.size(); ++offset) {
+                resolved[begin + offset] = std::move(block_resolved[offset]);
+            }
+        });
     const double fact_set_resolve_seconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - fact_set_resolve_started).count();
     std::cerr << "panCollapse: initialization: phase=fact_set_resolve"
               << " fact_sets=" << resolved.size()
               << " profiles=" << options.count_profiles.size()
+              << " workers=" << fact_set_worker_count
               << " seconds=" << fact_set_resolve_seconds << '\n';
 
     const auto output_staging_started = std::chrono::steady_clock::now();

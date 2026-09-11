@@ -1018,4 +1018,13 @@ projection, or a custom index.
   `fact_set_resolve` is 519.57 s and `compatibility_open` is 127.93 s, together 85.6 percent.
   Still unmeasured: whether the fact-set resolve loop scales with threads, and the noise floor
   on any wall-time comparison.
+- 2026-09-11: Parallelized the replay fact-set resolve loop over ordered blocks (D081). The
+  phase fell from 519.57 s to 24.59 s at 128 workers and total replay wall from the accepted
+  775.92 s to 304.85 s, a 2.545x speedup, with peak RSS up 1.6 percent to 64,078,328 KiB. The
+  accepted receipt is reproduced: `summary.tsv` and all five Parquet tables, including
+  `read_assignments.parquet`, are byte-identical. 165/165 CTests pass. The parallel run ran
+  under heavier system load than the serial baseline, so the speedup is a lower bound. With
+  this phase reduced, `compatibility_open` at 127.93 s uncontended is now the largest single
+  phase and the next target; it performs two full traversals with copies for integrity checks
+  that need none.
 

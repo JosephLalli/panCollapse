@@ -2065,6 +2065,37 @@ including `read_assignments.parquet`, are byte-identical, and `manifest.json` di
 `command_line`, the whitelist path, and the two timing fields. Any future change to these phases
 must preserve that property.
 
+### D081 — Resolve compatibility fact sets in parallel ordered blocks
+
+**Decision source:** Measurement, 2026-09-11, following D080's attribution.
+
+**Decision:** the replay fact-set resolve loop runs through
+`parallel_transform_ordered_blocks` rather than serially. Each fact set reads only const
+`CountFactCatalog` and `PathIdentityLedger` state and writes one slot of its own, so blocks are
+independent. Ordered blocks are required, not incidental: `validate_compatibility_structure`
+fails closed by throwing, and the helper retains failures by block ordinal and rethrows the first
+after every worker joins, so which invalid input is reported first remains a property of the
+input rather than of scheduling.
+
+**Thread-safety basis:** `CountFactCatalog::assignment_facts` and
+`::validate_compatibility_structure` are const, the catalog declares no mutable members,
+`resolve_assignment` is a free function over const references, and
+`CompatibilityBundleReader::index()` returns a stored reference without lazy computation. The one
+static in the call tree is a `static const std::regex` whose initialization is thread-safe and
+whose use through `std::regex_match` does not mutate it.
+
+**Measurement:** on the accepted one-million-read fixture the phase fell from 519.57 s to 24.59 s
+at 128 workers, and total replay wall fell from the accepted 775.92 s to 304.85 s, a 2.545x
+speedup. Peak RSS rose from 63,040,692 KiB to 64,078,328 KiB, 1.6 percent, from the bounded block
+payloads the helper retains. The parallel run was measured under higher system load than the
+serial baseline, so the speedup is a lower bound rather than a best case.
+
+**Acceptance:** the accepted checksum receipt is reproduced. `summary.tsv` and all five Parquet
+tables, including `read_assignments.parquet`, are byte-identical to the accepted run, and
+`manifest.json` differs only in provenance and timing fields. 165/165 CTests pass. The
+`requested_workers` notice no longer claims one active worker for the whole invocation, because
+initialization now uses them; the streaming read loop remains serial and is 1.9 percent of wall.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.
