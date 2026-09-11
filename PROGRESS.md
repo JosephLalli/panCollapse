@@ -1072,4 +1072,16 @@ projection, or a custom index.
   receipt reproduces byte for byte at 221.01 s and 37,351,368 KiB. The writer saving still needs
   a producer run to confirm end to end. A bounded fan-in merge was prototyped and shown
   output-identical but not adopted; it needs the run row count moved out of the compressed frame.
+- 2026-09-11: Narrowed the count-fact bundle and ledger to what the runtime actually reads
+  (D085), after establishing that five of nine bundle roles are never opened and nine of
+  twenty-four ledger columns are never read outside the ledger module. A narrowed bundle of
+  four roles and a fifteen-column ledger both load and parse identically; a ledger missing a
+  genuinely required column is still refused. Also replaced the per-row XG path lookup, two
+  FM-index locates per ledger row, with a single graph enumeration, now timed as
+  `ledger_path_handles`. 165/165 CTests pass. This is an input-contract change, not a speed
+  one: on a three-million-read production subset the ledger read is 5.1 percent of wall and
+  the bundle hash pass about six seconds of 965. It also does not achieve portability, since
+  the annotation in the bundle is itself a panSC product carrying 1,231,247 synthesized
+  transcript-body rows. Next runtime target is `splice_geometry` at 317.45 s, 32.9 percent,
+  which evaluates 141,543,588 candidate edges to keep 5,937,500.
 

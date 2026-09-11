@@ -2249,6 +2249,61 @@ Parquet tables, including `read_assignments.parquet`, are byte-identical, at 221
 saving is not yet confirmed end to end, because that needs a producer run with
 `--compatibility-out`.
 
+### D085 — Narrow the count-fact bundle to what the runtime reads
+
+**Decision source:** User, 2026-09-11, on noticing that preprocessing built to speed up iteration
+over counting schemes had become required input. The stated aim is simplified, portable inputs;
+input size is explicitly not the goal.
+
+**Decision, three changes, none of which alters counting.**
+
+Five bundle roles become optional: `corrected_annotation`, `parent_category_receipt`,
+`projected_nested_policy`, and the two profile policy receipts. No code path opens any of them.
+`corrected_annotation` is referenced once in all of `src/`, at `direct_count_facts.cpp:582`, and
+only to compare a manifest schema string; there is no GFF3 parser in the binary to read it. They
+are still validated when present, so a full bundle and a narrowed one both load.
+
+The ledger path handles are resolved by enumerating the graph's paths once instead of asking for
+each ledger row by name. `has_path` and `get_path_handle` are each a locate on the XG path-name
+index, so the previous loop paid two per row across millions of rows. Validation still runs in
+ledger order, which is sorted by path name, so the first failure reported remains a property of
+the input. The phase is now timed as `ledger_path_handles`.
+
+Nine ledger columns become optional: `vg_haplotype_origins`, `source_parent`, `input_parent`,
+`haplotype`, `annotation_source`, `selection_status`, `fallback_status`, `source_transcript`,
+`transcript_class`. Counting reads none of them, and none appears in
+`compatibility_structural_surface_id`, so existing compatibility bundles stay replayable. They are
+not deleted: they back a body/exon consistency check and a fallback validation that still run
+whenever the columns are present. A header must still be a subsequence of the canonical order, and
+a ledger missing a genuinely required column is still refused by name.
+
+**Evidence.** Per-role audit of every `CountFactBundle::files` accessor gives five roles with no
+reference outside `require_schema`, 8,896,817,114 bytes of the 10,736,677,291 a production bundle
+occupies. A narrowed bundle of the remaining four roles was built by hardlink and loads: the first
+attempt was correctly refused with `count-fact bundle content_id does not match content`, because
+removing manifest entries changes the content address, and the canonicalization used to recompute
+it was checked by first reproducing the original id exactly. Per-field audit of the ledger gives
+nine fields with no reference outside `path_identity_ledger.hpp`; a 15-column ledger parses to the
+same rows as the 24-column original, and an 8-column one is refused with `missing required column
+gene_id`. 165/165 CTests pass after each change.
+
+**What this does not do.** It does not make the input portable. The annotation the bundle carries
+is itself a panSC product: 1,231,247 rows carry `feature_layer=transcript_body` with
+`panSCbody1_<hash>` identifiers that exist in no upstream annotation. Portability requires reading
+categories from an annotation directly, which needs a GFF3 parser and therefore contradicts
+`product-spec.md`'s clause that the implementation must not require GFF3 in V1. That is a separate
+decision and is not taken here.
+
+**It is also not a speed change.** On a three-million-read production subset the bundle hash pass
+is on the order of six seconds of 965, and the ledger read is 49.09 s, 5.1 percent. The one
+runtime effect is the path-handle enumeration, whose previous form sat inside a 134.09 s
+uninstrumented initialization block. Wall-clock work belongs in `splice_geometry`, 317.45 s and
+32.9 percent of that run.
+
+**Acceptance:** 165/165 CTests pass. Counting output is unchanged by construction: no assignment
+code is touched, no field counting reads is removed, and the structural surface digest is
+untouched.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.

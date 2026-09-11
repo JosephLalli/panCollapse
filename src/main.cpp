@@ -2900,17 +2900,34 @@ int run_convert(int argc, char** argv) {
     std::cerr << "panCollapse: initialization: phase=xg_deserialize seconds="
               << xg_deserialize_seconds << '\n';
 
+    const auto ledger_path_handles_started = std::chrono::steady_clock::now();
     std::unordered_map<std::string, uint64_t> ledger_path_handles_by_name;
     if (production_identity) {
         ledger_path_handles_by_name.reserve(identity_ledger->rows_by_path.size());
+        // Resolve handles by enumerating the graph's paths once rather than asking for each
+        // ledger row by name. has_path and get_path_handle are each a locate on the XG's
+        // path-name index, so the by-name form paid two of them per row across a ledger with
+        // millions of rows. Enumeration visits every path once and costs a hash lookup per
+        // path instead.
+        graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+            std::string path_name = graph.get_path_name(path);
+            if (identity_ledger->rows_by_path.count(path_name) == 0) {
+                return;
+            }
+            ledger_path_handles_by_name.emplace(std::move(path_name),
+                                                handlegraph::as_integer(path));
+        });
+        // Validate in ledger order, which is sorted by path name, so the first failure
+        // reported stays a property of the input rather than of graph enumeration order.
         for (const auto& entry : identity_ledger->rows_by_path) {
             const std::string& path_name = entry.first;
-            if (!graph.has_path(path_name)) {
+            const auto found = ledger_path_handles_by_name.find(path_name);
+            if (found == ledger_path_handles_by_name.end()) {
                 throw std::runtime_error("path identity ledger vg_path_name " + path_name +
                                          " is absent from the XG");
             }
-            const auto path_handle = graph.get_path_handle(path_name);
-            const uint64_t graph_length = graph.get_path_length(path_handle);
+            const uint64_t graph_length = graph.get_path_length(
+                handlegraph::as_path_handle(found->second));
             if (graph_length != entry.second.vg_path_length) {
                 throw std::runtime_error("path identity ledger vg_path_length for " + path_name +
                                          " is " +
@@ -2918,9 +2935,14 @@ int run_convert(int argc, char** argv) {
                                          " but the XG path length is " +
                                          std::to_string(graph_length));
             }
-            ledger_path_handles_by_name.emplace(
-                path_name, handlegraph::as_integer(path_handle));
         }
+    }
+    if (production_identity) {
+        const double ledger_path_handles_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - ledger_path_handles_started).count();
+        std::cerr << "panCollapse: initialization: phase=ledger_path_handles paths="
+                  << ledger_path_handles_by_name.size()
+                  << " seconds=" << ledger_path_handles_seconds << '\n';
     }
 
     // Score-mode HST lookup (node -> HST names, cached per node). Ledger-mode lookup is below.

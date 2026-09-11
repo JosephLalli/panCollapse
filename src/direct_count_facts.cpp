@@ -566,22 +566,31 @@ CountFactBundle load_count_fact_bundle(const std::filesystem::path& requested_ro
                 throw std::runtime_error("count-fact bundle repeats role " + role);
             }
         }
+        // Roles whose content the runtime actually reads. These stay mandatory.
         require_schema(bundle, "path_identity_ledger", "panSC-path-identity-v1");
         require_schema(bundle, "profile_gene_policy",
                        "panSC-count-profile-gene-policy-v1");
-        require_schema(bundle, "profile_policy_receipt_cr7_v1",
-                       "panSC-count-cr-gene-policy-only-v2");
-        require_schema(bundle, "profile_policy_receipt_pansc_strict_v1",
-                       "panSC-projected-nested-host-policy-v1");
         require_schema(bundle, "parent_category_ledger", "panSC-parent-category-ledger-v3");
-        require_schema(bundle, "parent_category_receipt",
-                       "panSC-parent-category-ledger-v3");
-        require_schema(bundle, "projected_nested_policy",
-                       "panSC-projected-nested-host-policy-v1");
         require_schema(bundle, "strong_support_ledger", "panSC-strong-support-audit-v1");
-        require_schema(bundle, "corrected_annotation", "annotation");
-        if (bundle.files.contains("gene_metadata")) {
-            require_schema(bundle, "gene_metadata", "panSC-gene-metadata-v1");
+
+        // Roles no code path opens. They are provenance: carried so the manifest can bind
+        // which producer inputs the read tables were derived from, and checksummed on every
+        // invocation, but never parsed. corrected_annotation alone is 8.90 GB of the 10.74 GB
+        // a production bundle occupies, and there is no GFF3 parser in the binary to read it.
+        // Accept a bundle that omits them, and keep validating them when they are present, so
+        // an existing full bundle and a slim one both load and produce identical output.
+        for (const auto& [role, schema] : std::initializer_list<
+                 std::pair<std::string_view, std::string_view>>{
+                 {"corrected_annotation", "annotation"},
+                 {"parent_category_receipt", "panSC-parent-category-ledger-v3"},
+                 {"projected_nested_policy", "panSC-projected-nested-host-policy-v1"},
+                 {"profile_policy_receipt_cr7_v1", "panSC-count-cr-gene-policy-only-v2"},
+                 {"profile_policy_receipt_pansc_strict_v1",
+                  "panSC-projected-nested-host-policy-v1"},
+                 {"gene_metadata", "panSC-gene-metadata-v1"}}) {
+            if (bundle.files.contains(std::string(role))) {
+                require_schema(bundle, role, schema);
+            }
         }
         return bundle;
     } catch (const simdjson::simdjson_error& error) {
