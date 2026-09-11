@@ -53,8 +53,13 @@ def get_attr(attrs: str, key: str) -> str | None:
 
 
 def transcript_of(attrs: str) -> str | None:
-    """Transcript id: GTF/GFF3 `transcript_id`, falling back to GFF3 `Parent`."""
-    return get_attr(attrs, "transcript_id") or get_attr(attrs, "Parent")
+    """Transcript id of an exon row: GFF3 `Parent`, falling back to GTF `transcript_id`.
+
+    An exon's Parent is its transcript's unique ID. `transcript_id` is bare and
+    assembly-local, and CAT reuses it across haplotypes, so preferring it would collapse
+    two haplotypes' transcripts into one body. GTFs carry no Parent and fall back.
+    """
+    return get_attr(attrs, "Parent") or get_attr(attrs, "transcript_id")
 
 
 def collapse(
@@ -79,7 +84,9 @@ def collapse(
             c = line.rstrip("\n").split("\t")
             if len(c) < 9 or c[2] not in ("exon", "transcript"):
                 continue
-            tid = transcript_of(c[8]) if c[2] == "exon" else (get_attr(c[8], "transcript_id") or get_attr(c[8], "ID"))
+            # A transcript row's unique key is its ID; bare transcript_id is the GTF fallback.
+            tid = (transcript_of(c[8]) if c[2] == "exon"
+                   else (get_attr(c[8], "ID") or get_attr(c[8], "transcript_id")))
             if tid is None:
                 continue
             s, e = int(c[3]), int(c[4])

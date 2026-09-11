@@ -1050,4 +1050,14 @@ projection, or a custom index.
   largest within-arm spread of 35,888 KiB. The machine was never idle: unrelated `zstd` and `vg`
   jobs held the load average near 29, so these are shared-machine figures, and the quietest run
   (load 12.56) was also the fastest at 194.53 s.
+- 2026-09-11: Brought `.claude/rules/annotation-identifiers.md` onto this branch and fixed the
+  four identifier defects the audit confirmed in the folded chain (D083): transcript keying in
+  `filter_cellranger_annotation.py` and `gff3_to_genebody.py`, feature-level gene resolution in
+  `local_gene_for`, and a hash-seed-dependent tie in `chain_verdict`. Nothing in the repository
+  invokes these scripts, so the suite could not have caught any of it; each fix was checked
+  against its pre-fix version instead. Reference GTF output is byte-identical; on colliding CAT
+  input the old code emitted one transcript body instead of two and lost both genes of a
+  haplotype pair to the other haplotype's `readthrough_transcript` tag. Left open: the body
+  gene in `gff3_to_genebody.py` still comes from bare `gene_id`, which is a t2g question rather
+  than an identifier bug.
 

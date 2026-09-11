@@ -2145,6 +2145,51 @@ KiB against 37,335,760 KiB, a reduction of 25,703,290 KiB or 40.8 percent, again
 within-arm RSS spread of 35,888 KiB. All four runs reproduced the accepted receipt. The single-run
 3.09x quoted above is superseded by these figures; take 2.956x as the defensible floor.
 
+### D083 — Key the annotation chain on ID, and make the chain-vote tie deterministic
+
+**Decision source:** Audit of the folded annotation-chain scripts against
+`.claude/rules/annotation-identifiers.md`, 2026-09-11. The rule was written on `main` after these
+scripts were authored and was absent from this branch; it is now cherry-picked here so the
+constraint travels with the code it governs.
+
+**Decision:** the chain keys transcripts on the unique `ID` and resolves a gene per feature level.
+
+  - `filter_cellranger_annotation.py` `transcript_ids` prefers `ID` over bare `transcript_id` on
+    transcript and mRNA rows, which makes it agree with its own exon branch, since an exon's
+    `Parent` is its transcript's `ID`.
+  - `filter_cellranger_annotation.py` `local_gene_for` no longer reads `gene_id` uniformly. A gene
+    row resolves to `ID`, a transcript row to `Parent`. `gene_id` is qualified on gene rows but
+    bare on transcript rows, so reading it at every level put the two in different namespaces and
+    then compared them. Exon rows still offer only the bare `gene_id`; they feed the exon
+    fallback, which runs only for annotations with no transcript rows.
+  - `gff3_to_genebody.py` prefers `Parent` on exon rows and `ID` on transcript rows over bare
+    `transcript_id`.
+  - `assign_cat_denovo_transcripts.py` `chain_verdict` orders the k-mer vote by support and then
+    by gene id. `votes` was filled by iterating `index[gram]`, a set, so `max` returned the first
+    maximal key in an order that varied with the process hash seed.
+
+GTF inputs carry neither `ID` nor `Parent` and still fall back to `transcript_id`, so every
+preference change is inert on reference input.
+
+**Evidence:** nothing in the repository invokes these scripts, so no test could have caught any of
+this and none did; each fix was checked directly against its pre-fix version.
+On a reference GTF both filters are byte-identical before and after. On a CAT-style GFF3 where two
+haplotypes share the bare id `T0000001`, `gff3_to_genebody.py` previously emitted one body instead
+of two, silently overwriting the first haplotype's span with the second's, and now emits both. In
+`filter_cellranger_annotation.py`, tagging only the second haplotype `readthrough_transcript`
+previously produced `transcripts_observed=1`, `qualifying_transcripts=0` and
+`retained_local_genes=0`, so one haplotype's excluded category disqualified the other haplotype's
+valid transcript and both genes were lost; it now reports 2, 1 and 1 and retains `S1#1#G00001`.
+The vote tie returned all four of four tied genes as the winner across twenty hash seeds before
+the change and one gene across all twenty after, while a genuine two-vote winner still beats the
+alphabetically first gene.
+
+**Not changed:** `gff3_to_genebody.py` still derives the body's gene from bare `gene_id`, which
+feeds the composite body name and the t2g. Whether two haplotypes' genes should collapse there is
+a biological question about the t2g rather than an identifier bug, and it is left open.
+
+**Acceptance:** 165/165 CTests pass, unchanged, since no test exercises these scripts.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.

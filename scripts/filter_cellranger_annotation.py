@@ -158,7 +158,11 @@ def canonical_count_gene(value: str | None, fallback: str) -> str:
 
 def transcript_ids(feature: str, attrs: dict[str, list[str]]) -> set[str]:
     if feature in {"transcript", "mRNA"}:
-        value = first(attrs, "transcript_id", "ID")
+        # ID is the only unique transcript key; transcript_id is bare and assembly-local,
+        # and CAT reuses it across haplotypes. Preferring ID here makes this branch agree
+        # with the exon branch below, since an exon's Parent is its transcript's ID. GTFs
+        # carry no ID and still fall back to transcript_id.
+        value = first(attrs, "ID", "transcript_id")
         return {value} if value else set()
     if feature == "exon":
         # CAT emits a haplotype-qualified GFF3 Parent but may reuse the unqualified
@@ -170,14 +174,17 @@ def transcript_ids(feature: str, attrs: dict[str, list[str]]) -> set[str]:
 
 
 def local_gene_for(feature: str, attrs: dict[str, list[str]]) -> str | None:
-    gene = first(attrs, "gene_id")
-    if gene:
-        return gene
+    # gene_id is qualified on a gene row but bare on transcript and exon rows, so reading it
+    # uniformly puts gene rows in one namespace and transcript rows in another and then
+    # compares the two. Resolve per feature level instead: a gene row's identity is its ID,
+    # and a transcript row's gene is its Parent. An exon's Parent is its transcript rather
+    # than its gene, so exon rows can still only offer the bare gene_id; they feed the exon
+    # fallback, which runs only for annotations carrying no transcript rows at all.
     if feature == "gene":
-        return first(attrs, "ID")
+        return first(attrs, "ID", "gene_id")
     if feature in {"transcript", "mRNA"}:
-        return first(attrs, "Parent")
-    return None
+        return first(attrs, "Parent", "gene_id")
+    return first(attrs, "gene_id")
 
 
 def observation(feature: str, attrs: dict[str, list[str]]) -> dict[str, object] | None:

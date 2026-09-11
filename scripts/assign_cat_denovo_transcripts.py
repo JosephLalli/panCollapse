@@ -276,7 +276,11 @@ def chain_verdict(chain, exons, assigned, strand, index, gene_exons, gene_strand
              if c >= min_support and gene_strand.get(g, strand) == strand}
     if not votes:
         return "chain_no_match", {}, None
-    best = max(votes, key=votes.get)
+    # votes is populated by iterating index[gram], a set, so its insertion order varies with
+    # the process hash seed. max() returns the first maximal key in that order, which made the
+    # winner of a vote tie differ between runs on identical input. Order by support, then by
+    # gene id, so the winner is a property of the votes rather than of iteration order.
+    best = min(votes, key=lambda gene: (-votes[gene], gene))
     if len(votes) > 1:
         return "chain_readthrough", votes, best
     if best == assigned:
