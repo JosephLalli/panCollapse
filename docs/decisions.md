@@ -2096,6 +2096,42 @@ tables, including `read_assignments.parquet`, are byte-identical to the accepted
 `requested_workers` notice no longer claims one active worker for the whole invocation, because
 initialization now uses them; the streaming read loop remains serial and is 1.9 percent of wall.
 
+### D082 — Verify compatibility fact integrity without copying the fact index
+
+**Decision source:** Measurement, 2026-09-11, after D081 made `compatibility_open` the largest
+remaining replay phase.
+
+**Context:** sub-phase timers attributed the open path as `logical_hash` 68.32 s,
+`canonical_check` 35.72 s, `exact_facts` decode 31.41 s, `structural_facts` decode 20.22 s, and
+`manifest_verify` 0.55 s. The two largest were integrity checks whose cost was dominated by
+copying rather than by checking. The bundle holds 50,614,005 exact and 25,684,302 structural
+facts across 64,275 fact sets, each fact carrying owned strings, so the per-set copy and the
+whole-collection copy duplicated roughly 152 million string-bearing facts between them.
+
+**Decision:** neither integrity check copies. `canonical_check` uses an in-place `is_canonical`
+predicate instead of canonicalizing a copy and comparing it, which is exact because `sort_unique`
+leaves a vector unchanged precisely when that vector is already strictly increasing. The
+fact-table digests move into `append_logical_fact_hashes`, so the reader hashes
+`impl_->index.fact_sets` directly through `logical_fact_set_hashes` rather than assigning the
+whole collection into a temporary `CompatibilityBundle`. The bundle overload remains for the
+writer, which also has read rows to digest.
+
+**Equivalence evidence:** no test covered the non-canonical rejection branch, so the predicate was
+checked directly rather than inferred from a passing suite. Over 400,000 randomized fact sets, of
+which the original logic accepted 158,101 and rejected 241,899, the predicate and the
+canonicalize-and-compare check agreed on every case.
+
+**Measurement:** `canonical_check` fell from 35.72 s to 4.97 s and `logical_hash` from 68.32 s to
+19.55 s, taking `compatibility_open` from 173.27 s to 94.10 s. Total replay wall fell from 304.85 s
+to 251.10 s and peak RSS from 64,078,328 KiB to 37,347,844 KiB, because the whole-collection copy
+had been holding a second full fact index live. Against the accepted 775.92 s and 63,048,652 KiB
+this is a 3.09x speedup at 59 percent of the memory. The other sub-phases read higher in this run
+than in the one before it under heavier load, so the saving is a lower bound.
+
+**Acceptance:** the accepted receipt is reproduced. `summary.tsv` and all five Parquet tables,
+including `read_assignments.parquet`, are byte-identical, and `manifest.json` differs only in
+provenance and timing fields. 165/165 CTests pass.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.

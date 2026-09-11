@@ -13,8 +13,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <iostream>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -660,6 +662,26 @@ void sort_unique(std::vector<T>& values) {
     values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
+// Equivalent to canonicalizing a copy and comparing it, without the copy: sort_unique
+// leaves a vector unchanged exactly when that vector is already strictly increasing.
+template<class T>
+bool is_sorted_unique(const std::vector<T>& values) {
+    return std::adjacent_find(values.begin(), values.end(),
+                              [](const T& left, const T& right) {
+                                  return !(left < right);
+                              }) == values.end();
+}
+
+bool is_canonical(const CompatibilityFactSet& facts) {
+    for (const StructuralCompatibilityFact& fact : facts.structural) {
+        if (!is_sorted_unique(fact.winning_paths) ||
+            !is_sorted_unique(fact.winning_parents)) {
+            return false;
+        }
+    }
+    return is_sorted_unique(facts.exact) && is_sorted_unique(facts.structural);
+}
+
 void canonicalize(CompatibilityFactSet& facts) {
     for (StructuralCompatibilityFact& fact : facts.structural) {
         sort_unique(fact.winning_paths);
@@ -753,27 +775,20 @@ void append_logical_read(Sha256Digest& digest,
     digest.append_u64(read.fact_set_id);
 }
 
-std::map<std::string, std::string> logical_hashes(const CompatibilityBundle& bundle) {
-    std::map<std::string, std::string> result;
-    {
-        Sha256Digest digest("parquet/read_rows.parquet");
-        for (const ReadCompatibilityRow& read : bundle.reads) {
-            append_logical_read(digest, read);
-        }
-        result.emplace("parquet/read_rows.parquet", digest.finish());
-    }
+void append_logical_fact_hashes(const std::vector<CompatibilityFactSet>& fact_sets,
+                                std::map<std::string, std::string>& result) {
     {
         Sha256Digest digest("parquet/fact_sets.parquet");
-        for (size_t index = 0; index < bundle.fact_sets.size(); ++index) {
+        for (size_t index = 0; index < fact_sets.size(); ++index) {
             digest.append_u64(index);
-            digest.append_u8(bundle.fact_sets[index].complete_provenance ? 1 : 0);
+            digest.append_u8(fact_sets[index].complete_provenance ? 1 : 0);
         }
         result.emplace("parquet/fact_sets.parquet", digest.finish());
     }
     {
         Sha256Digest digest("parquet/exact_facts.parquet");
-        for (size_t index = 0; index < bundle.fact_sets.size(); ++index) {
-            for (const ExactCompatibilityFact& fact : bundle.fact_sets[index].exact) {
+        for (size_t index = 0; index < fact_sets.size(); ++index) {
+            for (const ExactCompatibilityFact& fact : fact_sets[index].exact) {
                 digest.append_u64(index);
                 digest.append_string(fact.canonical_transcript);
                 digest.append_string(fact.locus_parent);
@@ -788,8 +803,8 @@ std::map<std::string, std::string> logical_hashes(const CompatibilityBundle& bun
     }
     {
         Sha256Digest digest("parquet/structural_facts.parquet");
-        for (size_t index = 0; index < bundle.fact_sets.size(); ++index) {
-            for (const StructuralCompatibilityFact& fact : bundle.fact_sets[index].structural) {
+        for (size_t index = 0; index < fact_sets.size(); ++index) {
+            for (const StructuralCompatibilityFact& fact : fact_sets[index].structural) {
                 digest.append_u64(index);
                 digest.append_string(fact.canonical_transcript);
                 digest.append_u8(static_cast<std::uint8_t>(fact.layer));
@@ -805,6 +820,27 @@ std::map<std::string, std::string> logical_hashes(const CompatibilityBundle& bun
         }
         result.emplace("parquet/structural_facts.parquet", digest.finish());
     }
+}
+
+// Hash the fact tables straight from the reader's index, which has no read rows of its
+// own. The bundle overload stays for the writer, which digests reads as well.
+std::map<std::string, std::string> logical_fact_set_hashes(
+    const std::vector<CompatibilityFactSet>& fact_sets) {
+    std::map<std::string, std::string> result;
+    append_logical_fact_hashes(fact_sets, result);
+    return result;
+}
+
+std::map<std::string, std::string> logical_hashes(const CompatibilityBundle& bundle) {
+    std::map<std::string, std::string> result;
+    {
+        Sha256Digest digest("parquet/read_rows.parquet");
+        for (const ReadCompatibilityRow& read : bundle.reads) {
+            append_logical_read(digest, read);
+        }
+        result.emplace("parquet/read_rows.parquet", digest.finish());
+    }
+    append_logical_fact_hashes(bundle.fact_sets, result);
     return result;
 }
 
@@ -1912,6 +1948,7 @@ CompatibilityBundleReader::CompatibilityBundleReader(
         fail("compatibility input lacks manifest.json");
     }
     impl_->manifest = read_manifest(manifest_path);
+    const auto manifest_verify_started = std::chrono::steady_clock::now();
     for (const auto& [relative_name, table] : impl_->manifest.tables) {
         const std::filesystem::path relative(relative_name);
         validate_relative_path(relative);
@@ -1928,6 +1965,14 @@ CompatibilityBundleReader::CompatibilityBundleReader(
         }
     }
 
+    {
+        const double seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - manifest_verify_started).count();
+        std::cerr << "panCollapse: initialization: phase=compatibility_open.manifest_verify"
+                  << " seconds=" << seconds << '\n';
+    }
+
+    const auto fact_set_dictionary_started = std::chrono::steady_clock::now();
     const auto fact_sets =
         read_table(impl_->root / "parquet/fact_sets.parquet", fact_set_schema());
     auto validate_rows = [&](const std::shared_ptr<arrow::Table>& table,
@@ -1980,6 +2025,14 @@ CompatibilityBundleReader::CompatibilityBundleReader(
 
     std::uint64_t previous_exact_set = 0;
     bool have_exact = false;
+    {
+        const double seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - fact_set_dictionary_started).count();
+        std::cerr << "panCollapse: initialization: phase=compatibility_open.fact_set_dictionary"
+                  << " seconds=" << seconds << '\n';
+    }
+
+    const auto exact_facts_started = std::chrono::steady_clock::now();
     for_each_fact_table_batch(
         impl_->root / "parquet/exact_facts.parquet", exact_schema(),
         impl_->manifest.tables.at("parquet/exact_facts.parquet").rows,
@@ -2027,6 +2080,14 @@ CompatibilityBundleReader::CompatibilityBundleReader(
 
     std::uint64_t previous_structural_set = 0;
     bool have_structural = false;
+    {
+        const double seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - exact_facts_started).count();
+        std::cerr << "panCollapse: initialization: phase=compatibility_open.exact_facts"
+                  << " seconds=" << seconds << '\n';
+    }
+
+    const auto structural_facts_started = std::chrono::steady_clock::now();
     for_each_fact_table_batch(
         impl_->root / "parquet/structural_facts.parquet", structural_schema(),
         impl_->manifest.tables.at("parquet/structural_facts.parquet").rows,
@@ -2089,10 +2150,16 @@ CompatibilityBundleReader::CompatibilityBundleReader(
             }
         });
 
+    {
+        const double seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - structural_facts_started).count();
+        std::cerr << "panCollapse: initialization: phase=compatibility_open.structural_facts"
+                  << " seconds=" << seconds << '\n';
+    }
+
+    const auto canonical_check_started = std::chrono::steady_clock::now();
     for (size_t index = 0; index < impl_->index.fact_sets.size(); ++index) {
-        CompatibilityFactSet canonical = impl_->index.fact_sets[index];
-        canonicalize(canonical);
-        if (canonical != impl_->index.fact_sets[index]) {
+        if (!is_canonical(impl_->index.fact_sets[index])) {
             fail("compatibility facts are not canonical or contain duplicates");
         }
         if (index != 0 &&
@@ -2100,9 +2167,15 @@ CompatibilityBundleReader::CompatibilityBundleReader(
             fail("compatibility fact-set dictionary is not canonical and unique");
         }
     }
-    CompatibilityBundle logical_bundle;
-    logical_bundle.fact_sets = impl_->index.fact_sets;
-    const auto actual_logical = logical_hashes(logical_bundle);
+    {
+        const double seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - canonical_check_started).count();
+        std::cerr << "panCollapse: initialization: phase=compatibility_open.canonical_check"
+                  << " seconds=" << seconds << '\n';
+    }
+
+    const auto logical_hash_started = std::chrono::steady_clock::now();
+    const auto actual_logical = logical_fact_set_hashes(impl_->index.fact_sets);
     for (const std::string_view path : {"parquet/fact_sets.parquet",
                                         "parquet/exact_facts.parquet",
                                         "parquet/structural_facts.parquet"}) {
@@ -2111,6 +2184,13 @@ CompatibilityBundleReader::CompatibilityBundleReader(
             throw std::runtime_error("compatibility logical hash mismatch: " +
                                      std::string(path));
         }
+    }
+
+    {
+        const double seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - logical_hash_started).count();
+        std::cerr << "panCollapse: initialization: phase=compatibility_open.logical_hash"
+                  << " seconds=" << seconds << '\n';
     }
 
     auto input = arrow_value(arrow::io::ReadableFile::Open(

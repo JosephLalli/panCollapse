@@ -1027,4 +1027,15 @@ projection, or a custom index.
   this phase reduced, `compatibility_open` at 127.93 s uncontended is now the largest single
   phase and the next target; it performs two full traversals with copies for integrity checks
   that need none.
+- 2026-09-11: Removed both copies from the compatibility open integrity checks (D082). The
+  canonical check now uses an in-place predicate and the logical hash reads the reader's fact
+  index directly instead of copying the whole collection into a temporary bundle. Replay wall
+  fell from 304.85 s to 251.10 s and peak RSS from 64,078,328 KiB to 37,347,844 KiB; against
+  the accepted 775.92 s and 63,048,652 KiB that is 3.09x faster at 59 percent of the memory,
+  with the accepted receipt reproduced byte for byte and 165/165 CTests passing. Because no
+  test covered the non-canonical rejection branch, the new predicate was checked against the
+  original on 400,000 randomized fact sets, 241,899 of them non-canonical, with no
+  disagreement. Remaining phases are the Parquet fact decodes at roughly 37 s and 29 s under
+  load, the count fact catalog and identity ledger reads at roughly 29 s each, and the
+  streaming read loop at 14 s.
 
