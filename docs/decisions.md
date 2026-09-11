@@ -2034,6 +2034,37 @@ corrected/raw pair auto-detection by default.
 Historical note: D038 supersedes this barcode/UMI source question for V1. GAMP annotation
 access remains useful only for non-barcode metadata or future approved extensions.
 
+### D080 — Attribute compatibility replay wall time before optimizing it
+
+**Decision source:** Measurement, 2026-09-11, on the accepted one-million-read fixture.
+
+**Context:** The replay speed proposal assumed the streaming read loop was the bottleneck,
+because `count --compatibility-in` reports `active_workers=1`. That report is accurate but the
+loop it describes was never measured against the rest of the invocation.
+
+**Decision:** `run_compatibility_replay` now emits the same `initialization: phase=` timing lines
+the direct count path already emitted, covering every stage between invocation and the first read
+batch. Optimization targets are chosen from that attribution, not from the worker report.
+
+**Measurement:** replaying the accepted bundle at 756.71 s wall and 63,049,972 KiB peak RSS
+attributes initialization as `fact_set_resolve` 519.57 s (68.7 percent of wall), `compatibility_open`
+127.93 s (16.9 percent), `count_fact_catalog` 20.77 s, `identity_ledger_read` 20.50 s,
+`count_bundle_load` 8.38 s, `runtime_construct` 4.84 s, `structural_surface_check` 2.50 s, and
+`output_staging` under a millisecond. The eight phases sum to 704.4829 s, which equals the
+independently computed `initialization_seconds` of 704.482875929, so initialization has no
+unattributed time. The streaming read loop is the 14.06 s processing stage, 1.9 percent of wall.
+
+**Consequence:** parallelizing the streaming replay loop has an Amdahl ceiling near 1.02x and is
+not the work to do. The two targets that together hold 85.6 percent of wall time are the fact-set
+resolve loop, which resolves 64,275 fact sets against two profiles serially, and the compatibility
+bundle open, which performs two full traversals with copies for integrity checks that need none.
+
+**Acceptance:** the timing lines are additive stderr only. Replaying the accepted bundle with
+instrumentation reproduces its checksum receipt: `summary.tsv` and all five Parquet tables,
+including `read_assignments.parquet`, are byte-identical, and `manifest.json` differs only in
+`command_line`, the whitelist path, and the two timing fields. Any future change to these phases
+must preserve that property.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.

@@ -2406,15 +2406,44 @@ int run_compatibility_replay(int argc, char** argv, const Options& options) {
                   << options.threads
                   << " active_workers=1 (streaming replay is currently serial)\n";
     }
+    const auto count_bundle_load_started = std::chrono::steady_clock::now();
     const auto count_bundle = pancollapse::direct_count::load_count_fact_bundle(
         options.count_bundle);
+    const double count_bundle_load_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - count_bundle_load_started).count();
+    std::cerr << "panCollapse: initialization: phase=count_bundle_load"
+              << " files=" << count_bundle.files.size()
+              << " seconds=" << count_bundle_load_seconds << '\n';
+
+    const auto identity_ledger_read_started = std::chrono::steady_clock::now();
     const path_identity::PathIdentityLedger identity_ledger = path_identity::read(
         count_bundle.files.at("path_identity_ledger").path, true);
+    const double identity_ledger_read_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - identity_ledger_read_started).count();
+    std::cerr << "panCollapse: initialization: phase=identity_ledger_read"
+              << " rows=" << identity_ledger.rows_by_path.size()
+              << " seconds=" << identity_ledger_read_seconds << '\n';
+
+    const auto count_fact_catalog_started = std::chrono::steady_clock::now();
     const pancollapse::direct_count::CountFactCatalog count_facts =
         pancollapse::direct_count::CountFactCatalog::load(count_bundle,
                                                           identity_ledger);
+    const double count_fact_catalog_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - count_fact_catalog_started).count();
+    std::cerr << "panCollapse: initialization: phase=count_fact_catalog"
+              << " genes=" << count_facts.genes().size()
+              << " seconds=" << count_fact_catalog_seconds << '\n';
+
+    const auto compatibility_open_started = std::chrono::steady_clock::now();
     pancollapse::direct_count::CompatibilityBundleReader compatibility(
         options.compatibility_in);
+    const double compatibility_open_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - compatibility_open_started).count();
+    std::cerr << "panCollapse: initialization: phase=compatibility_open"
+              << " fact_sets=" << compatibility.index().fact_sets.size()
+              << " seconds=" << compatibility_open_seconds << '\n';
+
+    const auto structural_surface_check_started = std::chrono::steady_clock::now();
     if (compatibility.index().compatibility_algorithm_id !=
         pancollapse::direct_count::kCompatibilityAlgorithmId) {
         throw std::runtime_error(
@@ -2428,8 +2457,13 @@ int run_compatibility_replay(int argc, char** argv, const Options& options) {
             "compatibility bundle transcript/exon structural surface does not match "
             "the current count bundle");
     }
+    const double structural_surface_check_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - structural_surface_check_started).count();
+    std::cerr << "panCollapse: initialization: phase=structural_surface_check"
+              << " seconds=" << structural_surface_check_seconds << '\n';
 
     using pancollapse::direct_count::AssignmentResult;
+    const auto fact_set_resolve_started = std::chrono::steady_clock::now();
     std::vector<std::vector<AssignmentResult>> resolved(
         compatibility.index().fact_sets.size());
     for (size_t fact_set_id = 0;
@@ -2443,7 +2477,14 @@ int run_compatibility_replay(int argc, char** argv, const Options& options) {
                     profile, count_facts.assignment_facts(profile, facts)));
         }
     }
+    const double fact_set_resolve_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - fact_set_resolve_started).count();
+    std::cerr << "panCollapse: initialization: phase=fact_set_resolve"
+              << " fact_sets=" << resolved.size()
+              << " profiles=" << options.count_profiles.size()
+              << " seconds=" << fact_set_resolve_seconds << '\n';
 
+    const auto output_staging_started = std::chrono::steady_clock::now();
     if (std::filesystem::exists(options.out_dir)) {
         throw std::runtime_error("panCollapse count output directory already exists: " +
                                  options.out_dir.string());
@@ -2470,7 +2511,12 @@ int run_compatibility_replay(int argc, char** argv, const Options& options) {
             }
         }
     } cleanup{count_stage};
+    const double output_staging_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - output_staging_started).count();
+    std::cerr << "panCollapse: initialization: phase=output_staging"
+              << " seconds=" << output_staging_seconds << '\n';
 
+    const auto runtime_construct_started = std::chrono::steady_clock::now();
     std::vector<std::string> features;
     features.reserve(count_facts.genes().size());
     for (const auto& [gene, fact] : count_facts.genes()) {
@@ -2488,6 +2534,12 @@ int run_compatibility_replay(int argc, char** argv, const Options& options) {
             options.barcode_whitelist, options.raw_cb_length),
         std::move(features), std::move(runtime_options));
     auto worker = runtime.make_worker();
+    const double runtime_construct_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - runtime_construct_started).count();
+    std::cerr << "panCollapse: initialization: phase=runtime_construct"
+              << " features=" << runtime.feature_catalog().size()
+              << " whitelist=" << runtime.whitelist().size()
+              << " seconds=" << runtime_construct_seconds << '\n';
 
     const std::filesystem::path diagnostics_spool_path =
         count_stage / ".read-assignments.spool.zst";

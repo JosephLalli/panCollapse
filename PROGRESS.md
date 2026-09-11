@@ -998,3 +998,24 @@ projection, or a custom index.
   default persisted output at most 8.4 GB, at least twofold wall-time improvement over the matched
   7 h 48 m v0.9 producer, completion under one day, and peak RSS below 600 GB. Failures may change
   implementation/resource behavior, not the frozen biological rules.
+- 2026-09-11: Folded the four annotation-chain commits (`f021280`, `22ef3b2`, `73c5609`,
+  `8080f49`) onto the compatibility-replay integration branch as `2535fc7`, `c48a563`,
+  `28e4870`, `02f717e`, without rewriting the checksum-pinned branch. The fold changed 21
+  files and none under `src/`, `tests/`, or any CMake file, so it cannot alter the binary,
+  the suite, or any checksum. 165/165 CTests pass and the provenance guard passes through
+  its new `scripts/tooling/` path.
+- 2026-09-11: Revalidated the accepted one-million-read replay receipt on the folded branch
+  rather than assuming the review fixes in `b8210ab` changed it. Six of the seven
+  replay-count receipt entries are byte-identical and `manifest.json` differs in 4 of its
+  126 leaf fields, all provenance or timing. Neither predicted divergence occurred: the
+  fixture holds no equivalence aggregate with a support and gene tie differing in
+  `nested_host`, and no malformed-quality read. The `b8210ab` fixes are therefore
+  output-neutral on this fixture, measured rather than argued. Replay ran 767.80 s at
+  63,040,692 KiB against the accepted 775.92 s and 63,048,652 KiB; both are single runs with
+  no noise floor, so neither delta is claimed.
+- 2026-09-11: Instrumented replay initialization and retargeted the speed work (D080). The
+  streaming read loop the parallel-replay proposal aimed at is 14.06 s, 1.9 percent of wall.
+  `fact_set_resolve` is 519.57 s and `compatibility_open` is 127.93 s, together 85.6 percent.
+  Still unmeasured: whether the fact-set resolve loop scales with threads, and the noise floor
+  on any wall-time comparison.
+
