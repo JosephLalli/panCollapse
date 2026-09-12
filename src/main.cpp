@@ -4837,6 +4837,17 @@ int run_convert(int argc, char** argv) {
         uint64_t compute_before_output_ns = 0;
         uint64_t ordered_wait_ns = 0;
         uint64_t ordered_region_ns = 0;
+        // Regions inside compute_before_output, so these sum to at most that figure. Each
+        // worker owns its own cache line, so accumulating costs nothing across threads.
+        uint64_t prelude_ns = 0;     // molecule identity and record marshalling
+        uint64_t tally_ns = 0;       // scoring the read's alignments against paths
+        uint64_t evidence_ns = 0;    // identity evidence, splice concordance, Ex50 evidence
+        uint64_t facts_ns = 0;       // gathering exact and fallback candidates for the read
+        uint64_t signature_ns = 0;   // building the assignment signature text
+        uint64_t digest_ns = 0;      // hashing that text into the cache key
+        uint64_t resolve_ns = 0;     // cache lookup, plus resolve_assignment on a miss
+        uint64_t observe_ns = 0;     // UMI status, barcode handling, observe_assignment
+        uint64_t tail_ns = 0;        // everything after counting, up to the output phase
     };
     std::vector<WorkerRuntimeTiming> worker_runtime_timing(processing_threads);
     uint64_t producer_admission_wait_ns = 0;
@@ -4863,6 +4874,18 @@ int run_convert(int argc, char** argv) {
             : std::chrono::steady_clock::time_point{};
         bool output_phase_started = false;
         std::chrono::steady_clock::time_point output_phase_started_at;
+        // Region clock for the read path. Regions nest inside compute_before_output_ns, so
+        // their sum plus tail is a check on the instrumentation itself: a shortfall means
+        // real work sits outside every bracket.
+        auto region_clock = group_started;
+        auto mark = [&](uint64_t& bucket) {
+            if (!profile_runtime_timing) return;
+            const auto now = std::chrono::steady_clock::now();
+            bucket += static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(now - region_clock)
+                    .count());
+            region_clock = now;
+        };
         auto acquire_output = [&]() {
             if (!profile_runtime_timing || output_phase_started) {
                 output_guard.acquire();
@@ -4989,12 +5012,14 @@ int run_convert(int argc, char** argv) {
             for (const vg::MultipathAlignment& record : current_group.records) {
                 record_ptrs.push_back(&record);
             }
+            mark(runtime_timing.prelude_ns);
             if (production_identity) {
                 tally_numeric_ledger_group_into(numeric_tally_workspace, record_ptrs);
             } else {
                 pathtally::tally_read_group_into(
                     tally_workspace, record_ptrs, ledger_lookup, node_scorer);
             }
+            mark(runtime_timing.tally_ns);
 
             // Score-independent aligned-base orientation and touched body ranges are retained for
             // the legacy two-column mode. D063 orientation is derived later from the winning raw
@@ -5372,6 +5397,7 @@ int run_convert(int argc, char** argv) {
 
             if (count_worker != nullptr) {
                 using pancollapse::direct_count::AssignmentFacts;
+                mark(runtime_timing.evidence_ns);
                 using pancollapse::direct_count::EvidenceStrand;
                 using pancollapse::direct_count::EvidenceTier;
                 const auto& selected_profiles = count_runtime->profiles();
@@ -5446,14 +5472,19 @@ int run_convert(int argc, char** argv) {
                     ? std::optional<std::string_view>{}
                     : std::optional<std::string_view>{
                           current_group.molecule.barcode_quality};
+                mark(runtime_timing.facts_ns);
                 std::string assignment_signature;
                 for (const AssignmentFacts& facts : profile_assignment_facts) {
                     append_signature_string(
                         assignment_signature, assignment_facts_signature(facts));
                 }
+                mark(runtime_timing.signature_ns);
+                std::string assignment_key =
+                    assignment_signature_digest(assignment_signature);
+                mark(runtime_timing.digest_ns);
                 const std::shared_ptr<const CachedAssignmentResults> assignments =
                     assignment_cache->get_or_build(
-                        assignment_signature_digest(assignment_signature), [&]() {
+                        std::move(assignment_key), [&]() {
                         CachedAssignmentResults resolved;
                         resolved.reserve(selected_profiles.size());
                         for (size_t profile_index = 0;
@@ -5465,6 +5496,7 @@ int run_convert(int argc, char** argv) {
                         }
                         return resolved;
                     });
+                mark(runtime_timing.resolve_ns);
                 const auto umi_status = pancollapse::direct_count::basic_umi_status(
                     current_group.molecule.umi);
                 if (!assignments->empty()) {
@@ -5531,6 +5563,7 @@ int run_convert(int argc, char** argv) {
                              assignment.barcode_correction_eligible});
                     }
                 }
+                mark(runtime_timing.observe_ns);
                 if (compatibility_writer) {
                     if (!compatibility_facts) {
                         throw std::logic_error(
@@ -5851,6 +5884,7 @@ int run_convert(int argc, char** argv) {
         write_barcode_only();
         };
         process();
+        mark(runtime_timing.tail_ns);
         // Convert's ordinal is retired even when a group emitted nothing. Native
         // count has no ordered sink by default, so progress uses a small periodic
         // critical section rather than serializing every completed group.
@@ -6111,6 +6145,15 @@ int run_convert(int argc, char** argv) {
             sum.compute_before_output_ns += timing.compute_before_output_ns;
             sum.ordered_wait_ns += timing.ordered_wait_ns;
             sum.ordered_region_ns += timing.ordered_region_ns;
+            sum.prelude_ns += timing.prelude_ns;
+            sum.tally_ns += timing.tally_ns;
+            sum.evidence_ns += timing.evidence_ns;
+            sum.facts_ns += timing.facts_ns;
+            sum.signature_ns += timing.signature_ns;
+            sum.digest_ns += timing.digest_ns;
+            sum.resolve_ns += timing.resolve_ns;
+            sum.observe_ns += timing.observe_ns;
+            sum.tail_ns += timing.tail_ns;
             maximum.queue_wait_ns = std::max(maximum.queue_wait_ns, timing.queue_wait_ns);
             maximum.compute_before_output_ns = std::max(
                 maximum.compute_before_output_ns, timing.compute_before_output_ns);
@@ -6124,6 +6167,24 @@ int run_convert(int argc, char** argv) {
             producer_finished - processing_started).count();
         const double producer_admission_wait_seconds =
             producer_admission_wait_ns / kNanosecondsPerSecond;
+        const uint64_t region_sum_ns =
+            sum.prelude_ns + sum.tally_ns + sum.evidence_ns + sum.facts_ns +
+            sum.signature_ns + sum.digest_ns + sum.resolve_ns + sum.observe_ns +
+            sum.tail_ns;
+        std::cerr << "panCollapse: read-path regions:"
+                  << " prelude_seconds=" << sum.prelude_ns / kNanosecondsPerSecond
+                  << " tally_seconds=" << sum.tally_ns / kNanosecondsPerSecond
+                  << " evidence_seconds=" << sum.evidence_ns / kNanosecondsPerSecond
+                  << " facts_seconds=" << sum.facts_ns / kNanosecondsPerSecond
+                  << " signature_seconds=" << sum.signature_ns / kNanosecondsPerSecond
+                  << " digest_seconds=" << sum.digest_ns / kNanosecondsPerSecond
+                  << " resolve_seconds=" << sum.resolve_ns / kNanosecondsPerSecond
+                  << " observe_seconds=" << sum.observe_ns / kNanosecondsPerSecond
+                  << " tail_seconds=" << sum.tail_ns / kNanosecondsPerSecond
+                  << " region_sum_seconds=" << region_sum_ns / kNanosecondsPerSecond
+                  << " compute_total_seconds="
+                  << sum.compute_before_output_ns / kNanosecondsPerSecond
+                  << " (worker-seconds; region_sum should approach compute_total)\n";
         std::cerr << "panCollapse: runtime profile: groups=" << sum.groups
                   << " queue_high_water=" << queue_high_water
                   << " producer_wall_seconds=" << producer_wall_seconds

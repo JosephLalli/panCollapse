@@ -1112,4 +1112,18 @@ projection, or a custom index.
   is dominated by the XG at about 23 GiB, the path identity ledger at 3.41 GiB of `std::string`
   fields that interning would reduce to tens of megabytes, and the never-evicting
   `node_ledger_cache` at 6.26 GiB.
+- 2026-09-12: Extended `PANCOLLAPSE_PROFILE_TIMING` to attribute the whole per-read path, not
+  just the parts that were suspected. The first attempt bracketed from candidate assembly and
+  covered 47.8 percent of worker compute, which would have sent optimization at the
+  second-largest region while the largest stayed unmeasured; the reconciliation line now prints
+  `region_sum_seconds` beside `compute_total_seconds` so a shortfall is visible in the output.
+  With full coverage on the three-million-read subset, 24,744.2 of 24,745.5 worker-seconds are
+  attributed: `evidence` 38.6 percent, `facts` 27.9, `signature` 14.8, `tail` 8.9, `tally` 7.0,
+  `digest` 1.8, `resolve` 0.8, `observe` 0.1, `prelude` 0.0. That is 8.25 ms of worker CPU per
+  read, of which the counting itself is 0.1 percent: everything expensive is deciding what to
+  count. Regions are per-worker on their own cache lines and gated behind the environment
+  variable, and output is byte-identical. Next targets in order: the assignment signature and
+  its digest at 16.6 percent combined, then `evidence` and `facts` at 66.5 percent, which are
+  both bounded by the roughly 121 candidates evaluated per read against a prefilter that removes
+  only 6.1 percent of 1.43 billion.
 
