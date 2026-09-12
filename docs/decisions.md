@@ -2304,6 +2304,56 @@ uninstrumented initialization block. Wall-clock work belongs in `splice_geometry
 code is touched, no field counting reads is removed, and the structural surface digest is
 untouched.
 
+### D086 — Batch splice geometry units and probe the small side
+
+**Decision source:** Measurement, 2026-09-11. `splice_geometry` was 317.45 s, 32.9 percent of a
+three-million-read production run and its largest single phase.
+
+**What the phase is not.** It reports evaluating 141,543,588 candidate edges to keep 5,937,500, and
+the 95.8 percent discarded looked like the target. It is not. The candidate set decomposes as
+1,164,040 transcripts times 1.057 exon paths times 115.07 edges per path, and 115 edges per mRNA is
+pangenome node granularity, about 19.4 bp per node; the 5.10 kept edges per transcript are its
+introns. The ratio is nodes per mRNA over introns per mRNA and is intrinsic. The discarded
+candidates cost hash lookups against a table of about 1,600 entries already resident in cache, and
+they cannot be identified without first building the body index, which is the expensive part.
+`evaluated - vetoed - owned` is exactly 7 across the whole graph, so the adjacency veto is not one
+filter among several; it is the entire classifier.
+
+**Decision, four changes, none of which alters a computed value.**
+
+Work units are batched. `parallel_transform_ordered_blocks` was called with a block size of one, so
+each of 1,164,040 transcripts took a scheduler handshake and an ordered-commit ring slot
+individually. Every other parallel phase in the file batches; `exact_parent_models` runs 38,441
+blocks for 1,230,107 parents. Geometry now uses the same sizing, four blocks per worker capped at
+32 units. Blocks still commit in ordinal order, so the reduction sees results in task order.
+
+The body loop probes the small side. A body path carries on the order of 1,578 nodes while a
+transcript contributes about 115 candidate edges, and the loop walked the node side against an
+index of the candidates, against the intent its own comment states. Asking each candidate whether
+both endpoints lie on the path is the same condition, since the index keyed each edge under its
+lower endpoint, and it removes both the index build and roughly 1,348 lookups per body path.
+
+A body path's ledger row is resolved by graph handle. The loop built a path-name string and hashed
+it into the 2,461,354-row by-name map once per body path, 1,231,247 times, when `ledger_path_info`
+is already keyed by handle and holds a pointer to the same row.
+
+`body_geometry_owns_splice_edge` is not called from the hot loop. It re-tested the adjacency the
+preceding line had just ruled out and re-normalized an already-normalized pair; only its two
+endpoint tests remain at the call site.
+
+**Measurement.** Interleaved against `4afb084` built in its own worktree, on a 20,000-read GAMP,
+since the phase is read-count independent. First pair: 481.28 s before at load 209.07 against
+67.285 s after at load 158.69, and total wall 940.91 s against 455.75 s. That is 7.15x on the
+phase, against a load difference of 1.32x, so the loads do not explain it; a second pair was still
+running when this was written and the figure should be re-measured on a quiet machine before it is
+quoted in a release note.
+
+**Acceptance:** all four phase counters are identical across arms —
+`evaluated_target_edges=141543588`, `owned_target_edges=5937500`,
+`adjacent_vetoed_target_edges=135606081`, `fragment_only_target_edges=207`. `fragment_only` is the
+sharpest of these: it is 207 out of 141.5 million and it is computed by exactly the loop whose
+probe direction was inverted, so a non-equivalent rewrite would move it. 165/165 CTests pass.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.

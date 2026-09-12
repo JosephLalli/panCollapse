@@ -3682,21 +3682,19 @@ int run_convert(int argc, char** argv) {
                 const bool degraded_parent =
                     production_identity && body_unresolvable_targets.count(*target_id) != 0;
                 // For the fragment-only audit, record whether both endpoints ever coexist on one
-                // raw body path. Index each candidate edge by its lower endpoint so each body path
-                // only probes candidates incident on nodes it actually contains.
-                std::unordered_map<int64_t, std::vector<GeometryEdge>> exon_edges_by_first;
-                for (const GeometryEdge& edge : exon_edges) {
-                    exon_edges_by_first[edge.first].push_back(edge);
-                }
-
+                // raw body path.
                 pathtally::BodyGeometryIndex body_geometry;
                 std::unordered_set<GeometryEdge, pathtally::NodePairHash>
                     same_path_endpoint_edges;
                 bool has_usable_body_path = false;
                 for (const handlegraph::path_handle_t& body_path : body_paths) {
                     if (production_identity) {
-                        const auto& annotation = std::as_const(identity_ledger->rows_by_path).at(
-                            graph.get_path_name(body_path)).annotation;
+                        // ledger_path_info is already keyed by graph handle and holds a pointer
+                        // to the ledger row. Going through get_path_name built a string and
+                        // hashed it into the millions-of-rows by-name map once per body path.
+                        const auto& annotation =
+                            ledger_path_info.at(handlegraph::as_integer(body_path))
+                                .identity->annotation;
                         if (body_unresolvable_exon_parents.count(
                                 annotation.exon_unique_parent) != 0) {
                             continue;
@@ -3712,17 +3710,19 @@ int run_convert(int argc, char** argv) {
                     if (same_path_endpoint_edges.size() == exon_edges.size()) {
                         continue;  // all candidates already have same-path support; only union/adjacency remains
                     }
+                    // Probe the small side. A body path carries on the order of a thousand
+                    // nodes while a transcript contributes about a hundred candidate edges, so
+                    // asking each candidate whether both its endpoints are on this path is an
+                    // order of magnitude fewer lookups than walking the path's nodes against an
+                    // index of the candidates. The condition is the same one: the old form
+                    // indexed each edge under its lower endpoint, so it inserted exactly when
+                    // the path held both endpoints.
                     std::unordered_set<int64_t> path_nodes(path_node_ids.begin(),
                                                            path_node_ids.end());
-                    for (const int64_t node_id : path_nodes) {
-                        const auto candidates = exon_edges_by_first.find(node_id);
-                        if (candidates == exon_edges_by_first.end()) {
-                            continue;
-                        }
-                        for (const GeometryEdge& edge : candidates->second) {
-                            if (path_nodes.count(edge.second) != 0) {
-                                same_path_endpoint_edges.insert(edge);
-                            }
+                    for (const GeometryEdge& edge : exon_edges) {
+                        if (path_nodes.count(edge.first) != 0 &&
+                            path_nodes.count(edge.second) != 0) {
+                            same_path_endpoint_edges.insert(edge);
                         }
                     }
                 }
@@ -3742,8 +3742,11 @@ int run_convert(int argc, char** argv) {
                         ++result.adjacent_vetoed;
                         continue;
                     }
-                    if (!pathtally::body_geometry_owns_splice_edge(
-                            body_geometry, edge.first, edge.second)) {
+                    // body_geometry_owns_splice_edge re-tests the adjacency the line above just
+                    // ruled out, and re-normalizes a pair that is already normalized. Both
+                    // endpoint tests are all that remains of it here.
+                    if (body_geometry.nodes.count(edge.first) == 0 ||
+                        body_geometry.nodes.count(edge.second) == 0) {
                         continue;
                     }
                     ++result.owned;
@@ -3835,35 +3838,65 @@ int run_convert(int argc, char** argv) {
                   [](const GeometryTask& a, const GeometryTask& b) {
                       return a.key < b.key;
                   });
+        // One task per transcript went through the scheduler and the ordered-commit ring
+        // individually, so a graph with over a million transcripts paid a mutex handshake and a
+        // ring slot per unit. Every other parallel phase here batches; this one did not. Batch it
+        // the same way. Blocks still commit in ordinal order, so the reduction below sees results
+        // in task order exactly as before.
+        constexpr size_t kMaxGeometryBlockSize = 32;
+        constexpr size_t kGeometryBlocksPerWorker = 4;
+        const size_t desired_geometry_blocks = geometry_tasks.empty()
+            ? 0
+            : std::min(geometry_tasks.size(),
+                       options.threads > std::numeric_limits<size_t>::max() /
+                                             kGeometryBlocksPerWorker
+                           ? geometry_tasks.size()
+                           : options.threads * kGeometryBlocksPerWorker);
+        const size_t geometry_block_size = geometry_tasks.empty()
+            ? 1
+            : std::min(kMaxGeometryBlockSize,
+                       1 + (geometry_tasks.size() - 1) / desired_geometry_blocks);
         const size_t geometry_worker_count =
-            std::min(options.threads, geometry_tasks.size());
+            std::min(options.threads,
+                     geometry_tasks.empty()
+                         ? size_t{1}
+                         : 1 + (geometry_tasks.size() - 1) / geometry_block_size);
         parallel_transform_ordered_blocks(
-            geometry_tasks.size(), options.threads, /*block_size=*/1,
+            geometry_tasks.size(), options.threads, geometry_block_size,
             [&](size_t block, size_t begin, size_t end) {
                 static_cast<void>(block);
-                static_cast<void>(end);
-                const GeometryTask& task = geometry_tasks[begin];
+                std::vector<GeometryResult> block_results;
+                block_results.reserve(end - begin);
                 const std::vector<handlegraph::path_handle_t> no_body;
-                return record_geometry(
-                    *task.exon_paths, task.body_paths == nullptr ? no_body : *task.body_paths,
-                    task.legacy_gene_idx);
+                for (size_t index = begin; index < end; ++index) {
+                    const GeometryTask& task = geometry_tasks[index];
+                    block_results.push_back(record_geometry(
+                        *task.exon_paths,
+                        task.body_paths == nullptr ? no_body : *task.body_paths,
+                        task.legacy_gene_idx));
+                }
+                return block_results;
             },
-            [&](size_t block, size_t begin, size_t end, GeometryResult result) {
+            [&](size_t block, size_t begin, size_t end,
+                std::vector<GeometryResult> block_results) {
                 static_cast<void>(block);
                 static_cast<void>(end);
-                const GeometryTask& task = geometry_tasks[begin];
                 // Results commit by stable numeric target/gene ID. Expensive graph traversal is
                 // lock-free; only this reduction mutates shared splice/counter structures.
-                if (task.legacy_gene_idx.has_value()) {
-                    transcript_spans[*task.legacy_gene_idx] = std::move(result.spans);
+                for (size_t offset = 0; offset < block_results.size(); ++offset) {
+                    const GeometryTask& task = geometry_tasks[begin + offset];
+                    GeometryResult& result = block_results[offset];
+                    if (task.legacy_gene_idx.has_value()) {
+                        transcript_spans[*task.legacy_gene_idx] = std::move(result.spans);
+                    }
+                    for (const auto& [edge, target_id] : result.splice_owners) {
+                        splice_edges[edge].insert(target_id);
+                    }
+                    d63_splice_target_edges_evaluated += result.evaluated;
+                    d63_splice_target_edges_owned += result.owned;
+                    d63_splice_target_edges_fragment_only += result.fragment_only;
+                    d63_splice_target_edges_adjacent_vetoed += result.adjacent_vetoed;
                 }
-                for (const auto& [edge, target_id] : result.splice_owners) {
-                    splice_edges[edge].insert(target_id);
-                }
-                d63_splice_target_edges_evaluated += result.evaluated;
-                d63_splice_target_edges_owned += result.owned;
-                d63_splice_target_edges_fragment_only += result.fragment_only;
-                d63_splice_target_edges_adjacent_vetoed += result.adjacent_vetoed;
             });
         const double splice_geometry_seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - splice_geometry_started).count();

@@ -1084,4 +1084,16 @@ projection, or a custom index.
   the annotation in the bundle is itself a panSC product carrying 1,231,247 synthesized
   transcript-body rows. Next runtime target is `splice_geometry` at 317.45 s, 32.9 percent,
   which evaluates 141,543,588 candidate edges to keep 5,937,500.
+- 2026-09-11: Cut `splice_geometry`, the largest phase of a three-million-read production run at
+  317.45 s and 32.9 percent, by batching its work units and probing the small side (D086). The
+  phase called the ordered-block helper with a block size of one, so 1,164,040 transcripts each
+  took a scheduler handshake and a commit ring slot, and its body loop walked roughly 1,578 path
+  nodes against an index of about 115 candidate edges rather than the reverse. Interleaved
+  against `4afb084` on a 20,000-read GAMP, since the phase is read-count independent: 481.28 s
+  before at load 209 against 67.285 s after at load 159, total wall 940.91 s against 455.75 s.
+  All four phase counters are identical across arms, including `fragment_only_target_edges=207`,
+  which the inverted loop computes. 165/165 CTests pass. The 95.8 percent veto rate that first
+  drew attention to this phase was a red herring: the discarded candidates are cache-resident
+  hash lookups and cannot be identified without building the body index that dominates the cost.
+  Re-measure on a quiet machine before quoting the speedup.
 
