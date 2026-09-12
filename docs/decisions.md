@@ -2341,12 +2341,15 @@ is already keyed by handle and holds a pointer to the same row.
 preceding line had just ruled out and re-normalized an already-normalized pair; only its two
 endpoint tests remain at the call site.
 
-**Measurement.** Interleaved against `4afb084` built in its own worktree, on a 20,000-read GAMP,
-since the phase is read-count independent. First pair: 481.28 s before at load 209.07 against
-67.285 s after at load 158.69, and total wall 940.91 s against 455.75 s. That is 7.15x on the
-phase, against a load difference of 1.32x, so the loads do not explain it; a second pair was still
-running when this was written and the figure should be re-measured on a quiet machine before it is
-quoted in a release note.
+**Measurement.** Interleaved against `4afb084` built in its own worktree, two repetitions per arm,
+on a 20,000-read GAMP since the phase is read-count independent. Before: 481.28 s and 456.675 s,
+mean 468.98 s, spread 24.60 s. After: 67.285 s and 104.815 s, mean 86.05 s, spread 37.53 s. That is
+5.45x on means, 4.36x on the most conservative pairing of the fastest before against the slowest
+after, and 7.15x at best. The gap between those two extremes is 351.86 s against a largest
+within-arm spread of 37.53 s, 9.4 times, so the difference clears the noise floor. The before arm
+happened to run at a 1.12x higher mean load, which does not explain 5.45x. Total wall on the
+20,000-read GAMP fell from a mean 878.86 s to 507.94 s. The machine carried unrelated jobs at load
+150 to 209 throughout, so these are shared-machine figures and 4.36x is the defensible floor.
 
 **Acceptance:** all four phase counters are identical across arms —
 `evaluated_target_edges=141543588`, `owned_target_edges=5937500`,
