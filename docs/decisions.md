@@ -2357,6 +2357,54 @@ happened to run at a 1.12x higher mean load, which does not explain 5.45x. Total
 sharpest of these: it is 207 out of 141.5 million and it is computed by exactly the loop whose
 probe direction was inverted, so a non-equivalent rewrite would move it. 165/165 CTests pass.
 
+### D087 — Key the assignment cache by digest and hold exact-edge geometry in sorted vectors
+
+**Decision source:** Memory attribution, 2026-09-12, after a three-million-read production run
+peaked at 122.1 GiB against a workload whose accumulating state is under a gigabyte.
+
+**Context.** A first-principles budget for this job is roughly 750 MiB: 285 MiB of pre-collapse
+UMI keys, 130 MiB of molecules, 10 MiB of count cells, and on the order of 200 MiB of reference
+indexes. The run used 160 times that. Instrumenting each live structure in turn attributed
+`assignment_cache` at 53.36 GiB and `exact_ex50_models` at 22.65 GiB, together 74 percent of the
+103.65 GiB the allocator reported in use. Three earlier hypotheses were measured and rejected
+first: glibc arena count (1.8 percent effect), heap fragmentation (only 2.89 GiB was free but
+retained), and `node_ledger_cache` (6.26 GiB, not the tens of GiB assumed).
+
+**Decision, two changes, neither altering a computed value.**
+
+The assignment cache is keyed by a SHA-256 digest of its signature rather than by the signature.
+`assignment_facts_signature` concatenates, for every candidate of a read and across both the
+exact and gene-fallback lists, the full text of gene, equivalence gene, nested host, body-support
+sample names, novel-origin gene, category names and gene-type names. On a ninety-haplotype
+pangenome that text averaged over four hundred kilobytes per entry, and `BoundedShardedCache`
+retained it as the map key. The entry count was bounded at 131,072; the entry size never was. The
+signature is only ever compared for equality, so only a digest needs to be kept, and the
+signature itself stays a per-read temporary.
+
+`ExactEx50Model::exon_edges` holds a sorted unique `std::vector<ExactEdge>` rather than a
+`std::set`. The geometries are built once and thereafter only membership-tested, and a red-black
+node costs about eighty bytes to carry a thirty-two byte edge. The vector is sorted and
+deduplicated at construction so its contents match the set exactly, and the single query site uses
+`std::binary_search`.
+
+**Measurement.** On the three-million-read chr20-22 production subset, peak resident memory fell
+from 127,987,152 KiB to 61,911,068 KiB, 122.1 GiB to 59.0 GiB, a 2.07x reduction. The phase peaks
+move as predicted: after `exact_parent_models` 59.3 GiB becomes 45.5 GiB, and at one million
+completed read groups roughly 95 GiB becomes 56.2 GiB. Wall time fell from 965 s to 531 s on a
+more heavily loaded machine, which is consistent with the reduced allocation pressure but is not
+a controlled comparison and should not be quoted as a speedup.
+
+**Acceptance:** byte-identical output. `summary.tsv` and all four Parquet tables match the
+pre-fix reference exactly. 165/165 CTests pass.
+
+**Residual.** Attribution accounted for 86.50 GiB of 103.65 GiB in use before the fixes, leaving
+17.15 GiB unattributed, consistent with the XG's heap-side allocation and per-chunk overhead not
+charged by the estimators. The remaining 59.0 GiB is still far above the roughly 750 MiB the
+workload requires; the largest identified remainders are the XG itself at about 23 GiB, the
+path identity ledger at 3.41 GiB holding 2,461,354 rows of twenty-one `std::string` fields where
+interned integer identifiers would need tens of megabytes, and `node_ledger_cache` at 6.26 GiB,
+which never evicts.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.

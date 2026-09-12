@@ -1099,4 +1099,17 @@ projection, or a custom index.
   drew attention to this phase was a red herring: the discarded candidates are cache-resident
   hash lookups and cannot be identified without building the body index that dominates the cost.
   Re-measure on a quiet machine before quoting the speedup.
+- 2026-09-12: Halved peak memory on the three-million-read production subset, 122.1 GiB to
+  59.0 GiB, with byte-identical output and 165/165 CTests passing (D087). A first-principles
+  budget for this job is about 750 MiB, so the run was using 160 times what the workload needs.
+  Attribution found `assignment_cache` holding 53.36 GiB because its key is the full
+  concatenated text of every candidate's evidence, averaging over four hundred kilobytes per
+  entry with the entry count bounded but the entry size not; it now stores a SHA-256 digest.
+  `exact_ex50_models` held 22.65 GiB in 1.23 million `std::set<ExactEdge>` geometries, about
+  eighty bytes of red-black node per thirty-two byte edge; they are now sorted unique vectors
+  queried by binary search. Three earlier hypotheses were measured and rejected first: glibc
+  arena count, heap fragmentation, and the node ledger cache. Still open: the remaining 59.0 GiB
+  is dominated by the XG at about 23 GiB, the path identity ledger at 3.41 GiB of `std::string`
+  fields that interning would reduce to tens of megabytes, and the never-evicting
+  `node_ledger_cache` at 6.26 GiB.
 

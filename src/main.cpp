@@ -2378,6 +2378,26 @@ std::string assignment_candidate_signature(
     return output;
 }
 
+// The assignment cache is keyed by a signature that concatenates the full text of every
+// candidate's evidence: gene, equivalence gene, nested host, body support sample names,
+// category names and gene-type names, across both the exact and gene-fallback candidate
+// lists. On a production pangenome that text averages hundreds of kilobytes per read group,
+// and the cache retained it as its map key: 53.4 GiB of a 122 GiB peak on a three-million
+// read run. The signature is only ever compared for equality, so the cache stores a digest
+// of it instead. The signature itself stays a per-read temporary.
+std::string assignment_signature_digest(std::string_view signature) {
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(EVP_MD_CTX_new(),
+                                                                    EVP_MD_CTX_free);
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int length = 0;
+    if (!context || EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1 ||
+        EVP_DigestUpdate(context.get(), signature.data(), signature.size()) != 1 ||
+        EVP_DigestFinal_ex(context.get(), digest, &length) != 1) {
+        throw std::runtime_error("cannot digest an assignment signature");
+    }
+    return std::string(reinterpret_cast<const char*>(digest), length);
+}
+
 std::string assignment_facts_signature(
     const pancollapse::direct_count::AssignmentFacts& facts) {
     std::string output;
@@ -3005,7 +3025,10 @@ int run_convert(int argc, char** argv) {
         uint32_t body_path_rank = 0;
         uint32_t exon_parent_rank = 0;
         uint32_t body_parent_rank = 0;
-        std::shared_ptr<const std::set<ExactEdge>> exon_edges;
+        // A sorted unique vector, not a set: these geometries are built once and then only
+        // membership-tested, and a red-black node costs about 80 bytes to carry 32 bytes of
+        // edge. Over 1.23 million geometries that difference was 22.7 GiB of a 122 GiB peak.
+        std::shared_ptr<const std::vector<ExactEdge>> exon_edges;
         bool body_exon_same = true;
         // Most models never need an occurrence override. Avoid carrying an allocated tree
         // header in every model; only repeated-but-resolvable body nodes own this map.
@@ -3314,7 +3337,7 @@ int run_convert(int argc, char** argv) {
                 std::min(options.threads, parent_block_count);
             size_t prepared_exon_path_count = 0;
             size_t prepared_body_path_count = 0;
-            std::unordered_set<const std::set<ExactEdge>*> retained_exon_edge_geometries;
+            std::unordered_set<const std::vector<ExactEdge>*> retained_exon_edge_geometries;
             parallel_transform_ordered_blocks(
                 parent_tasks.size(), options.threads, parent_block_size,
                 [&](size_t block, size_t begin, size_t end) {
@@ -3331,7 +3354,7 @@ int run_convert(int argc, char** argv) {
                             const path_identity::PathIdentityRow* row = nullptr;
                             uint64_t path_handle = 0;
                             std::vector<std::pair<int64_t, bool>> steps;
-                            std::shared_ptr<const std::set<ExactEdge>> edges;
+                            std::shared_ptr<const std::vector<ExactEdge>> edges;
                         };
                         struct PreparedBody {
                             const path_identity::PathIdentityRow* row = nullptr;
@@ -3378,19 +3401,25 @@ int run_convert(int argc, char** argv) {
                                 }
                             }
                             if (!current.edges) {
-                                std::set<ExactEdge> edges;
+                                std::vector<ExactEdge> edges;
+                                edges.reserve(current.steps.size() * 2);
                                 for (size_t step_index = 1;
                                      step_index < current.steps.size(); ++step_index) {
                                     const auto& previous = current.steps[step_index - 1];
                                     const auto& next = current.steps[step_index];
-                                    edges.emplace(previous.first, previous.second,
-                                                  next.first, next.second);
+                                    edges.emplace_back(previous.first, previous.second,
+                                                       next.first, next.second);
                                     // Reverse traversal reverses node order and flips handles.
-                                    edges.emplace(next.first, !next.second,
-                                                  previous.first, !previous.second);
+                                    edges.emplace_back(next.first, !next.second,
+                                                       previous.first, !previous.second);
                                 }
-                                current.edges =
-                                    std::make_shared<const std::set<ExactEdge>>(std::move(edges));
+                                // Match std::set's content exactly: sorted and unique.
+                                std::sort(edges.begin(), edges.end());
+                                edges.erase(std::unique(edges.begin(), edges.end()),
+                                            edges.end());
+                                edges.shrink_to_fit();
+                                current.edges = std::make_shared<const std::vector<ExactEdge>>(
+                                    std::move(edges));
                                 representatives.push_back(prepared_exons.size() - 1);
                             }
                             ++result.prepared_exon_paths;
@@ -4090,7 +4119,7 @@ int run_convert(int argc, char** argv) {
         });
     };
 
-    auto exon_edges_for = [](const ExactEx50Model& model) -> const std::set<ExactEdge>& {
+    auto exon_edges_for = [](const ExactEx50Model& model) -> const std::vector<ExactEdge>& {
         if (!model.exon_edges) {
             throw std::runtime_error("internal exact model is missing exon-edge geometry");
         }
@@ -4255,7 +4284,8 @@ int run_convert(int argc, char** argv) {
                         prior.last_at_node_end && offset == 0;
                     next.splice_concordant =
                         next.splice_concordant && boundary_exact &&
-                        exon_edges_for(model).count(edge) != 0;
+                        std::binary_search(exon_edges_for(model).begin(),
+                                           exon_edges_for(model).end(), edge);
                 }
             }
 
@@ -5422,7 +5452,8 @@ int run_convert(int argc, char** argv) {
                         assignment_signature, assignment_facts_signature(facts));
                 }
                 const std::shared_ptr<const CachedAssignmentResults> assignments =
-                    assignment_cache->get_or_build(assignment_signature, [&]() {
+                    assignment_cache->get_or_build(
+                        assignment_signature_digest(assignment_signature), [&]() {
                         CachedAssignmentResults resolved;
                         resolved.reserve(selected_profiles.size());
                         for (size_t profile_index = 0;
