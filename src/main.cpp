@@ -2352,14 +2352,26 @@ std::string assignment_candidate_signature(
     append_signature_integer(output, static_cast<std::uint8_t>(candidate.strand));
     append_signature_integer(output, static_cast<std::uint8_t>(candidate.competition));
     append_signature_integer(output, candidate.body_sample_support);
-    std::vector<std::string> body_support_units = candidate.body_support_units;
-    std::sort(body_support_units.begin(), body_support_units.end());
+    // Sort pointers, not the strings themselves: this ran once per candidate and copied the
+    // whole sample-name vector to do it.
+    std::vector<const std::string*> body_support_units;
+    body_support_units.reserve(candidate.body_support_units.size());
+    for (const std::string& unit : candidate.body_support_units) {
+        body_support_units.push_back(&unit);
+    }
+    std::sort(body_support_units.begin(), body_support_units.end(),
+              [](const std::string* left, const std::string* right) {
+                  return *left < *right;
+              });
     body_support_units.erase(
-        std::unique(body_support_units.begin(), body_support_units.end()),
+        std::unique(body_support_units.begin(), body_support_units.end(),
+                    [](const std::string* left, const std::string* right) {
+                        return *left == *right;
+                    }),
         body_support_units.end());
     append_signature_integer(output, body_support_units.size());
-    for (const std::string& unit : body_support_units) {
-        append_signature_string(output, unit);
+    for (const std::string* unit : body_support_units) {
+        append_signature_string(output, *unit);
     }
     append_signature_integer(output, candidate.identity_known ? 1 : 0);
     append_signature_integer(output, candidate.novel_paralog ? 1 : 0);
@@ -2378,45 +2390,97 @@ std::string assignment_candidate_signature(
     return output;
 }
 
-// The assignment cache is keyed by a signature that concatenates the full text of every
-// candidate's evidence: gene, equivalence gene, nested host, body support sample names,
-// category names and gene-type names, across both the exact and gene-fallback candidate
-// lists. On a production pangenome that text averages hundreds of kilobytes per read group,
-// and the cache retained it as its map key: 53.4 GiB of a 122 GiB peak on a three-million
-// read run. The signature is only ever compared for equality, so the cache stores a digest
-// of it instead. The signature itself stays a per-read temporary.
-std::string assignment_signature_digest(std::string_view signature) {
-    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(EVP_MD_CTX_new(),
-                                                                    EVP_MD_CTX_free);
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int length = 0;
-    if (!context || EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1 ||
-        EVP_DigestUpdate(context.get(), signature.data(), signature.size()) != 1 ||
-        EVP_DigestFinal_ex(context.get(), digest, &length) != 1) {
-        throw std::runtime_error("cannot digest an assignment signature");
+// The assignment cache is keyed by a digest of a signature over every candidate's evidence:
+// gene, equivalence gene, nested host, body support sample names, category names and
+// gene-type names, across both the exact and gene-fallback lists. On a production pangenome
+// that text runs to hundreds of kilobytes per read group, and materializing it cost three
+// copies per read: the per-candidate rows, their concatenation, and the outer per-profile
+// append. Stream it into the digest instead. Candidate rows are still built because they are
+// sorted, which is what makes the key independent of candidate order, but nothing larger than
+// one row is ever assembled.
+class SignatureDigest {
+  public:
+    SignatureDigest() : context_(EVP_MD_CTX_new(), EVP_MD_CTX_free) {
+        if (!context_ || EVP_DigestInit_ex(context_.get(), EVP_sha256(), nullptr) != 1) {
+            throw std::runtime_error("cannot initialize an assignment signature digest");
+        }
     }
-    return std::string(reinterpret_cast<const char*>(digest), length);
-}
 
-std::string assignment_facts_signature(
-    const pancollapse::direct_count::AssignmentFacts& facts) {
-    std::string output;
-    output.push_back(facts.has_complete_provenance ? '\1' : '\0');
-    auto append_candidates = [&](const auto& candidates) {
-        std::vector<std::string> rows;
+    void byte(unsigned char value) { raw(reinterpret_cast<const char*>(&value), 1); }
+
+    void integer(std::uint64_t value) {
+        char encoded[8];
+        for (int index = 0; index < 8; ++index) {
+            encoded[index] = static_cast<char>((value >> (56 - 8 * index)) & 0xffU);
+        }
+        raw(encoded, sizeof(encoded));
+    }
+
+    void string(std::string_view value) {
+        integer(value.size());
+        raw(value.data(), value.size());
+    }
+
+    std::string finish() {
+        flush();
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        unsigned int length = 0;
+        if (EVP_DigestFinal_ex(context_.get(), digest, &length) != 1) {
+            throw std::runtime_error("cannot finalize an assignment signature digest");
+        }
+        return std::string(reinterpret_cast<const char*>(digest), length);
+    }
+
+  private:
+    void raw(const char* data, size_t size) {
+        if (size >= buffer_.size()) {
+            flush();
+            update(data, size);
+            return;
+        }
+        if (used_ + size > buffer_.size()) {
+            flush();
+        }
+        std::memcpy(buffer_.data() + used_, data, size);
+        used_ += size;
+    }
+
+    void flush() {
+        if (used_ == 0) return;
+        update(buffer_.data(), used_);
+        used_ = 0;
+    }
+
+    void update(const char* data, size_t size) {
+        if (EVP_DigestUpdate(context_.get(), data, size) != 1) {
+            throw std::runtime_error("cannot update an assignment signature digest");
+        }
+    }
+
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context_;
+    std::array<char, 8192> buffer_{};
+    size_t used_ = 0;
+};
+
+void digest_assignment_facts(SignatureDigest& digest,
+                             const pancollapse::direct_count::AssignmentFacts& facts,
+                             std::vector<std::string>& rows) {
+    digest.byte(facts.has_complete_provenance ? 1 : 0);
+    auto digest_candidates = [&](const auto& candidates) {
+        rows.clear();
         rows.reserve(candidates.size());
         for (const auto& candidate : candidates) {
             rows.push_back(assignment_candidate_signature(candidate));
         }
+        // Sorting is what makes the key independent of candidate order.
         std::sort(rows.begin(), rows.end());
-        append_signature_integer(output, rows.size());
+        digest.integer(rows.size());
         for (const std::string& row : rows) {
-            append_signature_string(output, row);
+            digest.string(row);
         }
     };
-    append_candidates(facts.exact);
-    append_candidates(facts.gene_fallback);
-    return output;
+    digest_candidates(facts.exact);
+    digest_candidates(facts.gene_fallback);
 }
 
 int run_compatibility_replay(int argc, char** argv, const Options& options) {
@@ -4877,6 +4941,8 @@ int run_convert(int argc, char** argv) {
         // Region clock for the read path. Regions nest inside compute_before_output_ns, so
         // their sum plus tail is a check on the instrumentation itself: a shortfall means
         // real work sits outside every bracket.
+        // Reused across the group's profiles so the row vector allocates once per read.
+        std::vector<std::string> signature_rows;
         auto region_clock = group_started;
         auto mark = [&](uint64_t& bucket) {
             if (!profile_runtime_timing) return;
@@ -5473,14 +5539,13 @@ int run_convert(int argc, char** argv) {
                     : std::optional<std::string_view>{
                           current_group.molecule.barcode_quality};
                 mark(runtime_timing.facts_ns);
-                std::string assignment_signature;
+                SignatureDigest signature_digest;
+                signature_digest.integer(profile_assignment_facts.size());
                 for (const AssignmentFacts& facts : profile_assignment_facts) {
-                    append_signature_string(
-                        assignment_signature, assignment_facts_signature(facts));
+                    digest_assignment_facts(signature_digest, facts, signature_rows);
                 }
                 mark(runtime_timing.signature_ns);
-                std::string assignment_key =
-                    assignment_signature_digest(assignment_signature);
+                std::string assignment_key = signature_digest.finish();
                 mark(runtime_timing.digest_ns);
                 const std::shared_ptr<const CachedAssignmentResults> assignments =
                     assignment_cache->get_or_build(

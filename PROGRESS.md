@@ -1126,4 +1126,19 @@ projection, or a custom index.
   its digest at 16.6 percent combined, then `evidence` and `facts` at 66.5 percent, which are
   both bounded by the roughly 121 candidates evaluated per read against a prefilter that removes
   only 6.1 percent of 1.43 billion.
+- 2026-09-12: Streamed the assignment signature into its digest instead of materializing it.
+  The old path built the text three times per read group: the per-candidate rows, their
+  concatenation into roughly four hundred kilobytes, and an outer copy per profile. A buffered
+  `SignatureDigest` now feeds SHA-256 from an eight-kilobyte stack buffer, candidate rows still
+  being built and sorted because that sort is what makes the key independent of candidate
+  order. `body_support_units` also sorts pointers rather than copying the sample-name vector
+  once per candidate. Worker CPU on the three-million-read subset fell from 24,745.5 to
+  16,912.8 worker-seconds, 8.25 ms to 5.64 ms per read, and `digest` alone fell from 446.7 to
+  10.1 worker-seconds for the same hash over the same logical content: almost all of it was
+  materializing the input, not hashing. Output is byte-identical and 165/165 CTests pass. The
+  regions I did not touch also fell 25 to 57 percent, which is consistent with reduced
+  allocator contention across 128 threads but was not load-controlled, so the 1.46x total is a
+  single-run figure pending an interleaved A/B. The cache key encoding changed, which is safe
+  because it is an in-process key rather than a persisted content address; it remains
+  self-delimiting and therefore injective.
 
