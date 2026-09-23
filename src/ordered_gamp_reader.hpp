@@ -44,6 +44,9 @@ struct OrderedGampReaderOptions {
     std::function<void(std::uint64_t)> before_decode;
 };
 
+// One exact SpaceUsedLong() per this many serialized bytes per decoder thread.
+inline constexpr std::size_t kExactSpaceSampleIntervalBytes = 4U << 20;
+
 struct OrderedGampReaderStats {
     std::uint64_t batches = 0;
     std::uint64_t records = 0;
@@ -300,6 +303,17 @@ private:
         set_decoder_thread_name();
         const std::uint64_t cpu_started = thread_cpu_now_ns();
 
+        // SpaceUsedLong() walks the whole nested object graph, costing as much as
+        // parsing on dense alignments, and it feeds only diagnostics. Measure it once
+        // per fixed budget of SERIALIZED bytes and scale the rest by serialized size.
+        // The budget is cumulative across batches on purpose: batches seal on bytes, so
+        // a large record arrives alone in its own batch, and per-batch sampling measured
+        // exactly the records whose traversal costs the most -- it recovered only 247 of
+        // an available 521 decoder CPU seconds for that reason.
+        std::size_t sampled_serialized = 0;
+        std::size_t sampled_space = 0;
+        std::size_t serialized_since_exact = 0;
+
         while (true) {
             std::shared_ptr<GampBatchSlot> slot;
             {
@@ -340,7 +354,24 @@ private:
                         throw std::runtime_error(
                             "[io::ProtobufIterator] could not parse message");
                     }
-                    const std::size_t record_space = decoded.back().SpaceUsedLong();
+                    const std::size_t serialized = raw_record.data ? raw_record.data->size() : 0;
+                    std::size_t record_space;
+                    if (sampled_serialized == 0 ||
+                        serialized_since_exact >= kExactSpaceSampleIntervalBytes) {
+                        record_space = decoded.back().SpaceUsedLong();
+                        sampled_serialized = serialized != 0 ? serialized : 1;
+                        sampled_space = record_space;
+                        serialized_since_exact = 0;
+                    } else {
+                        record_space = static_cast<std::size_t>(
+                            static_cast<unsigned long long>(serialized) * sampled_space
+                            / sampled_serialized);
+                        if (record_space < sizeof(GampRecord)) {
+                            record_space = sizeof(GampRecord);
+                        }
+                        serialized_since_exact =
+                            saturated_add(serialized_since_exact, serialized);
+                    }
                     decoded_space_used = saturated_add(decoded_space_used, record_space);
                     const std::size_t dynamic_space = record_space > sizeof(GampRecord)
                         ? record_space - sizeof(GampRecord)
