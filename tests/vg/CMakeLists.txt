@@ -3,6 +3,12 @@ target_link_libraries(vg_link_smoke PRIVATE panCollapse::vg_boundary panCollapse
 add_test(NAME vg_link_smoke COMMAND vg_link_smoke)
 set_tests_properties(vg_link_smoke PROPERTIES LABELS "vg;link")
 
+add_executable(ordered_gamp_reader_test ordered_gamp_reader_test.cpp)
+target_include_directories(ordered_gamp_reader_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(ordered_gamp_reader_test PRIVATE panCollapse::vg_boundary panCollapse::warnings Threads::Threads)
+add_test(NAME ordered_gamp_reader_test COMMAND ordered_gamp_reader_test)
+set_tests_properties(ordered_gamp_reader_test PROPERTIES LABELS "vg;input;gamp;threads" TIMEOUT 120)
+
 # PathTally unit tests (self-contained; no external data).
 add_executable(pathtally_score_test pathtally_score_test.cpp)
 target_include_directories(pathtally_score_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
