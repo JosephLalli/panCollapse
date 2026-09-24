@@ -1,5 +1,1247 @@
 # Progress
 
+## CURRENT: Read-Granular Decode, arena decode and ordered-output reorder measured for native `count` (2026-09-23)
+
+**Read-Granular Decode (D090, accepted).** The producer groups serialized GAMP records into reads
+from each record's `name` and subpath presence, and each count worker decodes, counts and
+discards one whole read (`src/read_granular_input.hpp`, `src/main.cpp`). The previous reader
+stays selectable with `PANCOLLAPSE_INPUT_MODE=ordered_batch`. On `w_cliff` the read phase fell
+from 1,145.6 and 890.6 s to 222.8 and 207.7 s, count-worker idle from about 58% to 0.02%, and
+total CPU from 10,973 and 9,084 to 6,000 and 5,611 CPU-seconds; on `w_precliff` from 23.06 to
+10.96 s. Count tables byte-identical to the sealed baseline; all global counters equal. The
+design's 2.5x ceiling (CPU unchanged) was wrong; why CPU fell is not profiled. Evidence:
+`/mnt/ssd/lalli/pancollapse_read_granular_v1_20260923T160346Z/RESULTS.md`; design:
+`docs/research/read-granular-decode-design-20260923.md`.
+
+**Arena decode (done).** Each worker decodes into its own protobuf arena, reset per read. At
+matched load on `w_cliff`: read phase 193.8 to 160.6 s, worker CPU 5,186 to 4,240 CPU-seconds,
+byte-identical tables. `/mnt/ssd/lalli/pancollapse_decode_arena_v1_20260923T173617Z/RESULTS.md`.
+
+**Ordered output (done for `count`).** A bounded reorder stage (`src/ordered_output_reorder.hpp`)
+replaced the output turn for `--rad-out` and the compatibility writer. `count --rad-out` on
+`w_cliff`: 1,319.8 and 1,510.5 s under the turn, 155.3 and 154.7 s under reorder, `map.rad`
+byte-identical. `/mnt/ssd/lalli/pancollapse_rad_reorder_v1_20260923T182610Z/RESULTS.md`.
+`convert` still decodes on its producer and uses the turn.
+
+**Next candidates.** Count-side compute is now the whole critical path (headroom 1.05): the three
+traversals per mapping and per-read ordered containers. A full-input run would confirm the
+window projections (about 620 to 645 reads/s post-cliff).
+
+**Throughput cliff cause and read filter (2026-09-23/24).** The dense GAMP tail is the block of
+STAR-unmapped (bucket B) reads of the site1_donor2_asian fixture, rich in poly-G and low-complexity
+reads (19.6% of a dense sample against 0.05% before the cliff, carrying 82% of subpaths; count
+assigned many to two G-rich genes). By the user's decision the tier was filtered once with fastp:
+23,789,806 of 25,755,749 reads kept, B bucket 35.9% removed, A 0.61%, C 1.05%; 96.1% of the dense
+sample's subpaths removed. Filtered FASTQs:
+`/mnt/ssd/lalli/hprc_v2_vg_rna/chr20_compare/readsets/real_scrna_benchmark_v1/fastp_filtered_v1_20260924T014617Z/tiers/site1_donor2_asian/d10k_cap20k/`
+(README.md). Mapping started 2026-09-24 with the unfiltered arm's exact vg binary, indexes and flags
+(`vg mpmap -n rna -t 32 -F GAMP -M 10`), detached:
+`.../fastp_filtered_v1_20260924T014617Z/arms/site1_donor2_asian/d10k_cap20k/pangenome/` (STATUS reads
+MAPPED_SEALED when done; `mapping/reads.gamp`, `logs/vg_mpmap.time.txt`). The user switched to the
+vg v1.74.1 release image (v1.77.0 cannot load the v4 distance index): mapped all 23,789,806 reads in
+7 h 20 min, GAMP 9.0 GB against 127.2 GB. Native count on it: read phase 3.39 h against 58.5 h;
+cr7-v1 UMIs 2,856,170 to 2,597,568, per-gene Spearman 0.991, losses concentrated in a few G-rich
+genes (ENSG00000231133 -99.2%). `/mnt/ssd/lalli/pancollapse_filtered_native_count_v1_20260924T105938Z/RESULTS.md`. The packed-key speedup of the route
+tally is built and tested but unmeasured; that work was stopped in favor of filtering.
+
+**D091 route tally (accepted, measured).** Each alignment path is scored separately and each HST
+keeps its best path (user's rule: argmax over (alignment path, transcript) with ties). Implemented
+in `pathtally::RouteTally` for both tally producers; `PANCOLLAPSE_STRUCTURAL_TALLY=summed` restores
+D048. `cr7-v1` unchanged; `pansc-strict-v1` +60 TP / -2 FP on the 1M truth benchmark; +35% read
+phase on `w_cliff` (unoptimized). Open: RAD's one-gene rule drops nearly every read because ties
+span per-assembly gene identities. `/mnt/ssd/lalli/pancollapse_route_tally_v1_20260923T204025Z`.
+
+**Branch summing (D090 fork 3, decided by D091).** The summed per-node tally decides no `cr7-v1`
+assignment and 9 of 962 and 8 of 968 `pansc-strict-v1` assignments in two dense windows (via
+the exact-strand Gene fallback), and it selects RAD targets. Write-up:
+https://claude.ai/artifact/JNas3Gek3XzpPFn5D3LS2m ; evidence:
+`/mnt/ssd/lalli/pancollapse_branch_summing_v1_20260923T160346Z`.
+
+**Commits.** `2ce20c9` (ordered GAMP reader and test) and `2b5e466` (sampled `SpaceUsedLong`).
+The D090 code sits in `src/main.cpp`, whose uncommitted diff also carries the earlier annotation,
+cache and reader-wiring work, so it cannot be committed on its own without a decision about that
+work.
+
+## Completed (superseded as the frontier): Full-input throughput cliff characterized; sampled-`SpaceUsedLong` decoder fix accepted (2026-09-21)
+
+Full narrative, evidence tables and limits:
+[`docs/research/full-input-throughput-cliff-20260921.md`](docs/research/full-input-throughput-cliff-20260921.md).
+The allocator-substitution result below is **no longer the frontier**; its identified next step
+(reducing per-read `std::map` allocation) was measured on the 1M-read prefix, and the prefix is
+now known to sit entirely inside a cheap regime that covers 85.0% of reads but only 14.2% of
+read time.
+
+**Terminology.** The counters `input_read_groups` and `completed_read_groups` name what this
+codebase calls a read group: all GAMP records sharing one QNAME, i.e. one read's alignments
+(`src/main.cpp:6321`, `struct Group` at `:2004`). That collides with the SAM/BAM `@RG` meaning
+and is unrelated to it. New text below says **read** and **alignments per read**; historical
+sections keep their original wording.
+
+**The full-input run is terminal, validated, and not yet sealed.**
+`/mnt/ssd/lalli/pancollapse_real_native_count_v1_20260916T022706Z` finished 2026-09-18 13:23 UTC
+(`REPORT_RECEIPT.json` `created_utc`) with every stage exit 0 and STATUS `VALIDATED_REPORT_READY_PENDING_DOCS_AND_SEAL`; sealing is
+pending and is not this checkpoint's to perform. It processed 25,755,749 reads and 124,261,698
+alignments in a 210,645.357663 s read phase — **817.857627 s/100k reads**, 817.985728 s/100k
+including finalization — at peak RSS 137.476540 GiB. Both targets are missed by roughly fifty
+times the fallback. It ran binary `3d13e082…d7d0f958` (2026-09-15 exact-evidence/resident-finalize),
+**not** the frozen `6eb3e7ca…d6843a`, and predates ordered parallel input and Parent metadata
+reuse, so **any absolute prefix-versus-full comparison is confounded by binary version and is not
+a scale effect**. Its within-run behaviour is clean.
+
+**The cliff.** Interval throughput holds 300–2,000 reads/s to read about 22,046,000, then
+collapses inside a single roughly 12,288-read interval to about 21 reads/s and never recovers:
+85.0% of reads take 14.2% of read time, the remaining 15.0% take 85.8%, mean per-read ratio 34x.
+Not aggregation spill (`aggregate_spill_bytes`/`rows`/`runs` all zero), not host load (it fell),
+and unlogged (11 non-progress lines in 58.5 hours). `pancollapse_cliff_characterization_v1_20260919T194550Z`
+(sealed, 101 files) cut four 100,000-read windows from one pass over the source GAMP and counted
+each from a **cold** process on the current binary, which excludes accumulated state. It also
+excludes multimapping: post-cliff reads carry **fewer** alignments each (5.41 against 9.99
+pre-cliff). The cause is graph structure per alignment — 326x the subpaths and 596x the mappings
+of the pre-cliff window, with the whole distribution shifted (subpaths p50 1→6, p90 1→261,
+p99 7→15,295). Measured 56,950 candidates/read confirmed a 55,700 prediction to within 2%.
+Nothing crosses a software threshold: decode CPU per alignment rises 408x against 596x more
+mappings, and the glibc slow-path/fast-path ratio *falls* from 0.98 to 0.33. The cost function is
+smooth and the input steps.
+
+**Open question, upstream, unresolved and prominent.** Source ordinals rise monotonically with
+file position, so this GAMP is one continuous run in sequencing order, not concatenated shards.
+Across ~725,000 source reads at the cliff both alignment character (median subpaths 1→34) and
+retention into the GAMP (~69% locally in the tail against ~6.6% cumulative early) change
+together. **Why the tail carries ~600x more graph structure per alignment is not established**;
+candidates are flowcell/run-position effects, the upstream `d10k_cap20k` capping, and a
+permissive fallback re-mapping pass in `pangenome_mapping_reuse_v15r2`. The retention shift
+points upstream rather than at biology. If these alignments are a mapper artifact, optimizing
+panCollapse to consume them faster treats a symptom, so asking the mapping pipeline owner is the
+cheapest next action in the programme.
+
+**Stage attribution corrected; one sealed root superseded.**
+`pancollapse_profile_tools_v1_20260919T052434Z` (sealed, 10 files) supersedes
+`pancollapse_stage_attribution_v1_20260918T192832Z` (sealed, 9 files, retained; its stage table
+is wrong). Substring matching over demangled C++ signatures is unsound because a demangled
+signature names every type in its template arguments: 40 symbols contain the count-worker
+lambda's needle and only 20 are that lambda. Corrected shares of worker-attributable CPU: node
+ledger build 15.72 → **13.13**, per-read tally maps 6.91 → **9.40**, everything else under 0.1
+point. Corrected node-ledger build is 10.71% of all CPU, now equal to perf's independent
+inclusive 10.712% for `ReadNodeTallyCache::expand`, a check the old number failed.
+
+**Two hypotheses dead, one producer partition, one profile.** Raising `max_inflight_batches`
+8→64→256 is **rejected** (`pancollapse_inflight_depth_v1_20260920T181428Z`, sealed, 61 files):
+idle fell only 65.1→58.6→60.8% (non-monotone), headroom flat 3.55–3.72x, throughput worse than
+both controls, and peak buffered bytes saturated 632/676/678/608 MB across a 32x slot increase —
+admission is byte-gated, not slot-gated. Two identical controls differed 14.8% in reads/s but
+0.02 points in idle, so **idle% is the trustworthy statistic here and raw rate is not**. The
+producer partition (`pancollapse_producer_partition_v1_20260920T220538Z`, sealed, 27 files)
+partitions a 973.1 s read phase into 910.3 s (93.5%) blocked in `wait_until_complete` on the
+oldest batch, 53.9 s (5.5%) reading and framing, and 7.9 s (0.8%) grouping and submitting; the
+grouping hypothesis is dead and dequeue is FIFO. The first profile ever taken on the expensive
+regime (`pancollapse_cliff_profile_v1_20260920T232129Z`, sealed, 21 files; 895,383 samples,
+`cpu-clock:u` at 99 Hz, no call graph, threads separated by name) finds decoder CPU as allocator
+59.3%, `SpaceUsedLong()` 21.7%, parse 10.1%, and count CPU as other 61.5%, allocator 30.7%.
+**Allocation is 3,569 of 9,382 CPU-s, 38% of all CPU post-cliff, against 17.13% on the prefix.**
+Lock contention is dead at 1.1% and 0.6%.
+
+**Accepted fix.** `SpaceUsedLong()` walked the whole nested object graph per record and fed only
+diagnostics; it is now measured exactly once per 4 MiB of serialized bytes per decoder thread
+with the rest scaled by serialized size (`src/ordered_gamp_reader.hpp:47-48`, `:355-366`).
+On `w_cliff`: decoder CPU **2,123.5 → 1,810.9 s (-14.7%)**, read phase **973.1 → 874.6 s**,
+throughput **102.8 → 114.3 reads/s (+11.3%)**, with the v2 arm at host load 67.6 against the
+original's ~9 and still fastest. All four published tables are byte-identical to the sealed
+`w_cliff` arm, non-cache counters are equal, and 77/77 focused tests pass
+(`pancollapse_spaceused_fix_v2_20260921T043810Z`, sealed, 28 files; first iteration retained at
+`…_v1_20260921T002651Z`, sealed, 26 files). What it did **not** achieve: the profile predicted
+~461 CPU-s available and 313 were captured (68%), leaving ~148 CPU-s unexplained that needs a
+decoder re-profile rather than another guess; and two diagnostics are now estimates —
+`budget_oversize_records` 1,859 → 1,666 and `decoded_bytes` about 9% lower. Neither gates
+anything and no published output moved.
+
+**Where the budget stands (post-cliff, per 100,000 reads).** Decode 1,811 CPU-s over 4 threads =
+452.7 s floor; counting 6,755 CPU-s over 24 workers = 281.4 s floor; read phase 874.6 s. Decode
+is the long pole at 1.6x counting's floor, with 1.93x of in-order-commit penalty on top.
+`decoder_threads` is hard-capped at 4 (`src/main.cpp:4967-4968`) but decoders run only ~52% busy,
+so thread count is not obviously the limit.
+
+**Next steps — none started, each requiring approval.** (a) Ask the mapping pipeline owner about
+the upstream question above; it is free and could moot the rest. (b) Arena allocation for decoded
+records, targeting the 38% and hitting both pools (`_int_free` alone is 19.7% of counting). Arena
+support is already compiled into the vg protobuf, but it is not a drop-in: a cross-arena move
+deep-copies, so `Group.records` (`src/main.cpp:2010`, moved at `:6334`) must become pointers plus
+a `shared_ptr<Arena>` whose lifetime spans every group drawing from that batch. It needs a design
+and human approval. (c) Re-profile the decoder for the ~148 CPU-s residual. (d) Re-check, before
+acting on it, the working note that `max_buffer_bytes` never blocks and `exceeds_raw_budget` is
+dead: in the current worktree `options.max_buffer_bytes` gates producer admission at
+`src/ordered_gamp_reader.hpp:564`/`:581`/`:585` by draining through `commit_front()` (`:511`),
+which blocks in `wait_until_complete()` (`:514`), and `exceeds_raw_budget` (`:73`) is assigned
+positionally at `:600`. The 632–678 MB peak buffered against a 64 MiB default budget is itself
+unexplained and is recorded as a limit.
+
+**Uncommitted source state.** Three changes sit uncommitted alongside the pre-existing
+uncommitted work on `codex/compat-replay-integration-b8210`: the validated sampled-`SpaceUsedLong`
+fix and the producer-partition timers, both in the untracked `src/ordered_gamp_reader.hpp`, and
+the `PANCOLLAPSE_INPUT_INFLIGHT_BATCHES` knob plus producer-partition receipt fields in
+`src/main.cpp` (`:4977`), which sits inside a larger uncommitted diff containing earlier
+unrelated work. The latter two are instrumentation only, inert when unset. **None has been
+committed.** The gate remains the later machine-verifiable increment after Vertical Slice Proven.
+Nothing here touches biological counting policy, converter performance, replay performance, or
+any accuracy or F1 claim.
+
+## Completed (superseded as the frontier): Allocator Substitution measurement — tcmalloc rejected, jemalloc not established (2026-09-18)
+
+Authority: `/mnt/ssd/lalli/pancollapse_allocator_substitution_v1_20260918T035718Z`, STATUS
+`COMPLETE_VALIDATED`, with `SHA256SUMS` sealing 379 files. Read `RESULTS.md` and
+`INTERPRETATION.md` first, then `METRICS.json`, `provenance/time-receipts.md`,
+`provenance/profile-reattribution/REATTRIBUTION.json` and `CALLERS.md`,
+`provenance/preflight.json`, `provenance/tcmalloc-defaults.md`, and
+`provenance/jemalloc-defaults.md`. Active source, the frozen binary `6eb3e7ca…d6843a`, the count
+policy, and every earlier sealed evidence root are unchanged: the run made zero source, build, or
+link change, and it authorizes none.
+
+**Why the measurement was needed (attribution; re-analysis of already-sealed samples, no new run).**
+The sealed root `/mnt/ssd/lalli/pancollapse_parent_metadata_profile_v1_20260917T152700Z` is
+untouched; the same `profile/perf.data` was re-reported against host debug symbols, so all of its
+prior conclusions stand, including exact compatibility at 29.76% inclusive CPU. The profiling
+container did not mount host debug symbols, so `libc.so.6` appears in the sealed
+`profile/perf.self.txt` as 15 visible rows totalling 18.68% of self CPU. That 18.68% is the total of
+all fifteen visible rows, not of the unresolved ones: 13 unresolved hexadecimal address rows are
+13.79% together, and the already-named `cfree` (2.45%) plus `malloc` (2.44%) are 4.89% combined. The
+host carries `libc6-dbg` for glibc 2.39-0ubuntu8.9 at
+`/usr/lib/debug/.build-id/a4/a7992a8e66555c8141ab2a08a8465ff6e0ea65.debug`, build-id
+`a4a7992a8e66555c8141ab2a08a8465ff6e0ea65`. With those symbols the block resolves to
+`__memcmp_avx2_movbe` 7.40%, `__memmove_avx_unaligned_erms` 4.92%, `_int_malloc` 3.87%,
+`malloc_consolidate` 3.62%, `unlink_chunk.isra.0` 2.57%, `cfree` 2.45%, `malloc` 2.44%, and
+`_int_free` 2.18%. The eight named rows sum to 29.45%, more than the 18.68% previously visible,
+because the sealed reports used `--percent-limit 0.5` (`commands/run_profile.py`): sub-threshold
+per-address buckets were invisible and are now aggregated into their functions. Self shares may be
+summed; inclusive shares may not. The symbolized report is now persisted under the allocator root
+as `provenance/profile-reattribution/perf.self.symbolized.txt`, `perf.self.libc-only.txt`,
+`sealed-report.libc-rows.tsv`, and `REATTRIBUTION.json`, so the premise is citable evidence rather
+than a session record. Allocator machinery (`_int_malloc`, `malloc_consolidate`,
+`unlink_chunk.isra.0`, `cfree`, `malloc`, `_int_free`) is **17.13% of user CPU**, larger than the
+12.01% self share of the exact Ex50 evidence vector, and only 4.89% of it was previously visible as
+allocator work. The `malloc_consolidate` plus `unlink_chunk.isra.0` pair, 6.19%, is glibc-specific
+free-list bin maintenance with no equivalent in a thread-caching allocator, which made a load-time
+substitution the cheapest available test of whether that share was recoverable without touching
+source. These shares are of user-CPU samples only (event `cpu-clock:u`), so kernel-side allocation
+cost such as page faults and `mmap` is excluded, and a CPU share is not recoverable time.
+
+**What was run.** Six sequential arms of the identical frozen binary `6eb3e7ca…d6843a` at
+`/mnt/ssd/lalli/pancollapse_parent_metadata_v1_20260917T105800Z/provenance/panCollapse.parent-metadata`,
+on the same real first-1M-group GAMP `39d4238d…e0aa8c`, same chr20–22 XG, corrected count-fact
+bundle, whitelist, both profiles, 32 requested threads / 24 count workers, 64 GiB aggregation
+budget, diagnostics and fine runtime timing off — the same input and configuration as the rejected
+fused-state trial. Arms differed only in `LD_PRELOAD` scoped to the native process, in the recorded
+`arm_order` `glibc_a`, `tcmalloc_a`, `jemalloc_a`, `glibc_b`, `tcmalloc_b`, `jemalloc_b`: two
+interleaved replicates each of glibc 2.39 (no preload), gperftools 2.18 `libtcmalloc_minimal.so.4`
+(`f3ab9ee1…385131`) and system jemalloc 5.3.0 `libjemalloc.so.2` (`567efa52…3baf12`), with `glibc_a`
+the reference arm. No `TCMALLOC_*` or `MALLOC_CONF` setting was applied; the effective defaults are
+recorded in `provenance/tcmalloc-defaults.md` (32 MiB process-wide thread-cache bound, quoted from
+the installed gperftools documentation) and `provenance/jemalloc-defaults.md` (1024 arenas on this
+256-CPU host and a per-thread cache, queried through `mallctl`). Validation: all six arms PASS, the
+five `OUTPUT_COMPARISON.glibc_a.*.json` files against `glibc_a` PASS, every arm published
+byte-identical four tables and equal non-cache counters, the validated denominator is 1,000,000
+complete read groups and 2,621,222 alignment records, and the container exited 0 with no OOM. The
+fail-closed validator smoke test (`harness-smoke/VALIDATION.json`) is PASS, and the seven-check
+pre-flight receipt `provenance/preflight.json` — re-run after the arms launched so it is evidence
+rather than assertion — confirms one binary, one libstdc++, no pre-existing allocator override, and
+each allocator loadable inside the container's bind mounts. The host carried unrelated concurrent
+work throughout, including a 142 GiB independent count deliberately left untouched; per-arm host
+load1 medians in `RESULTS.md` range 56.98 to 60.36 over the whole command; the sealed
+`INTERPRETATION.md` quotes 63.9 to 67.0 because it takes the read phase only, after the
+initialization samples, so the two ranges are the same host observed over different windows.
+
+**The result.** Read time per 100k groups is read-phase wall time divided by the validated
+1,000,000 groups; count-worker CPU seconds is the CPU consumed by the 24 count workers during the
+read phase. Per arm (a, b): read **31.487 / 29.429** s/100k for glibc, **89.335 / 77.414** for
+tcmalloc, **25.910 / 31.642** for jemalloc; count-worker CPU **6327.10 / 5909.62** s for glibc,
+**15010.20 / 13195.20** for tcmalloc, **5077.91 / 5865.88** for jemalloc; peak RSS **72.248 /
+72.151** GiB for glibc, **72.665 / 72.733** for tcmalloc, **74.104 / 74.014** for jemalloc;
+initialization **447.7 / 395.0** s for glibc, **467.1 / 509.8** for tcmalloc, **360.0 / 363.5** for
+jemalloc. The two glibc arms are identical in every respect, so their spread is the within-session
+noise floor: **2.059 s/100k (6.76%)** on read time and **417.48 s (6.82%)** on worker CPU.
+
+**tcmalloc-minimal at its defaults is rejected.** Against the baseline mean, read time rose
+**+173.74%** and count-worker CPU **+130.50%**, roughly twenty times the floor, and both replicates
+agree (+183.72% and +163.06% on read time). The mechanism is lock contention, not merely more
+expensive allocation: the GNU time receipts (`provenance/time-receipts.md`) record 134.6M and 140.9M
+voluntary context switches for the tcmalloc arms against 3.4M for glibc, and 1808 and 1572 s of
+system time against 214 and 193 s, which is futex waiting with a spin phase before each sleep.
+Workers were not starved — empty-input-queue wait stayed under 1.3% of capacity in every arm. The
+documented default 32 MiB process-wide thread-cache bound, divided among 32 pipeline threads, makes
+the central free list the identifiable lock; *which* lock is a hypothesis, the contention is
+observed.
+
+**jemalloc 5.3.0 at its defaults is not established as a read-time improvement at two replicates.**
+The replicates disagree: round a fell 17.71% on read time and 19.74% on worker CPU, round b rose
+7.52% on read time and fell 0.74% on worker CPU. Against the baseline mean, read time fell 5.52%,
+which does **not** clear the 2.059 s/100k floor, and worker CPU fell 10.57%, which does clear the
+417.48 s floor — but the jemalloc replicate spread is itself 19.92% on read time and 14.40% on
+worker CPU, two to three times the glibc floor, so the worker-CPU effect is suggestive only and the
+condition mean is not a stable estimate. Three secondary effects did replicate: initialization fell
+to 360.0 and 363.5 s against 447.7 and 395.0 s, decoder CPU fell to 36.5 and 39.8 s against 62.6 and 57.8 s, and peak RSS rose 1.86
+GiB to about **74.06 GiB**, which the sealed interpretation records as above the roughly 72 GiB
+previously described as the high end of acceptable.
+
+**The critique, and what it changed.** The strongest objection is that two replicates on a loaded
+shared host cannot separate a 5 to 10% allocator effect from drift, and the jemalloc result shows
+exactly that: `jemalloc_b` ran 3207 groups/s for its first two thirds and 2301 groups/s for the
+last third, the same tail slowdown `glibc_a` showed, while `jemalloc_a` and `glibc_b` held 3860 and
+3398 groups/s throughout. The receipts rule out two candidate causes: `jemalloc_b` took fewer minor
+page faults than `jemalloc_a` (79.0M against 85.5M), so decay purging and re-faulting is not it, and
+fewer involuntary context switches than either glibc arm (17,753 against 20,413 and 19,324), so
+preemption is not it either. What remains is more user CPU per group (8234.6 s against 7520.9 s)
+concentrated in the final third, consistent with concurrent host memory traffic; this run cannot
+attribute it further. The consequence is that jemalloc's read-time effect is recorded as unresolved
+rather than as a 5.5% gain. The tcmalloc conclusion survives unchanged: a 2.6 to 2.8 times
+regression is not a drift artifact at any plausible floor.
+
+**What it means for the wider claims.** The hypothesis that a drop-in allocator recovers the 17.13%
+allocator share at zero source cost is **not supported on this host**: one candidate is
+catastrophically worse and the other is unresolved at this replication and carries a 1.86 GiB RSS
+cost. The 17.13% attribution itself stands and is strengthened, because the tcmalloc collapse is
+only explicable if the workload really is churn-heavy and cross-thread in its allocation, which is
+the same mechanism the rejected fused-state trial met from the other direction. The 28.952 s/100k
+baseline from that trial is confirmed host-dependent: the same binary measured 31.487 and 29.429
+s/100k here. The under-5-second aspiration and the 16.5-second practical endpoint remain unmet.
+Nothing here touches biological counting policy, converter performance, replay performance, or any
+accuracy or F1 claim, and the first-1M prefix is not representative full-input throughput.
+
+**Caller attribution (where the allocator time comes from).** Over all 350,676 sealed samples,
+`provenance/profile-reattribution/CALLERS.md` resolves the callers: `_int_malloc` is reached 100%
+through `operator new`, so the churn is C++ object allocation rather than C buffers;
+`malloc_consolidate` is triggered 84.3% from `_int_free_maybe_consolidate`; `free` is called 57.5%
+from the destructor of
+`std::_Rb_tree<unsigned int, std::pair<const unsigned int, pathtally::CompactCollapsedIdentityTally>>`,
+13.2% from `AssignmentCandidate::~AssignmentCandidate`, 11.4% from
+`std::vector<AssignmentFacts>::~vector`, and the rest from two further `std::_Rb_tree<unsigned int,
+...>` destructors; `_int_free` adds protobuf `RepeatedPtrFieldBase::DestroyProtos` and
+`vg::Mapping::~Mapping`. Every element of a `std::map` is a separately heap-allocated node, and
+these maps are built and destroyed once per read. The sites are `src/pathtally.hpp:196-197` (the
+`exon` and `body` `std::map<uint32_t, CompactCollapsedIdentityTally>` members that
+`collapse_ranked_identity_tallies` at `src/pathtally.hpp:201` returns per read), `src/main.cpp:5276`
+to `:5287` (six per-read `std::map<uint32_t, ...>` instances, beside optional maps at `:5235` and
+`:5236`), and `src/direct_count_assignment.hpp:93-96` (the two `std::vector<AssignmentCandidate>`
+inside `AssignmentFacts`). `__memcmp_avx2_movbe` (7.40% self) was attempted with the same method and
+**not obtained**: 99.9% of its 25,993 samples have no unwindable caller, because the hand-written
+assembly leaf carries no frame information the DWARF unwinder can use. It remains an open target
+requiring a different capture.
+
+**Next bounded step — identified here, and since superseded as the frontier (2026-09-21).** The
+per-read `std::map` allocation target below was identified from the 1M-read prefix, which is now
+known to sit inside the cheap regime covering 85.0% of reads but only 14.2% of read time; the
+current frontier is the post-cliff decoder cost recorded in the CURRENT section above and in
+`docs/research/full-input-throughput-cliff-20260921.md`. As originally written: Reduce the allocation rate at its
+source rather than change the allocator: replace the per-read `uint32_t`-keyed `std::map` instances
+in the identity-collapse and resolve path with a representation that does not allocate per element
+(a sorted flat vector or a worker-owned reusable container), and reuse the `AssignmentFacts` vectors
+across reads, preserving iteration order wherever published output depends on it. It is a source
+change and needs its own design, review, and matched measurement with byte-identical tables. It is
+not another allocator swap, and nothing in this run authorizes it.
+
+**Open user decision.** Whether to pursue jemalloc further is open, not decided. Doing so would
+need at least four replicates on a quieter host, `MALLOC_CONF` tuning to recover the 1.86 GiB RSS,
+and instrumentation of the round-b slowdown. Promoting any allocator into the build is a dependency
+change under `.claude/rules/languages.md` and requires a decision entry plus user approval; no such
+approval exists. Out of scope as before: any CMake or link change, full-data restart, and any
+converter, replay, full-input, or biological accuracy claim. The gate remains the later
+machine-verifiable increment after Vertical Slice Proven.
+
+## Completed: fused exact-DP state insertion/deduplication trial rejected (2026-09-17)
+
+The fused candidate passed build, 77/77 focused tests, and 1/8/32-thread artifacts. It also produced byte-identical four tables, equal logical profile tables, and equal non-cache counters. The sequential unprofiled pair nevertheless rejected it: frozen/candidate read time was 289.521504/348.267754 s (28.952150/34.826775 s/100k; candidate 20.29% higher), worker CPU 5802.09/7073.95 s (21.92% higher), RSS 72.292023/93.584633 GiB, initialization 394.595157/400.072956 s, and finalization 0.240441/0.272832 s. This shared-host pair measures no gain; it does not identify a causal reason beyond the measured result.
+
+Authority is `/mnt/ssd/lalli/pancollapse_fused_state_v1_20260917T164000Z/RESULTS.md` and `METRICS.json`; candidate binary/source/outputs are preserved there. `STATE_SCRATCH.json` reports 12,270,941,652 emitted and 12,212,154,984 retained states: only 0.479% duplicate emissions avoided. One worker transiently reached 9,268,864,400 bytes (8.63 GiB); the 8 MiB cap applies only between groups, yielding 18,045 releases and 73,330,760 final retained bytes. Near-unique states undermine the proposed fused-deduplication mechanism. `provenance/SOURCE_RESTORATION.json` is PASS: only the three trial files were restored to exact pretrial bytes, so active code and baseline remain Parent-metadata binary `6eb3e7ca…d6843a`. The prior 27.755 s/100k observation used different conditions and is historical, not this pair's baseline. The trial is complete; no subsequent optimization had started at that checkpoint (one has since been accepted; see the current section). The gate remains the later machine-verifiable increment after Vertical Slice Proven.
+
+## Completed: Optimized Parent-metadata profile validated (2026-09-17)
+
+Authority: `/mnt/ssd/lalli/pancollapse_parent_metadata_profile_v1_20260917T152700Z/`;
+start with `INTERPRETATION.md`, `RESULTS.md`, `METRICS.json`, and `OUTPUT_COMPARISON.json`.
+Native count, perf capture, same-UID observer, and coordinator all exited 0. The profile captured
+350,676 CPU samples with zero lost samples; one out-of-order event warning is preserved.
+All four tables are byte-identical to the same-binary unprofiled reference, and logical profiles
+and non-cache counters agree. Only operational cache hit/miss/uncached counts differ by one.
+
+The fixed binary is `6eb3e7ca044f70aa40eac9f472819625d5448cff2f236a00242cabe181d6843a`,
+at `/mnt/ssd/lalli/pancollapse_parent_metadata_v1_20260917T105800Z/provenance/panCollapse.parent-metadata`.
+The input remains the 261,652,666-byte genuine ARC first-1M-complete-group GAMP, 2,621,222
+alignment records, SHA `39d4238d…e0aa8c`, matched chr20–22 XG/count bundle/whitelist, both
+profiles, 32 requested threads/24 count workers, and 64 GiB aggregation budget. Exact inputs,
+commands, and hashes are in `provenance/run_config.json`. The documentation-agent checkpoint
+was reviewed before launch. CPU stacks were sampled at 49 Hz only after initialization;
+fine region timers were on and per-read output diagnostics off. No production code changed.
+
+Profiled native read time was 362.208603 s (36.220860 s/100k groups), finalization 0.323943 s,
+read plus finalization 36.253255 s/100k, initialization 444.555873 s, output publication
+0.182191 s, whole native wall 844.77 s, and peak native RSS 72.161621 GiB. Perf trace
+finalization and report generation are additional profiler work, outside native command time.
+These instrumented timings are not an unprofiled speed comparison or full-input/F1 result.
+
+Current CPU evidence identifies exact Ex50 compatibility at 29.76% inclusive / 12.01% self.
+Its mapping-projection helper is 8.01% inclusive / 6.01% self; state deduplication is 4.20%
+inclusive / 4.19% self. Parent/target collapse is 8.00% inclusive / 5.75% self, candidate
+materialization 7.25% inclusive / 3.23% self, and assignment resolution 5.69% inclusive.
+Inclusive shares overlap and must not be summed. The old Parent lookup hotspot is absent
+from the >=0.5% reports. The 4.09% unsigned-path-handle-to-model-vector hash lookup is
+`exact_ex50_models_by_body_path`, not a node metadata cache; source/callgraph attribution
+is in the interpretation. Compact full-symbol evidence is `profile/compact/PERF_SYMBOLS.json`.
+
+Worker elapsed regions (a different denominator) are evidence 41.968%, resolution/cache
+23.207%, and tally 22.045%. Count workers average 19.737 cores, empty-input wait is 1.626%
+of read-worker capacity, producer queue-space wait is 87.802%, and decoders average 0.212
+core. Input starvation is not the dominant limit on this subset. Cache-lock and scheduling
+costs are not separately isolated. Use `read_resources` for read-phase input wait; the broader
+runtime queue-wait sum includes earlier time and is not a valid read-phase denominator.
+
+Historical profile proposal: a worker-owned fused logical-state index was selected for trial.
+The terminal trial above rejected it for performance and restored the active source; this proposal
+is superseded. Body-path model lookup and broader container changes were not part of that trial.
+
+Source and worktree state: branch `codex/compat-replay-integration-b8210`, HEAD `258f22e`,
+23 commits ahead and one behind main `d4a60ae`; dirty edits are preserved. The gate remains
+the later machine-verifiable increment after Vertical Slice Proven. Preserve the user-stopped
+full comparison and independent older full count. This profile does not reopen biological,
+converter, replay, or full-workload claims.
+
+## Completed: immutable Parent metadata reuse and unprofiled validation (2026-09-17)
+
+The sealed previous root `/mnt/ssd/lalli/pancollapse_parent_metadata_v1_20260917T105800Z/`
+remains the unprofiled performance authority. Its fresh sequential pair observed 393.060940 →
+277.545923 s read time (39.306094 → 27.754592 s/100k), 29.39% lower wall and 26.62% lower
+worker CPU, with peak RSS 72.248035 → 72.155113 GiB. Shared-host load differed and build/test
+work overlapped part of the baseline. All 77 focused tests, 1/8/32-thread artifact comparisons,
+four-table bytes, and non-cache counters passed. Initialization binds immutable Parent facts
+to validated dense ranks; fallback retains names/ranks; dynamic fields and policy are unchanged.
+The <5 s/100k aspiration and 16.5 s/100k plausible endpoint remain unmet by that accepted
+unprofiled result. The current profile identifies a next target without changing that result.
+
+## Historical context: detailed real-GAMP profile (COMPLETE_PROFILE_VALIDATED, 2026-09-17)
+
+The preceding sealed profile at `/mnt/ssd/lalli/pancollapse_small_gamp_profile_v1_20260917T051400Z/`
+recorded 397,598 CPU samples with no loss: `CountFactCatalog::parent` was 16% self CPU and
+`candidate` 22.02% inclusive. It selected immutable Parent reuse as the bounded target. Its
+instrumented 1M-prefix timing (42.433851 s/100k read; 72.066700 GiB peak RSS) is diagnostic
+context, not a speed comparison with the unprofiled terminal pair. The stopped full comparison
+remains preserved and excluded from this result.
+
+## Historical preparation: small real-GAMP detailed profiling (2026-09-17)
+
+The user stopped the full real-input comparison and authorized a smaller chr21-compatible GAMP
+with detailed profiling. The full candidate root
+`/mnt/ssd/lalli/pancollapse_parallel_input_full_real_v1_20260917T011600Z` is
+`STOPPED_BY_USER_CANDIDATE_EXIT_143_BASELINE_CANCELLED`. Its candidate and coordinator receipts
+record exit 143, the container exit is `oom=false`, and `STOPPED.md` is the exact stop receipt.
+GNU time records SIGTERM after 3:43:05 wall time and 117,540,436 KiB maximum RSS; the last stderr
+checkpoint is 11,845,632 completed groups in 12,615.0 s. The queued frozen baseline did not
+start. Preserve preflight, command, samples, partial output, and stop receipts; these are not a
+terminal matched comparison or full-input performance result.
+
+Historical stopped full-run configuration: the complete genuine 10x ARC GEX `site1_donor2_asian`
+`reads.gamp`: 25,755,749 complete groups, 127,202,588,396 bytes, SHA-256
+`000858121cdcbbc09364e423586ca57324e19c8ef0ad968a3308c91b7e7e87fe`, using the already
+matched chr20--22 XG, corrected bundle, path ledger, and ARC GEX whitelist. The requested
+configuration is CR7+strict, 32 threads, a 64 GiB count-aggregation budget, diagnostics off,
+and fine profiling off. It compares frozen node-cache binary
+`e189ba54c69d4a33c73364313e860a437585f93e0519c4fb7978bb2444ab4dba` with ordered-input
+candidate `06e1892ea613d7d7e4212f43f27a015d1b8ebbc6291e41c6340aa3e0cc467f84` on this same input.
+
+Preflight is PASS (`provenance/preflight.json`; available memory 703,372,435,456 bytes; 256 GiB
+no-swap container limit). Candidate container
+`pancollapse-parallel-input-full-real-20260917T011600Z` (ID
+`2829a05bea4bac0ca1993b3db5b5000b6877e939b73c92057350e9ccd402901a`) started
+2026-09-17T01:26:45.690675015Z. `provenance/LAUNCH.SHA256SUMS` pins command/config and launch
+artifacts. Reporter fixture-v2 smoke is PASS, including deliberate rejection of a wrong worker
+configuration. The frozen arm was cancelled and never started. No code, policy, converter,
+replay, mapping, annotation, or biological change is authorized.
+
+The independent original full `3d13…f958` count at
+`/mnt/ssd/lalli/pancollapse_real_native_count_v1_20260916T022706Z` remains active and must be
+preserved. Its supplied latest checkpoint is 23,097,344 groups in 80,200.6 s. It cannot isolate
+the ordered-reader effect and must not be stopped, restarted, replaced, or used as either matched
+arm. Its incomplete rate cannot be extrapolated to terminal full-data performance. This full
+sample still uses a chr20--22 graph and preselection, so it is neither whole-pangenome throughput
+nor F1/accuracy evidence.
+
+The smaller diagnostic input is now selected at
+`/mnt/ssd/lalli/pancollapse_small_gamp_profile_v1_20260917T051400Z`.
+Bounded inventory found only simulated HG002 for the existing small chr21-only GAMP. The
+parent asked an optional real-subset versus simulated-chr21 preference; with no reply,
+proceeded with the stated real-data assumption. The existing genuine ARC GEX first-1M
+complete-group subset has 2,621,222 records and 261,652,666 bytes (SHA `39d4238d…e0aa8c`).
+It retains the proven chr20–22 graph/bundle/whitelist route, not a chr21-only claim. This is
+local hotspot attribution; the prefix remains inadequate as a full-workload benchmark.
+
+Exact native configuration, binary `06e1892e…7f84`, and same-input output reference are in
+`provenance/run_config.json`. `PANCOLLAPSE_PROFILE_TIMING=1` reports read-path worker-wall
+regions, producer/admission timing, worker CPU and empty-queue time, and finalize subdivisions.
+User-space CPU stacks use perf at 49 Hz with DWARF unwind, enabled after initialization and
+disabled after worker join via external markers; `profile/WINDOWS.json` records acknowledgement
+boundaries. Region wall timings are not CPU percentages. The profiler uses Docker CAP_PERFMON;
+native count drops to the workspace UID/GID. No host sysctl change is needed. Per-read output
+diagnostics remain off. The 32-thread/64-GiB-budget native configuration and 256-GiB no-swap
+container are unchanged; a 40-minute bound preserves interrupted evidence if exceeded.
+
+The documentation checkpoint was reviewed before preparation. `harness-smoke/` passed native,
+perf, and coordinator exits, enable/disable acknowledgements, and symbolized 140-sample reports.
+Preflight passed with 421,780,467,712 available bytes; container
+`pancollapse-small-gamp-profile-20260917T051400Z` started 2026-09-17T05:19:59.208859207Z,
+ID `435c57fd9f30c02c04a8b7383aafe2e98461261c2e56eb97d386e07e14dbef9f`.
+Initialization is live with samples disabled. A reporting-only positive sample-header regex
+fix during initialization is documented in `provenance/REPORTER_UPDATE.md` and pinned by
+`REPORTER.SHA256SUMS`; counting/profiler scripts remain launch-frozen. Next: finish the profile,
+validate outputs against the same-input candidate, and interpret CPU samples alongside
+worker-wall timers. Do not
+rerun the large input. No production optimization, biological change, or F1 claim is included.
+The gate remains the later machine-verifiable increment after Vertical Slice Proven.
+
+## Completed: ordered native-input real-1M trial (COMPLETE_BOUNDED_MEASUREMENT, 2026-09-16)
+
+Authority and navigation: `/mnt/ssd/lalli/pancollapse_parallel_input_v1_20260916T164124Z/`
+(`README.md`, `STATUS`, `METRICS.json`, `UTILIZATION.json`, `OUTPUT_COMPARISON.json`,
+`frozen/manifest.json`, `commands/`, `logs/`, and `provenance/`). Coordinator exit is 0 and the
+state is `COMPLETE_MEASURED_NO_SPEEDUP`. Final audit exited 0 and verified 678 files;
+`FINAL_AUDIT.json`, `COMPLETION.SHA256SUMS`, and `logs/final_audit.exit.tsv` close this trial.
+Candidate `06e1892ea613d7d7e4212f43f27a015d1b8ebbc6291e41c6340aa3e0cc467f84` completed the real
+1M pair. Read time was 558.912 s (55.891 s/100k), versus frozen 436.828 s (43.683 s/100k);
+read-plus-finalize was 55.933 versus 43.715 s/100k. Both the <5 and 16.5 s/100k targets are
+unmet. This one shared-host pair is an observed regression, not a general performance claim.
+
+All 77 focused tests, small artifacts at 1/8/32 threads, native file/stdin/cross-batch/error and
+empty-input 8/32 checks pass. `OUTPUT_COMPARISON.json` is PASS: four published tables are byte
+identical, non-cache counters and logical profiles agree, and summary differences are limited to
+operational cache counters. This is output-equivalence evidence, not F1 or accuracy evidence.
+
+The prior header's admission-triggered error-ordering defect and its correction are preserved at
+`trial/admission-regression/README.md`: attempt 1 has slot-admission exit 1 and the corrected
+case exit 0, with exact header/test hashes. The earlier `329c8…f3c8` candidate was stopped during
+initialization before read processing; retained attempt-1 evidence remains intact. The fresh
+frozen baseline remains terminal PASS.
+
+The fresh matched baseline exited 0: read 436.828 s, finalization 0.325313 s, initialization
+497.297 s, peak RSS 75,598,436 KiB, and wall 967.47 s. Its exact manifest is
+`frozen/manifest.json`. Implementation evidence is `src/ordered_gamp_reader.hpp` and
+`src/main.cpp`; acceptance tests are `tests/vg/ordered_gamp_reader_test.cpp` and
+`tests/vg/direct_count_verify.py`; trial commands are under `commands/` in the authority root.
+
+The historical original full-data `3d13…f958` run discussed below is a separate snapshot and
+remains active, untouched. The bounded implementation-and-measurement phase is complete; future
+tuning is unexecuted and requires a new checkpoint.
+
+## Real-input native-count measurement (TERMINAL, validated 2026-09-18; seal pending)
+
+**Terminal outcome (2026-09-21 reconciliation).** This run completed on 2026-09-18 at 13:23 UTC (08:23 local, -0500), per
+`REPORT_RECEIPT.json` `created_utc`,
+with every stage exit 0. Its STATUS is `VALIDATED_REPORT_READY_PENDING_DOCS_AND_SEAL`: measurement
+and `RESULTS.md` are validated, and the completion seal has not been applied. Terminal figures are
+25,755,749 reads and 124,261,698 alignment records, read phase 210,645.357663 s
+(**817.857627 s/100k reads**; 817.985728 s/100k including count finalization), initialization
+516.531992 s, count finalization 32.993320 s, publication 5.993920 s, whole-command wall
+211,323.00 s, peak process RSS 137.476540 GiB. Both the preferred <5 s/100k and the 16.5 s/100k
+fallback are missed. The text below is the historical in-flight record of the same run and its
+live checkpoints are superseded by these terminal figures. Why the run is slow, and what has since
+been measured and fixed, is in the CURRENT section at the top of this file and in
+`docs/research/full-input-throughput-cliff-20260921.md`.
+
+The prior fallback phase is complete and sealed: the 3M authority
+`/mnt/ssd/lalli/pancollapse_native_larger_3m_v1_20260915T231536Z` records 75 files
+verified with exit 0 in its completion seal, and the measured goal is complete. Its
+100k/1M/3M outcomes and limits remain prior evidence below. User authorization starts
+a separate bounded measurement phase: run the frozen resident binary on an existing,
+genuine biological real-read GAMP and measure native read plus count-finalization per
+100k, initialization, diagnostic merge, publication, whole wall time, and peak RSS.
+
+The selected input is the sealed, genuine 10x ARC GEX `site1_donor2_asian` GAMP
+`/mnt/ssd/lalli/hprc_v2_vg_rna/chr20_compare/readsets/real_scrna_benchmark_v1/pangenome_mapping_reuse_v15r2_20260908T150525-0500/site1_donor2_asian/d10k_cap20k/mapping/reads.gamp`
+(127,202,588,396 bytes; 25,755,749 groups; SHA-256
+`000858121cdcbbc09364e423586ca57324e19c8ef0ad968a3308c91b7e7e87fe`). It uses the
+matching chr20--22 XG and path ledger in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/joint_chr20_chr21_chr22/genic_flankpad_prerequisites_v1_20260830T192333-0500`;
+the ledger is SHA-256 `73c7a7a03abcbb9eb795c3ac2b1141cca82333c73134b190ee1a30be8657f10c`
+and both graph and ledger match corrected-bundle content
+`sha256:f1ffba4d4fe821e6bda6d0b88bba3cfe5df9df5fb263efe099e27fe14146c99e`.
+
+The selected tier has 6,211 eligible called cells. Its pre-mpmap throughput mix is
+A=chr20--22, B=unmapped, and C=elsewhere MAPQ<10 (D excluded), so it is not a
+whole-pangenome graph or chromosome-only throughput claim. GAMP names encode raw GEX
+CR (CB16/UMI12). The new checksum-pinned ARC GEX whitelist is
+`/mnt/ssd/lalli/pancollapse_real_native_count_v1_20260916T022706Z/inputs/737K-arc-v1.gex.txt`
+(736,320 barcodes; SHA-256 `fde6ac9705089a87cb078993500af6bcac89176953fac46f2173c6dd1b613108`),
+with provenance in `provenance/10x_chemistry_source.json`; it was not part of the
+original frozen producer. The `whitelist_preflight.json` there is PASS.
+
+No mapping, converter, replay, annotation, or biological-policy change is authorized,
+and real-data time/RSS does not establish truth-based accuracy. The frozen executable is
+`/mnt/ssd/lalli/pancollapse_exact_evidence_perf_v2_20260915T205001Z/provenance/panCollapse.resident-finalize`
+(SHA-256 `3d13e082de68b513ddc4de5689585bb2428d9cbfc104f1f88bd1fd02d7d0f958`); the
+worktree build is older. HEAD `258f22e` remains 23 ahead/1 behind main `d4a60ae`.
+
+The parent preflight passed (`provenance/preflight.json`; `logs/preflight.exit.tsv=0`;
+available bytes 414005080064). Native count is running in container
+`pancollapse-real-native-20260916T022706Z` (ID
+`e465ff51a2d64dda303c0ad61c45725ce65a2a34a8c2ab9e3569599ddd8d429b`), started
+2026-09-16T02:41:19.314463216Z. Monitor
+`/mnt/ssd/lalli/pancollapse_real_native_count_v1_20260916T022706Z/logs/count.stderr`,
+`count.time`, and `count.host.samples`; `logs/count.exit.tsv`, `logs/coordinator.exit.tsv`,
+and terminal validation remain pending. It runs 32 workers, CR7+strict, a 64 GiB count
+aggregation budget, and a 256 GiB Docker total limit with no swap; diagnostics are off
+and fine timing is unset. Output is `counts/`. Do not duplicate or restart.
+The run root now also contains `commands/report_result.py` and `commands/report_after_count.sh`.
+A separate 512 MiB no-swap observer, `pancollapse-real-report-20260916T022706Z`, waits for
+successful count and coordinator receipts, then writes `RESULTS.md`, `REPORT_RECEIPT.json`,
+and `logs/report.exit.tsv`. Python and shell syntax checks passed. It never promotes a failed
+or interrupted count; successful reporting still leaves documentation reconciliation and the
+completion seal pending. Existing upstream selection receipts were copied to
+`provenance/source_selection/`: A/B/C = 7,417,531 / 4,964,736 / 13,373,482 reads;
+these are pre-pangenome-mapping categories, not native outcomes or accuracy labels.
+At 2026-09-16T05:58:12Z, the latest recorded live checkpoint reported 7,290,880 completed
+groups in 11,292.7 s (645.625 groups/s; 154.88802 s/100k cumulative read-only partial).
+The 16.5 s/100k target for this full input is already impossible: its entire read-plus-finalize
+budget is 4,249.698585 s, below the read time already elapsed. This does not change the prior
+synthetic-fixture result; the real run remains active and is not a completed benchmark.
+RSS at that observation was 100,498,312 KiB (95.84266 GiB), not terminal peak. Initialization and finalization
+are excluded; throughput is not stable and neither value estimates whole-run wall time. The
+worker snapshot `logs/worker_snapshot.20260916T0321Z.txt` is follow-up evidence only: most
+workers were futex-waiting and a few running; wait-capable shard-cache, aggregation-lock, and
+queue paths do not establish a cause or deadlock.
+The current gate remains the later machine-verifiable increment after Vertical Slice Proven.
+
+### Authorized bounded cache trial (documentation checkpoint, 2026-09-16)
+
+The user has authorized one bounded cache experiment, superseding the earlier
+no-new-experiment boundary only for that trial. Required evidence is real-input
+runtime and peak-RAM measurement plus same-authority output-equivalence validation.
+At trial authorization, the original full real count's recorded checkpoint was
+**22,159,360 groups in 35,443.3 s**; do not stop, restart, or replace it, and preserve
+all earlier outputs and receipts.
+
+The clarified trial is **per-read node-to-tally caching/aggregation**: obtain a node's
+tally metadata once per read, so repeated node occurrences do not repeat metadata-cache
+lookups or member-reference-path hash updates. Current tally is a
+`flat_hash_map<raw path handle, HstTally>` and maps each path to the maximum Parent
+score by exon/body evidence and then transcript. Equivalence must retain numerical
+scores, orientation, duplicate path steps, and the raw-path-to-Parent maximum; exact
+matching is separate. No score, Parent, filter, comparator/window, or biological-policy
+change is approved, and this creates no F1 claim.
+
+The earlier assignment-cache-capacity interpretation was wrong. Preserve
+`/mnt/ssd/lalli/pancollapse_cache_trial_v1_20260916T124251Z`: its first-1M-complete-group
+subset was extracted with the official VG C++ reader/writer. The frozen-native pair exited
+143 after intentional SIGTERM during initialization in `pancollapse-cache-pair-20260916`;
+no wrong candidate count launched. The 8x-capacity candidate passed 74/74 tests, but its build
+wrapper exited 129 at Git-provenance collection; preserve its binary and receipt. The temporary
+capacity edit and test assertion were reverted before corrected implementation, restoring `src/main.cpp` to SHA-256
+`dc74cccad9de07e92bc6c77870465dfb11d0158f88692ff5a7e0bacfa79ca6bd`.
+
+The corrected trial root is `/mnt/ssd/lalli/pancollapse_node_tally_cache_v1_20260916T125145Z`
+with `README.md` and `commands/count_one.sh`. Its frozen 1M baseline ran in
+`pancollapse-node-cache-baseline-20260916`, using original binary `3d13…f958` with the same
+inputs, profiles, and settings. It uses the preserved first-1M-complete-group subset
+`/mnt/ssd/lalli/pancollapse_cache_trial_v1_20260916T124251Z/inputs/reads.first1m.gamp`
+(SHA-256 `39d4238d9c55d18d114b554665a6d3b5ad8ba97a418a11ae122b6afff2e0aa8c`; 1,000,000
+groups and 2,621,222 records).
+
+The corrected candidate is now implemented in `src/node_tally_cache.hpp` and wired through
+`src/main.cpp`: worker-local node totals and memoized `NodeLedger` data perform one fanout per
+distinct node, with checked-overflow fallback to the original order. SolMax review found no
+concrete design or implementation defect, subject to tests and artifact parity. Candidate binary
+`provenance/panCollapse.node-tally-cache` is frozen at SHA-256
+`e189ba54c69d4a33c73364313e860a437585f93e0519c4fb7978bb2444ab4dba`; 76/76 focused tests pass
+in `logs/focused-tests.log`. Small-artifact validation v2 is PASS at one and four workers:
+count, compatibility Parquet, RAD, diagnostics, summary, and tx2gene are byte-identical. BAM
+records, tags, and remaining headers are exact after normalizing only native `@PG CL` command
+provenance. The matched first-1M baseline and queued candidate coordinator subsequently reached
+the terminal pair reported below.
+
+The matched trial is now terminal PASS at
+`/mnt/ssd/lalli/pancollapse_node_tally_cache_v1_20260916T125145Z`:
+`METRICS.json`, `RESULTS.md`, `OUTPUT_COMPARISON.json`, and `logs/coordinator.exit.tsv` record
+the result. On one sequential shared-host pair, frozen/candidate read time was 630.179/552.257 s
+(63.018/55.226 s per 100k), and read plus finalization was 63.120/55.321 s per 100k: an observed
+12.37% lower candidate read time. Initialization was 516.849/593.711 s, finalization
+1.017/0.953 s, publication 0.340/0.297 s, wall time 1201.76/1197.19 s, and peak RSS
+72.161/72.110 GiB. All four published tables are byte-identical; non-cache counters and logical
+profile tables agree. Summary differs only in four operational assignment-cache counters (hits
+824,101/824,105); exact search candidates are identical at 626,965,346 before and 340,444,150
+after prefilter. This does not establish whole-pangenome throughput or biological accuracy, and
+both the <5 and 16.5 s/100k targets remain unmet.
+
+Supplemental sanitizer evidence is unavailable: `sanitizer-test/RECEIPT.json` records Abseil
+constexpr compilation and ASan runtime failures before the oracle, so it is neither a candidate
+defect nor a sanitizer pass. Completion integrity is recorded in `FINAL_AUDIT.json`,
+`COMPLETION.SHA256SUMS`, and `logs/final_audit.exit.tsv`. The next unexecuted work is read-stage attribution of
+remaining cost; it requires the next phase's documentation checkpoint and no further experiment
+has launched.
+
+Keep frozen resident binary `3d13e082de68b513ddc4de5689585bb2428d9cbfc104f1f88bd1fd02d7d0f958`,
+dirty integration HEAD `258f22e889b94129024ebe8cdf0c295dfd0d12a2`, and main
+`d4a60aed001bc03b00baf7ed54e39176d2266b55` discoverable with the structural sample
+results. The original full real count remains active and untouched, last recorded at 22,216,704
+groups in 38,209.5 s; do not restart it.
+
+The user's fixture-versus-real throughput question is documented in the active run's
+`provenance/FIXTURE_COMPARISON_INTERIM.md` (2026-09-16, approximately 06:11 UTC).
+The simulated 3M fixture had 96.5469% assignment-cache hits; the real hit rate is
+still unknown. Full-input GAMP bytes/group differ 41.596-fold, but this is not a
+processing-cost ratio and does not describe the processed real prefix. Cache misses
+build under a shard lock; hits skip candidate materialization/resolution, not all
+evidence extraction. Worker waits do not establish which path is responsible.
+The synthetic result cannot be treated as a production throughput estimate.
+Latest checkpoint for that comparison: 7,880,704 groups / 11,900.4 s, about
+151.0 s/100k read-only partial. The count and terminal-report observer remain active.
+
+### Input/dispatch discussion checkpoint (read-only, 2026-09-16)
+
+This session completed a **read-only design/explanation** of parallel native GAMP input and completed
+group dispatch. An implementation must preserve contiguous read-group formation, validation and error behavior,
+observable input order, bounded memory, and the existing core budget. No production code was
+changed and no new benchmark was run; implementation remains unexecuted.
+
+The installed VG `MessageIterator` supports multithreaded BGZF decompression, and
+`for_each_parallel` performs protobuf parsing and callbacks in OpenMP tasks. Those callbacks are
+not ordered, so the existing adjacent-record GAMP grouping is not a drop-in callback workload.
+
+The only current utilization observation is the original baseline's one-minute worker sample at
+`/mnt/ssd/lalli/pancollapse_real_native_count_v1_20260916T022706Z/worker-utilization-v1/`:
+32 workers averaged 3.955 cores (12.3603% of their combined capacity), with 87.65% of sampled
+worker states in `futex`; its main thread used 92.65% of one core. Source inspection places
+native GAMP decode, grouping, validation, molecule parsing, hashing, and dispatch in the main
+thread before completed groups reach workers. This makes input delivery a plausible limit but
+does not distinguish empty-queue waits from cache or aggregation contention. The sealed
+node-tally-cache pair (`e189…4dba`) observed 55.226 versus 63.018 s/100k on one shared-host
+pair, at 72.110 GiB peak RSS, but cached-candidate utilization was not measured and this record
+does not establish a parallel-input benefit. The current gate remains the later
+machine-verifiable increment after Vertical Slice Proven.
+
+### Worker-utilization observation (complete read-only, 2026-09-16)
+
+The original frozen baseline `3d13…f958` remained active in
+`pancollapse-real-native-20260916T022706Z` (host PID 4125739). Read-only sampling from
+2026-09-16T15:32:35.519Z through 15:33:35.519Z recorded 121 snapshots over 60.000186 s
+for its 32 workers (TIDs 340--371). The record is
+`/mnt/ssd/lalli/pancollapse_real_native_count_v1_20260916T022706Z/worker-utilization-v1/`:
+`SUMMARY.json`, `CONDITIONS.json`, `samples.jsonl`, and `sample.py`.
+
+Workers accumulated 237.318824 CPU seconds: 3.95530 core-equivalents, or 12.3603% of
+32-worker capacity. All process threads accumulated 4.88183 core-equivalents; the main
+thread was about 0.9265 core. Across worker snapshots, state counts were sleeping 3401
+and runnable 471 of 3872; 3394/3872 (about 87.65%) reported `futex` in `wchan`.
+This establishes that the counting workers were far below their combined CPU capacity in this interval.
+
+It does not establish why workers slept. Kernel `sched_schedstats` was disabled, so the
+raw runqueue delta is not a valid scheduler-delay fraction; `cpu.max=max` and
+`nr_throttled=0` exclude observed CPU-quota throttling. Source inspection is consistent
+with a serial main-thread producer (`vg::io::for_each` at `src/main.cpp:6219`) that
+decodes, validates/groups, parses molecules, and hashes input before workers process
+completed groups. Its approximately 93% CPU use makes a producer limit plausible, but
+does not distinguish it from cache-lock waits. Native-only mode has no ordered-output
+blocking; the existing `worker_queue_wait` counter is job-queue residence, not worker
+idle time. The 1466% whole-command figure belongs to the completed cache candidate and
+must not be attributed to this original full run.
+
+The sealed node-tally-cache candidate (`e189…4dba`; 76/76 tests; 63.018 to 55.226
+s/100k observed pair) is terminal, so this baseline observation cannot establish
+post-cache utilization. The original full count remains active, last observed at
+22,396,928 groups in 45,808.3 s. No further measurement or production-source change was made.
+The current gate remains the later machine-verifiable increment after Vertical Slice Proven.
+
+### Ordered parallel native-input implementation authorized (documentation checkpoint, 2026-09-16)
+
+The user has authorized implementation and bounded validation of the previously reviewed
+ordered parallel native-GAMP input adapter. This changes the current phase from discussion to
+**authorized implementation plus bounded validation**. It does not authorize a biological,
+Parent-policy, replay, mapping, converter, or full-run change. The original frozen full real
+count continues untouched; do not stop, restart, replace, or use it as this implementation's
+benchmark.
+
+The bounded design is: use VG `MessageIterator` threaded BGZF input, serialize byte- and
+logical-count-bounded record batches, decode with a small pool, and deliver decoded records in
+source order to the existing contiguous-grouping callback. The adapter must retain group
+formation across batch boundaries, stdin and file behavior, current validation semantics, and
+the order in which corrupt-input, wrong-tag, and slow-oldest-batch errors become observable.
+Its additional memory must remain bounded. It must account for the 32-CPU budget across
+decompression, decoder pool, and existing workers rather than oversubscribing it.
+
+The sealed matched baseline for later comparison is
+`/mnt/ssd/lalli/pancollapse_node_tally_cache_v1_20260916T125145Z`, candidate binary SHA-256
+`e189ba54c69d4a33c73364313e860a437585f93e0519c4fb7978bb2444ab4dba`. The preserved test input is
+`/mnt/ssd/lalli/pancollapse_cache_trial_v1_20260916T124251Z/inputs/reads.first1m.gamp`, SHA-256
+`39d4238d9c55d18d114b554665a6d3b5ad8ba97a418a11ae122b6afff2e0aa8c` (1,000,000 groups;
+2,621,222 records). Required acceptance evidence is grouping across batches; file/stdin and
+error-order behavior for corrupt, wrong-tag, large-group, and slow-oldest cases; byte and
+logical-count agreement; 32-CPU accounting; bounded additional memory; and a matched real-1M
+time/RSS/worker-utilization observation. No previous speed observation applies to this adapter.
+
+### Ordered parallel native-input trial (complete bounded implementation and measurement, 2026-09-16)
+
+The trial authority is `/mnt/ssd/lalli/pancollapse_parallel_input_v1_20260916T164124Z/`.
+`RESULTS.md`, `METRICS.json`, `UTILIZATION.json`, `OUTPUT_COMPARISON.json`, and coordinator exit
+0 are complete; the first report failure is retained in `logs/report-attempt-1/` and
+`report_only.sh` resumed reporting without a count rerun. The frozen baseline is
+`e189…4dba`; the candidate is `06e189…67f84`; both used the preserved real first-1M GAMP.
+
+`src/ordered_gamp_reader.hpp` and its `src/main.cpp` integration are now written. Native runs
+with at least eight threads use ordered input; converter and sub-eight-thread behavior are
+unchanged. At 32 threads the implementation budgets 24 count workers, four decoders, two
+decompression threads, one BGZF I/O thread, and the main thread. The 64 MiB buffer is an
+admission watermark: protobuf expansion and in-flight buffers can make resident use higher.
+
+The candidate read time was 558.912 s (55.891 s/100k), 27.9478% higher observed than frozen
+436.828 s (43.683 s/100k); read plus finalization was 55.933 versus 43.715 s/100k. Peak RSS was
+72.2187 versus 72.0963 GiB. Candidate/frozen load-1 medians were 122.625/97.52 (ranges
+107.85--128.22/79.32--115.35), so this shared-host pair cannot support a causal percentage
+claim. A performance improvement was not demonstrated; both <5 and 16.5 s/100k targets are
+unmet.
+
+The candidate sampled 19.7851 count-worker cores across 24 workers (82.44% capacity), with
+19.7566 whole-count cores; decoder CPU was 74.2963 s (0.133 core), main CPU 39.183 s, and empty
+queue wait 0.668797% of count-worker capacity. These values do not establish a delivery/main
+bottleneck, and the old full-run sample is another binary and workload. Peak input buffering was
+160,702,112 bytes, above the 64 MiB admission watermark as documented. No tuning has started;
+any follow-up requires a new checkpoint.
+
+### Real-versus-simulated workload attribution checkpoint (read-only, 2026-09-16)
+
+This documentation checkpoint authorizes one bounded attribution task while the
+existing count continues untouched. A later live observation is nonterminal:
+approximately 9.81 million completed groups in 14,029 s, with diagnostics still off.
+It confirms a large throughput difference but does not establish its cause. In
+particular, different full-file encoded bytes/group, upstream A/B/C selection, the
+simulated fixture's cache-hit rate, and futex waits are not causal proof for the
+real workload; real cache counters remain unavailable until terminal reporting.
+
+**Exact next task:** read only small, existing representative input samples from the
+sealed real GAMP and completed 3M fixture, then trace the frozen implementation's
+per-read work from grouped GAMP decoding through evidence extraction, cache lookup or
+build, candidate materialization/resolution, and tally/aggregation. Record only
+observable workload features and the code paths that can consume them; if those facts
+support it, perform a bounded non-invasive attribution observation. Do not launch a
+new native count or profiling run, alter production code, restart/stop/inspectively
+interfere with the active full count, or turn the listed leads into causal claims.
+
+### Prefix-sample structural attribution (complete read-only observation, 2026-09-16)
+
+The authorized sampler completed with exit 0 and wrote
+`/mnt/ssd/lalli/pancollapse_real_native_count_v1_20260916T022706Z/attribution/`
+(`sample_structure.py`, both summaries, per-group TSVs, and `concentration.json`).
+It decoded the **first** 20,000 complete contiguous QNAME groups from each GAMP using
+existing `vg view -Kj`; this is a prefix, not a random or whole-run-representative
+sample, and it did not run native count. The fixture had 20,000 aligned groups;
+the real prefix had 7,534 aligned and 12,466 unaligned groups. Across all groups,
+real versus fixture had 2,494,196 versus 130,161 node-mapping visits (19.16x mean
+visits/group) and 508,359 versus 68,997 subpaths (7.37x). Among aligned groups,
+mean node-mapping visits were 331.059 versus 6.508 (50.87x).
+
+The real prefix is also strongly concentrated: its top 1% of groups carry 69.05% of
+node-mapping visits versus 22.20% for the fixture. Its largest group (90 bp, six
+records) has 42,311 subpaths, 298,198 mapping visits, and 1,338 distinct nodes;
+the fixture maximum is 2,398 mapping visits. These are concrete structural workload
+differences that the frozen implementation consumes: the numeric tally loops every
+mapping and then every matching reference path (`src/main.cpp:4651-4676`), while the
+exact DP traverses subpath states, mappings, and links (`src/main.cpp:4398-4592`).
+An assignment-cache hit is downstream and cannot remove that work.
+
+This supersedes the generic “harder data” explanation. The observation does not
+allocate a causal share of wall time, prove a real-cache disadvantage, or identify a
+wait cause. The active full count and its pending terminal evidence remain untouched;
+no further profiling or production change was performed here. The independent
+extreme-group reread also completed: `real.extreme_group.json` records identical
+90-base sequences in all six records, all 42,311 subpaths reachable, and one node
+occurring 2,235 times in the first record. `validation.json` is PASS for row sums,
+means, concentration, group boundaries, and extreme-record totals. The concise
+authority is the attribution directory's `RESULTS.md`; scripts and exact inputs
+are adjacent. One-CPU inspection containers briefly shared the host with the count.
+
+## Full-goal native-count fallback validation (COMPLETE_FALLBACK_VALIDATED, 2026-09-15)
+
+The authorized measured-fallback implementation and validation are complete.
+Completion integrity is recorded by `COMPLETION.SHA256SUMS` and
+`logs/completion_seal.exit.tsv` in the final 3M root. The final
+3M authority is [RESULTS.md](/mnt/ssd/lalli/pancollapse_native_larger_3m_v1_20260915T231536Z/RESULTS.md)
+and `GOAL_ACCEPTANCE.md` in that root; they supersede the earlier 3M-pending
+checkpoint in the 100k/1M evidence root.
+
+The recovered 3M chr20--22 GAMP is
+`tmp/chr202122_subset/reads.gamp` (SHA-256
+`3d857f957b5c585c97784e5e583dc166b63f59f8cf35045055b15e1aea708a67`), with XG
+`1568ff5d682c5d11cdffaec34def02d3322d35d9e001b5fdd6bbbb35fc9849d6` and ledger
+`73c7a7a03abcbb9eb795c3ac2b1141cca82333c73134b190ee1a30be8657f10c`. The pair
+used the fixed corrected bundle `sha256:f1ffba4d4fe821e6bda6d0b88bba3cfe5df9df5fb263efe099e27fe14146c99e`,
+32 workers, 64 GiB, CR7, and strict profiles. Frozen baseline
+`/mnt/ssd/lalli/pancollapse_processing_perf_v1_20260915T193226Z/provenance/panCollapse.worker-spools`
+(`e48c7ddefebda46998b24e56b22473738cb1c8e185ba3df440e1de825182ced2`) and resident
+`/mnt/ssd/lalli/pancollapse_exact_evidence_perf_v2_20260915T205001Z/provenance/panCollapse.resident-finalize`
+(`3d13e082de68b513ddc4de5689585bb2428d9cbfc104f1f88bd1fd02d7d0f958`) both passed
+fresh identity checks. The resume exited 0 at 2026-09-15T23:52:51.781Z; final audit
+passed (`final-audit/engineering-validation.json`, `logs/final_audit.exit.tsv=0`).
+All four Parquet tables and the summary are byte-identical; profile tables,
+non-cache counters, and cache counters agree. This is engineering performance
+parity, not independent F1/accuracy evidence. The original exit-1 verifier defect
+and zero-byte identity receipt remain preserved.
+
+| 3M arm | Init s | Read s | Final s | Combined s/100k | Wall s | RSS GiB |
+|---|---:|---:|---:|---:|---:|---:|
+| Baseline | 523.720685 | 272.125138 | 7.801599 | 9.330891 | 834.62 | 53.473888 |
+| Resident | 604.282338 | 292.485916 | 4.729907 | 9.907194 | 939.89 | 53.598610 |
+
+At 3M, resident combined time is **6.176290% higher observed**, so no 3M speedup is
+claimed. Whole-command load-1 median/range was 157.855 (143.77--171.78) baseline
+and 183.04 (150.68--201.62) resident; shared-host conditions preclude causal
+attribution. The 3M resident RSS is only 0.124722 GiB above baseline, consistent
+with bounded scratch/cache and no material RAM growth for this pair.
+
+The fallback remains supported by repeated 1M resident **10.878205 s/100k** median
+(range 10.064581--11.691829), 27.52% lower observed than repeated baseline. The
+standalone 100k result misses: 21.427850 s versus 20.355946 baseline (5.27% higher).
+Preferred **<5 s/100k** remains unmet, and whole-pangenome/20M performance remains
+unproven. Focused tests remain 74/74 PASS. The next unexecuted work is read-path
+cost per 100k and matched whole-pangenome/20M validation, with the required
+current-state documentation checkpoint before a new phase. No converter, replay,
+or F1 behavior changed.
+
+## Native-count 100k/1M validation — completed (2026-09-15)
+
+The fallback is validated on the original **1M throughput authority**. The
+subsequent 3M comparison and final assessment are complete as recorded above.
+Read plus finalization: **10.878205 s/100k median** (10.064581–11.691829), versus
+repeated baseline 15.008994, or 27.52% lower observed. Standalone **100k** remains
+**21.427850 s** versus baseline 20.355946, or 5.27% higher observed.
+**Preferred <5 s/100k, standalone-100k fallback, and whole-pangenome/20M scaling
+are not demonstrated.** Shared-host variability and every run are reported.
+
+All seven scheduled runs and nine fresh audits pass, including byte-identical
+count tables, summary and complete diagnostics; input/profile identities match.
+Focused tests: 74/74 PASS. Final 1M RSS: 51.8856–51.9622 GiB, similar to baseline.
+Debug 100k: read 20.497832 s, finalization 0.512393 s, merge/export 0.732247 s,
+publication 0.254814 s, whole wall 570.75 s, peak 48.505100 GiB.
+
+Authoritative receipt:
+/mnt/ssd/lalli/pancollapse_exact_evidence_perf_v2_20260915T205001Z/RESULTS.md.
+Adjacent ACCEPTANCE.md audits requirements; METRICS.json and REPEATS_REPORT.md
+record all timings/host conditions; final-audit/ holds fresh comparison receipts.
+The queue ended exit 0 at 2026-09-15T23:03:27Z; no prior 100k/1M or debug arm remains pending.
+Final executable: provenance/panCollapse.resident-finalize in that result root,
+SHA256 3d13e082de68b513ddc4de5689585bb2428d9cbfc104f1f88bd1fd02d7d0f958.
+The worktree build is older. Dirty HEAD 258f22e remains 23 ahead/1 behind main
+d4a60ae on codex/compat-replay-integration-b8210.
+
+Implementation: stable contiguous max-score deduplication in src/score_dedup.hpp
+and src/main.cpp; checked resident reservation and omission of the redundant
+first exact sort in src/direct_count_runtime.cpp. Required post-correction
+sort/combine and spill behavior remain. Frozen source, tests, reviews, inputs and
+commands are in the result provenance; completed/failed evidence is preserved.
+
+Read processing remains 96.04–96.78% of combined time; the two resident 1M receipts
+attribute the largest labeled worker-wall regions to evidence (53.76–56.57%),
+resolution (17.67–18.98%), and tally (14.63–15.11%). Those are summed worker wall
+timers, not CPU or additive whole-command times; queue wait is queue residence. The
+recovered matching 3M input is now the authorized scaling point above. No converter,
+replay, annotation-policy, or accuracy/F1 claim changed.
+
+## Historical optimization checkpoints (superseded by completed result above)
+
+The preceding bounded performance validation is complete and remains the evidence authority
+below. A new authorized native-count optimization phase is now in progress. Its bounded optimizer
+has exact-correct 100k data but no validated speedup: `src/score_dedup.hpp` performs in-place,
+stable maximum-score state deduplication with contiguous open-address scratch scoped to one
+alignment; `src/main.cpp` retains every `StateKey` field and the existing filter/window order;
+and `src/direct_count_runtime.cpp` adds optional finalization profiling. The exact optimization is
+in
+`src/main.cpp::exact_ex50_evidence_for`, targeting temporary allocation and deduplication while
+preserving evidence identity, maximum-score retention, Parent filtering, comparator/score-window
+order, cross-record aggregation, structural tally, and fallback assignment. Structural tally
+cannot be removed because fallback resolution consumes it. Measure read processing and count
+finalization separately and also report their combined native-count processing time, including
+finalization scaling; retain worker-local bounded memory and report RAM. The phase finishes with
+combined native counting under 5 s/100k excluding initialization, or evidence-backed combined
+performance of about 16.5 s/100k after optimization. Work cannot be shifted into count
+finalization to satisfy the target; debug merge/export remains separately reported.
+
+Same-authority biological determinism and RAM validation remain required. Strict
+annotation-versus-bundle parity is not required. The current chr20--22 fixture's roughly 52.1 GiB
+peak RSS is already high and cannot support a whole-pangenome RAM claim. Converter, compatibility
+replay, and accuracy work remain separate. The applicable acceptance gate is later
+machine-verifiable behavior after Vertical Slice Proven; this checkpoint neither advances nor
+replaces that gate.
+
+The new results workspace is
+`/mnt/ssd/lalli/pancollapse_exact_evidence_perf_v2_20260915T205001Z`; its status is
+`BENCHMARK_IN_PROGRESS`. `tests/policy/score_dedup_smoke.cpp` passes 2,000 seeded collision,
+order, reuse, and split-record cases against a map oracle; the focused suite is 74/74 PASS in
+`logs/focused-tests.log`. Candidate provenance is `provenance/panCollapse.exact-dedup`, SHA-256
+`e7434ac59a2fb3c5acf688ba9ca1a28827ceac14f49b2f5c78109561004809ae`, with
+`provenance/source.exact-dedup.tar.gz`; the worktree build is untouched. Docker run
+`pancollapse-exact-initial-pair-20260915T205001Z` is terminal: both 100k arms exit 0 and pass
+exact biology plus input/execution identity. Baseline recorded 18.784944554 s read processing,
+0.542118419 s finalization, and 19.327062973 s combined; candidate recorded 21.794378933 s,
+0.929468246 s, and 22.723847179 s, respectively. Candidate is 17.6% slower in this initial pair;
+preserve the result, but make no promotion or goal-completion claim. It does not establish speedup.
+See `RESULTS.100k.md` in this results workspace.
+Sol's invariant review is ACCEPT in `provenance/REVIEW.md`; the helper map-oracle ASan/UBSan check
+passed, not a full native-runtime sanitizer run. The 1M candidate is terminal PASS: all four
+biological tables, summary, non-cache counters, and input/execution identity are exact. It measured
+567.421721609 s initialization, 119.747233383 s read processing, 13.392732078 s finalization,
+133.139965461 s combined (13.3139965461 s/100k), 1.48518 s publication, 730.67 s wall, and
+51.9642486572 GiB RSS. The first 1M pair is complete: baseline also passes exact biology and
+identity at 15.4928523385 s/100k combined (141.787332656 s read, 13.141190729 s finalization,
+51.9636306763 GiB RSS). The original candidate is about 14.1% lower combined in this pair only;
+the earlier 100k candidate is 17.6% slower, so there is no established repeated speedup or goal
+completion.
+
+`provenance/FINALIZATION_INVESTIGATION.md` records that diagnostics alone cannot reconstruct
+`CountRuntime` inputs exactly; no parser extraction or harness was created. Existing
+`--compatibility-in` supports finalization profiling without graph initialization, but that is
+separate compatibility-replay performance and was not executed. The candidate's 100k UMI collapse
+was 0.0459925 s, so do not presume a quadratic UMI cause. The original candidate-then-baseline
+1M pair is terminal; see `RESULTS.1m.initial.md` in the results workspace. The resident-finalization change is
+implemented in `src/direct_count_runtime.cpp`: checked one-time reserve per resident vector and
+omission of the redundant first exact sort, with final exact sort/combine, deferred sort, and spill
+unchanged. Focused tests are 74/74 PASS in `logs/focused-tests.resident.log`; frozen binary
+`provenance/panCollapse.resident-finalize` is SHA-256
+`3d13e082de68b513ddc4de5689585bb2428d9cbfc104f1f88bd1fd02d7d0f958`, with source snapshot and
+complete checksums. Build/test succeeded; wrapper exit 129 during Docker Git metadata collection is
+preserved and host metadata recovery passed. First resident 1M is terminal PASS: all four tables,
+summary, non-cache counters, and identity are exact at 113.148701764 s read, 3.769589644 s
+finalization, and 116.918291408 s combined (11.6918291408 s/100k), with 51.9621620178 GiB RSS.
+Resident prepare is 0.515448 s versus the original candidate's 10.2197 s; correction is 1.30683 s,
+molecule stage 1.89924 s, and UMI collapse 0.69825 s. This is one observation: the fallback is
+numerically met, but no completion or reliable gain claim precedes repeats/debug and acceptance
+audit. First resident 100k is also terminal exact PASS: 20.449478765 s read, 0.664120164 s
+finalization, 21.113598929 s combined, and 48.4330329895 GiB RSS, slower than the 19.327062973 s
+baseline and not meeting fallback at 100k. The size-mixed evidence does not support completion or
+a reliable gain claim. Resident 100k-r2 is terminal exact PASS at 21.146822184 s read,
+0.595278286 s finalization, and 21.74210047 s combined, with 48.4485282898 GiB RSS. The two
+resident 100k results span 21.113598929--21.74210047 s (median 21.4278496995), so neither meets
+the standalone fallback. Baseline 100k-r2 is terminal exact PASS at 21.384829 s combined;
+the baseline 100k median is 20.355946 s versus resident 21.427850 s (5.3% higher observed).
+Resident 1M-r2 is terminal exact PASS: 96.659688 s read, 3.986118 s finalization,
+100.645807 s combined (10.064581 s/100k), 51.885620 GiB RSS, and input identity PASS. The two 1M
+combined values span 10.064581--11.691829 s/100k (median 10.878205), while the two 100k values
+remain 21.113599--21.742100 s (median 21.427850). All same-authority four tables, summary bytes,
+and non-cache counters are exact. This remains noncausal, non-full-scale evidence; acceptance is
+pending. Baseline 1M-r2 is terminal exact PASS at 132.429317 s read, 12.822031 s finalization,
+145.251348 s combined, and 52.036316 GiB RSS. The repeated 1M baseline spans
+14.525135--15.492852 s/100k (median 15.008994); resident median 10.878205 is 27.5% lower
+observed, while standalone 100k remains 5.3% higher. Six of seven scheduled arms pass;
+only complete debug 100k remains in Docker
+`pancollapse-resident-repeats-20260915T205001Z`
+`7aebee643a0e5058cf66ce28de73a8070570f9bf09a4503a634a045930181507`; debug 100k began
+22:53:56Z. Poll it; do not duplicate it. `ACCEPTANCE.md` audit is pending; `REPEATS_REPORT.md`
+separates PASS/PENDING/FAILED and whole-command host load. Baseline CPU sampler ended before counting, so CPU
+window comparison is unavailable; host-load samples remain. No F1 change or whole-pangenome claim
+exists. `provenance/LARGER_FIXTURE_AVAILABILITY.md` found only a mismatched old 1.998M chr20 asset
+(graph `1f49...`, ledger `6e40...`) versus current (`1568...`, `73c7...`); bounded search found no
+ready matching authority above 1M, not global absence.
+`provenance/REMAINING_PROCESSING_COSTS.md` records first-1M summed-worker-wall attribution:
+evidence 53.76%, resolution 18.98%, and tally 15.11%; historical `worker_queue_wait` is job-queue
+residence, not worker idle.
+`provenance/PERFORMANCE_ACCEPTANCE_SCOPE.md` clarifies the full goal: the original 1M authority is
+18.011 s/100k, and normalized 1M throughput may meet the fallback only if remaining repeats,
+exact outputs, RSS, and complete debug evidence pass. The 100k failure remains adjacent evidence;
+do not claim a blanket <=16.5 s/100k result. Larger-input validation is conditional on suitable
+existing inputs, with no new mapping or mandatory 20M gate; scaling remains unproven.
+
+## Native-count processing performance (COMPLETE_BOUNDED_PERFORMANCE_VALIDATION, 2026-09-15; prior evidence)
+
+The bounded performance phase is complete. Use the validated final binary
+`/mnt/ssd/lalli/pancollapse_processing_perf_v1_20260915T193226Z/provenance/panCollapse.worker-spools`
+(SHA-256 `e48c7ddefebda46998b24e56b22473738cb1c8e185ba3df440e1de825182ced2`) and its authoritative
+result record [`RESULTS.md`](/mnt/ssd/lalli/pancollapse_processing_perf_v1_20260915T193226Z/RESULTS.md).
+On the unchanged 1M input it passed byte-identical biological count tables against `native-bundle`:
+162.249680264 s read processing plus 17.857453257 s finalization equals 180.107408508 s total,
+with 52.07076644897 GiB peak RSS. Diagnostics were disabled; no F1 or accuracy claim changed.
+
+The preferred <5 s/100k processing target remains open. The next bounded work is allocation and
+deduplication profiling in `src/main.cpp::exact_ex50_evidence_for`, retaining structural tally and
+fallback assignment semantics and measuring RAM. Do not extrapolate finalization from 100k to 20M.
+
+## Historical baseline and accuracy context
+
+This completed phase targeted non-initialization per-read native `count` runtime while preserving
+output semantics for each fact authority. It follows the completed
+corrected-bundle/annotation 1M validation at
+`/mnt/ssd/lalli/pancollapse_parent_policy_accuracy_1m_v1_20260915T171612Z`; its results remain
+the authority for counting accuracy and route diagnostics. Strict annotation-versus-bundle parity
+is no longer an acceptance requirement. It does not permit a performance change to alter outputs
+within either authority.
+
+That recovered run used the preserved baseline binary
+`251bfa0c948735fdf0ca33c346ac2ca63684679d6ccf13241d90792d0eaab763`, sourced from dirty HEAD
+`258f22e889b94129024ebe8cdf0c295dfd0d12a2`, with 32 requested threads. Its same-executable
+observations are annotation: initialization 577.057 s, processing 1,044.36 s, wall 1,658.51 s,
+peak 52.114975 GiB; bundle: 551.372 s, 970.332 s, wall 1,549.16 s, peak 52.041714 GiB. Whole-command
+CPU of 524%/541% does not isolate processing parallelism. These shared-host observations are not
+a controlled speed comparison. The current chr20--22 1M fixture cannot establish whole-pangenome
+peak RAM for the future >=20M-read target; its roughly 52 GiB peak is high-end acceptable now.
+
+The 100k bundle-authority baseline at
+`/mnt/ssd/lalli/pancollapse_processing_perf_v1_20260915T193226Z` completed with exit 0 on the
+systematic every-tenth-ordinal sample of the 1M GAMP: 100,000 groups / 106,671 records, input
+SHA-256 `eadee0b7d0c00735ca043617ea831d1d8d1402941198e502f63b87bea2214f98`. It measured 461.991 s
+initialization and 124.485 s processing. Optional per-read diagnostics force workers to wait for
+ordered output and leave producer decoding non-dominant. The `observe_seconds=3422.09` region is
+not a CPU bottleneck: `source.acquire_output` leaves its region clock running across ordered wait.
+
+The terminal no-diagnostics production baseline at
+`/mnt/ssd/lalli/pancollapse_processing_perf_v1_20260915T193226Z/baseline-production-100k` exited
+0: initialization 425.592 s, processing 16.523 s, 6,052.17 groups/s, 7:44.92 wall, and 48.391701
+GiB maximum RSS. Worker compute was 503.273 worker-seconds, ordered wait 0, and producer active
+decode 1.97841 s. Its biological comparison with the debug baseline passes: counters and all
+non-diagnostic tables/summary are identical. The debug 124.485 s versus no-diagnostics 16.523 s
+processing difference is 7.53x and is a diagnostics-mode effect, **not** a cache-code speedup.
+
+The compact-cache candidate production-100k arm also exited 0: initialization 422.692 s,
+processing 14.7644 s, 7:46.84 wall, and 50,721,736 KiB (48.372017 GiB) maximum RSS. Its v2
+comparison passes exact equality of all four tables and biological counters. `summary.tsv` differs
+only in the four operational assignment-cache counters (`entries`, `hits`, `misses`, `uncached`),
+which appear both in the manifest global counters and summary; the original comparator incorrectly
+failed by treating those duplicated operational values as biological. Its failed script/log remain
+preserved. This is a same-fixture result, not an accuracy/F1 result or a whole-pangenome claim.
+
+The earlier 64/65 focused-cache result is preserved as fixture evidence: synthetic
+Hamming-neighbor UMIs deduplicated. After replacement with >=2-distance UMIs, all 65/65 focused
+tests pass for candidate SHA-256 `8ca5c2c1a35d6bef9dae53c0d46f019ccd983873d32bf01f55eb9fa108b504d4`.
+
+Sol accepts worker-private diagnostic streams with a cap-32 bounded final merge as the next
+bounded debug-performance improvement. Final diagnostic-sidecar order remains contractual while
+counting is independent of it. The spool code/review is accepted; 65/65 focused tests pass in
+`logs/focused-tests.merge.log`. Its provenance binary is
+`provenance/panCollapse.worker-spools` SHA-256
+`e48c7ddefebda46998b24e56b22473738cb1c8e185ba3df440e1de825182ced2`, with source snapshot
+`provenance/source.worker-spools.tar.gz`. Timing boundaries are `read_processing`,
+`count_finalize`, `diagnostics_merge_export`, and `compatibility_finalize` when capture applies.
+Existing aggregation is unchanged. The completed debug-100k spool run has 453.462356205 s
+initialization, 17.281165981 s read processing, 0.484642656 s count finalization,
+0.630234947 s diagnostics merge/export, and 18.396179319 s total processing; whole command is
+501.31 s at 48.453689575 GiB. It is 6.77x faster than the old 124.48512534 s ordered-debug
+processing run, with zero diagnostic-only ordered wait. All same-authority biological outputs are
+exact and complete diagnostic Parquet bytes are identical; summary differs only in operational
+cache counters. This does not meet the preferred <5 s target. Exact Parent and scientific policy,
+including the existing RAD-capture block, are unchanged.
+
+The final-binary diagnostics-disabled original-1M run is complete and passes exact biological
+tables and all non-cache counters against the corrected-bundle accuracy `native-bundle`; input
+identities also pass. It recorded 162.249680264 s read processing (16.225 s/100k), 17.857453257 s
+count finalization, 180.107408508 s total processing (18.011 s/100k), 603.204376707 s
+initialization, 842.62 s wall, and 52.07076644897 GiB peak RSS. Diagnostics were disabled.
+No accuracy/F1 claim changes. The next unimplemented profiling target is
+`exact_ex50_evidence_for` temporary allocation/deduplication, documented in
+`provenance/NEXT_BOTTLENECK.md`. Structural tally cannot be skipped because it supports fallback
+assignment; count finalization cannot be linearly projected from 100k (0.485 s) to 1M (17.857 s).
+Any replacement must retain its identity, ordering, filtering, and bounded worker-local memory
+rules. The user prefers under 5 s processing per 100k reads; 16.5 s per
+100k is an acceptable plausible fallback. Linear same-fixture estimates are 16m40 and 55m per
+20M reads, respectively; they exclude initialization/final output and are not whole-pangenome
+predictions. Neither value is a mandatory acceptance gate. Same-authority biological-output
+determinism and RAM validation remain required. Keep converter, compatibility replay, and accuracy
+work separate. The validated binary is `provenance/panCollapse.worker-spools`
+`e48c7ddefebda46998b24e56b22473738cb1c8e185ba3df440e1de825182ced2`; the worktree's original
+build remains the preserved baseline. Live topology is dirty HEAD
+`258f22e889b94129024ebe8cdf0c295dfd0d12a2`, 23 ahead / 1 behind main
+`d4a60aed001bc03b00baf7ed54e39176d2266b55`. Full phase record and final receipts:
+[`docs/research/native-count-processing-performance-20260915.md`](docs/research/native-count-processing-performance-20260915.md).
+
+## Current production validation (completed 2026-09-15; annotation-accuracy investigation next)
+
+The user authorized the fresh corrected bundle and subsequent 1M accuracy comparison.
+Execution is at `/mnt/ssd/lalli/pancollapse_parent_policy_accuracy_1m_v1_20260915T171612Z`;
+see [`docs/research/parent-policy-accuracy-1m-20260915.md`](docs/research/parent-policy-accuracy-1m-20260915.md)
+and the run-local README/status/exit receipts. All eleven pinned input checks passed.
+Current-binary annotation counting completed with exit 0 on all 1M reads per profile.
+The first policy generation exposed a
+second generator defect: all configured Parent exclusion tags voted as readthrough. D088
+requires exact readthrough tags. That repair passes 11 focused tests and both counting
+integration suites. Attempt2 policy/support derivation is complete: 273 genes return to
+PRIMARY, with Parent exclusions unchanged. Fresh category derivation reproduced all 2,461,354
+retained Parent rows byte-for-byte, and the unchanged compiler completed with exit 0 using
+the new source-bound receipt. Corrected bundle content ID:
+`sha256:f1ffba4d4fe821e6bda6d0b88bba3cfe5df9df5fb263efe099e27fe14146c99e`.
+Both native arms, decoded comparison, and both truth-scoring runs completed with exit 0.
+The run's `STATUS` is `COMPLETE_WITH_STRICT_DISCREPANCY`; `RESULTS.md` and `VALIDATION.json`
+record the terminal evidence. CR7 is exact across all 1M diagnostics, counts, and 699,260
+molecules. Strict parity fails: 322 diagnostic assignment changes, 209 differing matrix
+coordinates, and 709,623 annotation versus 709,532 bundle molecules. The strict-only cause
+is projected nested-host direction and per-Parent host protection absent from annotation
+loading: 199 cleared-edge effects, 86 reversed-edge effects, and 37 protection effects.
+
+Frozen all-mapped-origin scoring covers all 1M reads and 1,024 truth genes in each of six
+arms and exactly reproduces the historical scores. Corrected bundle read F1 is 0.962336
+(CR7) and 0.969883 (strict), versus historical 0.957309 and 0.963628; executable and bundle
+changes are both included. The separate corrected-policy open-set guard passes unchanged:
+999,085 eligible and 915 background reads. False assignments on 819 CR7 / 820 strict
+background reads remain a material limitation. These are read-assignment truth metrics;
+matrix checks establish internal consistency and route agreement, not independent matrix
+accuracy. Converter and replay performance remain separate.
+
+The authorized production comparison is complete. The 2026-09-15 user decision supersedes
+D088's strict bit-exact parity acceptance requirement: retain its 322-assignment and
+209-coordinate discrepancy as diagnostic evidence, but it no longer blocks acceptance. The
+projected policy receipt remains `method_search_only` / `benchmark_eligible: false`; the decision
+does not promote it into biological authority, choose a biological rule, authorize reruns, or
+alter sealed bundle receipts. Preserve every existing edit, successful output, and failed
+preparation attempt.
+
+**Exact next task:** an annotation-accuracy investigation under the revised gate. Evaluate
+truth-based precision and recall as percentages and F1 on its conventional 0--1 scale using a
+fixed, clearly stated denominator. More assignments or relaxed parity alone do not establish an
+improvement. The current annotation strict result is slightly lower than the corrected bundle:
+read F1 `0.96986068839009076` versus `0.96988313775162238`; gene-balanced F1
+`0.94202475192394564` versus `0.94356879517102621`. No concrete implementation experiment is
+specified. Before any new scientific phase, automatically run a
+documentation-reconciliation agent to update the local AI-facing current state, decisions, and
+research record with the intellectual state/goals, generated files and experiments, terminal
+results, settled decisions, existing code, exact source/input locations, and the next gated task.
+This supersedes prior future `/reload` offers; historical offers below remain as dated records.
+
+## Comparison gene-policy generator repaired (2026-09-15)
+
+Completed the next user-authorized bounded D088 engineering task in the isolated panSC
+worktree `/mnt/ssd/lalli/panSC/.codex/worktrees/gene-policy-parent-identity`, branch
+`codex/gene-policy-parent-identity`, base `61b1eaea741d86b8e3e883168b2c681c6e60cbd4`.
+That base's generator is byte-identical to the frozen comparison generator (`4d9707ef...`).
+The corrected `count_cr.py` is `604faf4aee96f90180b0bb5ec9af91072df2173ea63b3bb0fc3c9013a8ee0f64`.
+
+Exact Parent IDs now preserve observations before gene aggregation; parent features take
+precedence over child exons regardless of ordering, and local-ID aliases cannot transfer
+a Parent's exclusion to a clean sibling. Canonical transcript/gene grouping is unchanged.
+The nine new policy tests pass, both gene-competition/readthrough integration suites pass,
+and eleven bundle compiler tests pass. Source snapshots, before/after logs, and checksums
+are in that worktree's `results/gene-policy-parent-identity.BMr8qj/`; the full record is
+`docs/gene_policy_parent_identity_repair.md` in that worktree.
+
+At this checkpoint the generator repair was closed and D088 production acceptance remained
+open. The existing comparison bundle still contained the old gene policy. The production
+phase described above supersedes this checkpoint's next action; it additionally discovered
+and repaired the exact-readthrough-tag predicate before building the corrected authority.
+No PanCollapse production code, binary, benchmark output, or scientific score changed in
+this increment. Converter performance, replay performance, and counting accuracy remain
+separate. The prior resumption record below supplies the unchanged exact benchmark paths.
+
+## Current integration state (2026-09-14; supersedes older next-action text)
+
+Branch `codex/compat-replay-integration-b8210`, HEAD `258f22e889b94129024ebe8cdf0c295dfd0d12a2`,
+has the uncommitted D088 annotation authority and additional allocation changes. It is 23 commits
+ahead of the common ancestor with main; main has one separate documentation commit. Existing
+edits and production benchmark outputs remain in place. Exact recovery evidence is in
+[`docs/research/compat-replay-resumption-20260914.md`](docs/research/compat-replay-resumption-20260914.md).
+
+The latest unfinished scientific validation is D088. The September 13 annotation/bundle A/B
+finished and differed; it is not running. Its frozen `490643ca...db6aa` executable predates the
+current `251bfa0c...ab763` executable and later readthrough/body-parent fixes. The identifier-fixed
+bundle repairs Parent categories but retains the gene-policy defect documented in D088. None of
+these retained production outputs proves current annotation-route parity or biological accuracy.
+
+Completed the next bounded machine check: a graph-backed `direct_count_annotation_cli` test now
+exercises the actual CLI through output publication, both profiles with eight expected UMIs,
+gzip inputs, the three input digests, and six parse-time refusals. Focused CTest passes **8/8**,
+including the existing annotation factory test and fixture dependencies. The pre-session log
+records **166/166** passes; it was preserved before running the new checks. There are now 167
+registered tests; a full 167-test run was not performed. No production C++ changed this session.
+
+Gate: D088 accepted, under the post-Vertical-Slice rule of one machine-verifiable increment.
+Large scientific acceptance remained open. Its next-action text is superseded by the completed
+2026-09-15 production validation above and by the automatic documentation-reconciliation
+checkpoint required before any new scientific phase.
+The signature optimization's interleaved performance A/B also remains unperformed; it is a
+separate task from counting-rule validation. Converter, replay, and biological results remain
+separate in the recovery record.
+
 ## v0.10 reusable compatibility intermediate (validated branch, 2026-09-05)
 
 The isolated branch `codex/read-compatibility-bundle` implements D079 without modifying the
@@ -993,8 +2235,9 @@ projection, or a custom index.
   on reads with no UMI collapse at all.
 - 2026-09-04: The large scientific release gate is intentionally still pending, not silently
   inferred from fixtures: frozen Python differential on the canonical one-million-read subset,
-  full chr20 and chr21, then the immutable joint chr20–22 GAMP without remapping. Run `/reload`
-  before the full joint gate. Required joint outcomes remain exact oracle matrices/counters,
+  full chr20 and chr21, then the immutable joint chr20–22 GAMP without remapping. The historical
+  `/reload` instruction is superseded by the automatic documentation-reconciliation checkpoint
+  recorded in the current production state. Required joint outcomes remain exact oracle matrices/counters,
   default persisted output at most 8.4 GB, at least twofold wall-time improvement over the matched
   7 h 48 m v0.9 producer, completion under one day, and peak RSS below 600 GB. Failures may change
   implementation/resource behavior, not the frozen biological rules.
@@ -1142,3 +2385,64 @@ projection, or a custom index.
   because it is an in-process key rather than a persisted content address; it remains
   self-delimiting and therefore injective.
 
+- 2026-09-13: Added a second count-fact authority, the `--annotation` route, and recorded it as
+  D088, accepted the same day. It had been raised as a proposal because it appeared to
+  contradict `docs/product-spec.md`'s no-GFF3-at-runtime clause; on approval the user resolved
+  that the clause was only ever meant to bar runtime GTF projection, which this route does not
+  do. It does amend D076's "the bundle is the only assignment authority". D085 had
+  already established the aim and explicitly deferred this decision. `panCollapse count` now
+  takes exactly one of `--count-bundle` or `--annotation`, the latter with
+  `--annotation-reference` and `--path-identity-ledger`, and
+  `CountFactCatalog::from_annotation` builds the same `parents_`, `genes_` and `profile_genes_`
+  structures the bundle loader builds, parsing gzip through zlib and writing nothing to disk.
+  The derivation rule was established first in Python, `scripts/derive_count_facts_from_annotation.py`,
+  at 100.00% agreement against the identifier-fixed bundle; that harness is a validation
+  artifact, not a pipeline step. Two derivation details each cost a defect and are recorded in
+  D088: reference gene tags must be inherited through `source_gene`, because CAT drops them on
+  projection and omitting the step under-tags silently rather than failing; and `count_gene`
+  must come from the loader's own `normalized_locus()`, since an independent reimplementation
+  that kept the Ensembl version suffix disagreed with the bundle. The receipt gains
+  `fact_authority` beside `fact_bundle_content_id`, both now validated non-empty;
+  `fact_bundle_content_id` was deliberately not renamed so existing readers keep working, and on
+  the annotation route it holds a digest over the three input files' SHA-256s rather than a
+  published bundle id. A dereference of the `nullopt` `count_bundle` at two sites was undefined
+  behavior that produced an empty string rather than crashing, and aborted a completed
+  47-minute chr19 production run at the output-writing step with `direct-count output metadata
+  is incomplete`. Open and unresolved: no test drives `--annotation` through
+  `write_count_outputs`; a bundle-versus-annotation bit-exactness A/B on the one-million-read
+  chr20/21/22 fixture is running and its result is not known, so the two routes must not yet be
+  described as agreeing; `--compatibility-in` replay still loads a bundle unconditionally and
+  does not accept `--annotation`, and does not currently refuse the combination either;
+  `protected_primary_protein_nested_host` is left false on the derived catalog because it is a
+  spatial relation the annotation does not state; the factory reads `nested_host_gene` only from
+  a gene row while `tag_nested_reference_hosts.py` writes it onto every row carrying a matching
+  `source_gene`, so whether nested-host policy is reachable at all on this route is unconfirmed;
+  and the recognized category and gene-type
+  vocabularies are compiled into the binary on this route where the bundle route reads them as
+  data. Separately, chr19 shows 514 unorientable body/exon pairs across 330 parents, 0.061
+  percent, which is fixture generation skew rather than a counting defect; it is handled by
+  degradation recording `body_path_degrade_reason=repeated_exonic_node`, and the planned fix is
+  rebuilding the body layer from the corrected annotation with `scripts/gff3_to_genebody.py`.
+  Also in the working tree, the per-read `transcript_gd` map became a `std::vector<char>`
+  parallel to `calls`, valid because `src/pathtally_ledger.hpp` builds `calls` by draining a
+  `std::map` keyed on transcript target id, so the ids are unique and ascending and a call's own
+  position is a complete key. Documentation was brought into line in the same pass:
+  `docs/product-spec.md`, `CLAUDE.md`, `docs/input-output-contract.md`,
+  `docs/validation-contract.md`, `README.md`, and a new `scripts/README.md` describing the
+  annotation correction chain.
+
+- 2026-09-21: Documentation reconciliation for the full-input throughput-cliff investigation. The
+  full real-input native count is recorded as terminal and validated with its seal pending
+  (817.857627 s/100k reads over 25,755,749 reads, peak RSS 137.476540 GiB, binary
+  `3d13e082…d7d0f958`), and its within-run cliff at read ~22,046,000 is characterized from four
+  cold 100,000-read windows: graph structure per alignment, not accumulated state and not
+  multimapping. The allocator-substitution result was demoted from the current frontier and marked
+  valid for the 1M-read prefix only, since that prefix sits inside the regime covering 85.0% of
+  reads but 14.2% of read time. The earlier stage-attribution table was marked superseded by the
+  mangled-prefix attribution tool. One accepted decoder fix (sampled `SpaceUsedLong`) and two
+  instrumentation changes are recorded as uncommitted. A new record
+  `docs/research/full-input-throughput-cliff-20260921.md` carries the full narrative; README,
+  `PROGRESS.md`, `docs/decisions.md` D089, and the native-count performance record were reconciled
+  to it. The unresolved upstream question — why the GAMP tail carries ~600x more graph structure
+  per alignment — is recorded for the mapping pipeline owner. No source, test, build, or sealed
+  evidence file was changed.

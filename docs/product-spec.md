@@ -97,8 +97,12 @@ The final V1 CLI must accept:
 A GTF and `vg rna` build the annotated graph during reference/fixture creation only; they
 are not runtime inputs, and there is no separate collapse manifest. GCSA/LCP and distance
 indexes may be needed upstream to produce the GAMP with `vg mpmap`; once GAMP exists they are
-not panCollapse inputs. The implementation must not require GFF3, GBZ as a substitute for
-`.xg`, or a custom lookup index in V1.
+not panCollapse inputs. The implementation must not require GBZ as a substitute for `.xg`, or a
+custom lookup index, in V1, and must not project exon or intron geometry from an annotation at
+runtime. This sentence previously read as barring GFF3 outright; D088 records that the term was
+only ever meant to bar runtime projection. `count` may read a corrected GFF3 as its fact
+authority, which reads classifier verdicts already written onto the annotation and derives no
+geometry from it.
 
 Historical two- and three-column exon/body t2gs are accepted only through the explicit
 `--legacy-adapter hst-v1`; they are never inferred from file shape. The production ledger carries
@@ -106,12 +110,20 @@ both exon and body rows. Ordinary ledger modes keep S/U evidence transcript-spec
 `genefull_ex50pas` instead emits exact Parent-preserving E/P/B evidence and requires
 `--bam-out --bam-multigene all`; it rejects `hst-v1`. See `docs/genefull.md`.
 
-For native `count`, the runtime identity inputs are instead a checksum-bound
-`panSC-count-facts-v1` bundle, a barcode whitelist, and one or more profile selectors. The bundle
-binds the path-identity ledger, per-profile gene policy, Parent categories, projected-nesting
-relations, independent-support facts, gene metadata, producer receipts, and source hashes.
-Optional `--t2g` and `--body-t2g` are assertions against that bundle and never participate in
-assignment. Incompatible or incomplete facts fail before GAMP consumption.
+For native `count`, the runtime identity inputs are instead one fact authority, a barcode
+whitelist, and one or more profile selectors. Exactly one of two fact authorities is required.
+
+- `--count-bundle`, a checksum-bound `panSC-count-facts-v1` bundle. It binds the path-identity
+  ledger, per-profile gene policy, Parent categories, projected-nesting relations,
+  independent-support facts, gene metadata, producer receipts, and source hashes. D085 made five
+  of its nine roles optional; the runtime opens only the four it reads.
+- `--annotation` with `--annotation-reference` and `--path-identity-ledger`, which derives the
+  same facts from a corrected GFF3 carrying the correction chain's classifier verdicts as `tag=`
+  attributes, plus the reference GFF3 that supplies the gene tags CAT drops on projection. See
+  D088 for what this route can and cannot state, and for its outstanding validation conditions.
+
+Optional `--t2g` and `--body-t2g` are assertions against the fact authority and never participate
+in assignment. Incompatible or incomplete facts fail before GAMP consumption.
 
 ## 5. Barcode and UMI source
 

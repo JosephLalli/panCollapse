@@ -6,18 +6,59 @@ prescribing the code architecture. The GAMP-to-RAD algorithm is defined by D048 
 
 ## Native count interface (v0.10)
 
-`panCollapse count` requires GAMP, XG, a barcode whitelist, at least one frozen profile,
-and a `panSC-count-facts-v1` bundle. The bundle is authoritative for path identity,
-profile-specific gene policy, Parent categories, projected-nested policy, strong-support
-facts, corrected annotation, and provenance receipts; the command refuses external legacy
-identity/policy, BAM, debug, compact-BAM, and allowlist options, and the convert-only policy
-switches `--strand`, `--count-mode`, `--bam-multigene`, and `--no-ex50-score-window`. Its default output is an
+`panCollapse count` requires GAMP, XG, a barcode whitelist, at least one frozen profile, and
+exactly one count-fact authority. The command refuses external legacy identity/policy, BAM,
+debug, compact-BAM, and allowlist options, and the convert-only policy switches `--strand`,
+`--count-mode`, `--bam-multigene`, and `--no-ex50-score-window`. Its default output is an
 atomic Parquet dataset and manifest; `count` has no BAM sink and no production Python
 dependency. `--10x-mex` and `--rad-out` add compatibility outputs.
+
 `--read-assignments-out <relative/path.parquet>` optionally adds ordered per-read diagnostic
 Parquet. The path must be normalized, relative to `--out-dir`, end in `.parquet`, and not
 collide with a reserved result path. It is opt-in because it is the only count sink with
 per-read-scale I/O.
+
+### Count-fact authority
+
+Exactly one of `--count-bundle` and `--annotation` is required; supplying both, or neither, is a
+usage error. Both routes build the same in-memory Parent, gene, and per-profile gene facts.
+
+`--count-bundle <dir>` reads a `panSC-count-facts-v1` bundle, authoritative for path identity,
+profile-specific gene policy, Parent categories, projected-nested policy, strong-support facts,
+and provenance receipts. Per D085 five of its nine roles are optional and none of them is opened
+by the runtime: `corrected_annotation`, `parent_category_receipt`, `projected_nested_policy`, and
+the two profile policy receipts are validated when present and otherwise absent. The four roles
+the runtime reads are `path_identity_ledger`, `profile_gene_policy`, `parent_category_ledger`,
+and `strong_support_ledger`. On this route
+`--path-identity-ledger` is rejected, because the bundle supplies the ledger.
+
+`--annotation <corrected.gff3>` reads the correction chain's classifier verdicts directly off a
+GFF3, and requires two companions:
+
+- `--annotation-reference <reference.gff3[.gz]>` — the reference annotation whose gene rows carry
+  the tags CAT drops when it projects a model. They are inherited back onto each projected model
+  through `source_gene`, matched with the Ensembl version suffix stripped. The inheritance is not
+  optional: omitting it under-tags the annotation silently rather than failing.
+- `--path-identity-ledger <ledger.tsv>` — required on this route and only on this route, since
+  there is no bundle to carry it.
+
+Either annotation file may be gzipped. Recognized categories are the twelve selected tags, and
+gene-type policy is the 10x 2024-A allowlist with `count_cr.py`'s demotion vocabulary; on this
+route both are compiled into the binary rather than read from bundle tables. Two facts the
+annotation does not state are consequently absent: `protected_primary_protein_nested_host` is
+always `false`, and `nested_host` is read only from a `nested_host_gene` attribute on a **gene**
+row. `scripts/tag_nested_reference_hosts.py` writes that attribute onto every row carrying a
+matching `source_gene`, which on a CAT projection is the transcript rows; whether gene rows also
+receive it, which they do: `nested_host_gene` is present on 39,108 gene rows of the chr20/21/22
+fixture annotation. An annotation that has not been through the nested-host pass carries no
+nested-host relation at all, silently. See D088, which records this route and its outstanding
+validation conditions. The `--compatibility-in` replay path does not support it: replay loads a
+bundle unconditionally, so `--annotation` is a GAMP/XG-only route and the combination is refused
+as a usage error.
+
+To reach a corrected annotation from a stock reference GTF, see
+[`scripts/README.md`](../scripts/README.md).
+
 
 `--compatibility-out <dir>` adds an atomically published compatibility dataset and manifest. Its
 deterministic, ordinal-ordered Parquet rows retain every input group, including invalid-molecule
@@ -33,7 +74,7 @@ published in row-, UTF-8-byte-, and structural-list-value-bounded Parquet batche
 compatibility dictionary never requires an oversized Arrow data or offset array.
 
 `--compatibility-in <dir>` replaces GAMP and XG and requires the current count-facts bundle and
-whitelist. Exactly one input mode is legal: GAMP/XG or compatibility input. The reader validates
+whitelist. Replay is a bundle-route feature; `--annotation` is not wired into it. Exactly one input mode is legal: GAMP/XG or compatibility input. The reader validates
 all hashes, schema, denominator, and ledger structural/algorithm compatibility before using the
 interned facts for fast resolution and scanning the complete read rows for matrix/QC accounting.
 It permits metadata/tagging/whitelist/count-policy replay, but rejects any mismatch that could
@@ -85,7 +126,15 @@ by profile, barcode, and feature; molecules add UMI as the final sort key. Write
 Arrow schema, Parquet 2.6, fixed row-group sizing, and Zstandard level 3 without volatile
 timestamps. Because future Arrow versions may encode equivalent tables differently,
 `manifest.json` records library-independent logical hashes over canonical rows as well as the
-current output-file hashes. `summary.tsv` records stable global and per-profile counters. Barcode
+current output-file hashes. It also records which authority produced the facts:
+`fact_bundle_content_id` holds the identity of those facts, and `fact_authority` names the route
+that produced it, `count-bundle` or `annotation`. Both are required and validated non-empty
+before any output is written. On the bundle route the id is the bundle's published `content_id`.
+On the annotation route it is `sha256:` followed by a digest over the SHA-256 digests of the
+corrected annotation, the reference annotation, and the path-identity ledger, in that order, so a
+reader must consult `fact_authority` before treating the id as a bundle address. The `inputs` map
+records `count_bundle_manifest` on the bundle route, and `annotation`, `annotation_reference`, and
+`path_identity_ledger` on the annotation route. `summary.tsv` records stable global and per-profile counters. Barcode
 prior/correction totals are counted once globally because they precede profile evaluation; the
 corresponding per-profile counters remain available for joint-versus-separate audit. The
 entire staged directory is published atomically only after all requested outputs close and
@@ -109,6 +158,22 @@ the last two underscore-separated fields (raw CB and UMI, after any quality suff
 on `invalid_raw_molecule` rows; a name with fewer than two such fields, or an empty prefix,
 records the raw GAMP name instead. It is an audit product, not an input to
 counting or a default production artifact.
+
+Native GAMP counting writes worker-private diagnostic streams and merges them after count
+finalization. The final sidecar remains ordered by input ordinal and profile index. Merge
+fan-in is at most 32 streams, with intermediate merges for larger worker counts; every
+stream is checksum/trailer validated, and every expected read/profile pair must appear
+exactly once. Diagnostic output alone does not impose a worker ordering barrier. RAD and
+compatibility capture retain their existing ordering requirements.
+
+Native-count manifest `timings` separates `read_processing_seconds`,
+`count_finalize_seconds`, `diagnostics_merge_export_seconds`, and optional-work
+`compatibility_finalize_seconds`. The existing `processing_seconds` remains the aggregate
+of traversal and finalization. Read processing includes requested diagnostic-row generation
+and spooling; diagnostic merging/export is measured afterward. Measure core counting with
+`--read-assignments-out` omitted. Initialization remains separate; stderr additionally
+reports count-output publication time, and whole-command wall/RSS come from an external
+measurement such as GNU time. Compatibility replay retains its existing timing fields.
 
 ## Runtime inputs
 

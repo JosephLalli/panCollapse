@@ -26,6 +26,7 @@ The following are durable project artifacts and are intentionally retained:
 - `docs/validation-contract.md`
 - `docs/roadmap.md`
 - `docs/glossary.md`
+- `scripts/README.md` and the annotation/fixture scripts it describes
 - research and architecture documents once they contain completed project knowledge.
 
 The removal script deletes only the first group.

@@ -11,10 +11,20 @@ an index, not the full manual; read detailed files only when working in their ar
   transcript set: score aligned nodes under vg's scheme, attribute to the HST paths crossing
   them, take the top HST score across all of a read's alignments plus ties, and collapse to
   unique transcript IDs. See `docs/conversion-algorithm.md`.
-- Runtime inputs are the GAMP, the graph with `vg rna` HST paths, and a transcript-to-gene
-  map; the GTF and `vg rna` are fixture-creation only. Do not introduce a custom lookup index
-  without measured evidence and human approval.
+- `convert` runtime inputs are the GAMP, the graph with `vg rna` HST paths, and a
+  transcript-to-gene map; the GTF and `vg rna` build the graph at fixture creation only.
+- `count` takes its facts from exactly one authority: a `panSC-count-facts-v1` bundle, or a
+  corrected GFF3 with its reference GFF3 and the path-identity ledger. The annotation route is
+  D088: the corrected 1M comparison passes CR7 parity. Strict differs on nested-host/protection
+  facts, and the user removed strict parity as an acceptance requirement on 2026-09-15.
+  Continue annotation-accuracy work against truth; see `PROGRESS.md` for current evidence.
+- Do not introduce a custom lookup index without measured evidence and human approval. Parsing a
+  standard annotation at startup is not one; see D088.
 - Update `PROGRESS.md` and `docs/decisions.md` before ending a substantive session.
+- Before each new scientific phase, automatically run a documentation agent and review
+  its reconciliation of local AI-facing docs; this replaces offering `/reload`. Cover
+  goals/understanding, experiments/results, generated files, decisions, code, and exact
+  evidence locations. Follow `.agent-workspace/ORCHESTRATION.md`.
 
 ## Hard rules
 
@@ -37,6 +47,8 @@ an index, not the full manual; read detailed files only when working in their ar
 | Need | File |
 |---|---|
 | Product contract | `docs/product-spec.md` |
+| Correcting an annotation for `count` | `docs/annotation-correction.md` |
+| Tag vocabulary, entity model, pipeline order | `docs/annotation-tag-model.md` |
 | Conversion algorithm (D048) | `docs/conversion-algorithm.md` |
 | Inputs and outputs | `docs/input-output-contract.md` |
 | Optional BAM output | `docs/bam-export.md` |
@@ -45,10 +57,14 @@ an index, not the full manual; read detailed files only when working in their ar
 | Decisions and open forks | `docs/decisions.md` |
 | Acceptance criteria | `docs/validation-contract.md` |
 | Medium-scale known-truth RAD fixture plan | `docs/testing_fixture_creation.md` |
+| Native-count throughput cliff and decoder cost | `docs/research/full-input-throughput-cliff-20260921.md` |
+| Dense-region scheduling (D090): read-granular decode, arena, ordered-output reorder | `docs/research/read-granular-decode-design-20260923.md` |
+| Annotation correction chain and fixture scripts | `scripts/README.md` |
 | Task plan | `TASKS.md` |
 | Current state | `PROGRESS.md` |
 | Resolved human product decisions | `.agent-workspace/USER_DECISIONS.md` |
 | Delegation policy | `.claude/workflow.md` |
 
 You are the orchestrator: hold the plan and approval state, delegate bounded read-only
-research, synthesize findings, and own edits. Start with `.agent-workspace/KICKOFF.md`.
+research and scoped documentation updates, synthesize findings, and own integration.
+Start with `.agent-workspace/KICKOFF.md`.

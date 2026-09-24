@@ -6,7 +6,8 @@ writes that to RAD. This is graph-native transcript feature counting on a pangen
 question is "which transcripts is this read compatible with," answered directly from the
 graph the mapper already produced.
 
-This document is the canonical algorithm, governed by decision D048.
+This document is the canonical algorithm, governed by decision D048 as amended by D091
+(each alignment path scored separately; the best path wins).
 
 ## Inputs (runtime)
 
@@ -32,12 +33,20 @@ supplementary/secondary record):
    not serialize per-node scores, but the per-node contributions of a subpath sum to that
    subpath's `Subpath.score` — the built-in correctness check.
 
-2. **Attribute to transcripts.** Every HST path that traverses a scored node receives that
-   node's score (native `for_each_step_on_handle`). Compatibility is graph membership: the
-   HST path visits the node. The HST path already encodes the transcript's spliced
-   structure, so there is no exon/intron/junction test.
+2. **Attribute to transcripts, one alignment path at a time (D091).** An alignment path is one
+   source-to-sink route through a record's subpath graph: one choice among the alternative
+   subpaths vg lists for each stretch of the read. Along one path, every HST path that
+   traverses a scored node receives that node's score (native `for_each_step_on_handle`).
+   Compatibility is graph membership: the HST path visits the node. The HST path already
+   encodes the transcript's spliced structure, so there is no exon/intron/junction test. An
+   HST's score is the maximum, over every alignment path of every record of the read, of the
+   score it receives on that path; only paths that visit the HST count. Alternative subpaths
+   and alternative records are never added together. Orientation evidence (aligned bases
+   forward and reverse relative to the HST) comes from the maximizing path; among paths tied
+   on score, the one with more aligned bases, then more forward bases, is used. This is
+   computed by dynamic programming over the subpath graph, not by enumerating paths.
 
-3. **Collapse exact identity with MAX.** Pool exact path tallies over all alignments. Resolve
+3. **Collapse exact identity with MAX.** Take the per-HST maximum over all alignments. Resolve
    `vg_path_name -> unique_parent -> canonical_transcript`; MAX-collapse paths within a Parent and
    Parents within a canonical transcript. Retain every path/Parent tied at either winning boundary.
    Alternative evidence is never summed.
@@ -110,8 +119,9 @@ Build one testable behavior at a time:
 
 1. Reproduce vg's per-node alignment score from the `Mapping` edits; accept when per-node
    sums equal `Subpath.score` on real GAMP subpaths.
-2. Attribute each node's score to exact ledger paths; MAX-collapse path -> Parent -> canonical.
-3. Select canonical winners at the single top score across all alignments, plus ties.
+2. Attribute each node's score to exact ledger paths along each alignment path separately, and
+   keep each HST's best path (D091); MAX-collapse path -> Parent -> canonical.
+3. Select canonical winners at the single top score across all alignment paths, plus ties.
 4. Record per-transcript orientation by the majority of aligned bases into RAD `dirs`.
 5. Emit `map.rad` (streaming writer) and `tx2gene.tsv`; verify alevin-fry consumption.
 6. Human-pangenome MHC fixture (`docs/testing_fixture_creation.md`): slice HPRC v1.1 GRCh38,

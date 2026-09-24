@@ -2,8 +2,35 @@
 
 ## Authority
 
-The parent session is the sole orchestrator. It owns repository edits, the task state,
-interface synthesis, and requests for human approval.
+The parent session is the sole orchestrator. It owns integration of repository edits, the
+task state, interface synthesis, and requests for human approval. It assigns bounded write
+ownership for documentation checkpoints; researchers otherwise remain read-only.
+
+## Scientific phase documentation checkpoint
+
+User instruction, 2026-09-15: before entering any new scientific phase, automatically run
+a documentation agent instead of offering `/reload`. Complete and review the update before
+beginning the phase; this documentation work needs no separate confirmation.
+
+Give the agent explicit ownership of the affected local AI-facing documents, starting from
+README's Current work chain, `PROGRESS.md`, the relevant decision records, and recent research
+records. Reconcile existing documents and navigation rather than creating a duplicate index.
+The update must make these discoverable:
+
+- intellectual state: goals, current understanding, hypotheses, and unresolved questions;
+- generated files and experiments: exact input/output locations, executed versus pending
+  work, results, validation evidence, and limits on interpretation;
+- decisions: accepted rules, superseded conclusions, open human judgments, and current gate;
+- code: relevant source/worktree/branch, existing implementation, tested executable identity,
+  and checks already performed;
+- continuation: the next authorized bounded task and where to find its supporting evidence.
+
+Preserve existing edits, completed outputs, and historical records. Use recorded terminal
+receipts and targeted checks; documentation reconciliation does not imply rerunning an
+experiment. Keep converter performance, replay performance, and counting accuracy separate.
+The agent reports changed files, evidence locations, checks, and unresolved documentation gaps.
+The parent reviews that report before proceeding within the user's existing authorization.
+This checkpoint cannot resolve an unapproved biological or product decision.
 
 ## Parallel Phase 0 tracks
 

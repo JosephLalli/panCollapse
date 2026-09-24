@@ -16,6 +16,10 @@ This file is intentionally short; load detailed documents only when relevant.
   user later authorizes it, state a concrete case-specific reason and highlight the compact
   evidence loss in the user-facing plan, run update, and result.
 - Update `PROGRESS.md` and `docs/decisions.md` before ending a substantive session.
+- Before each new scientific phase, automatically run a documentation agent and review
+  its update of local AI-facing current-state docs; this replaces offering `/reload`.
+  Cover goals/understanding, experiments/results, generated files, decisions, code, and
+  exact evidence locations. See `.agent-workspace/ORCHESTRATION.md` for the checkpoint.
 - Stop for human review wherever correctness depends on biological or product judgment.
 - If a design decision requires explicit user approval, ask the user directly. Do not
   record unapproved decision options in project docs unless the user expressly defers the
@@ -36,6 +40,7 @@ This file is intentionally short; load detailed documents only when relevant.
 | Validation and acceptance criteria | `docs/validation-contract.md` |
 | Phase 2 vertical-slice plan | `docs/phase2/implementation-plan.md` |
 | Medium-scale known-truth RAD fixture plan | `docs/testing_fixture_creation.md` |
+| Annotation correction chain and fixture scripts | `scripts/README.md` |
 | Staged implementation plan | `TASKS.md` |
 | Current state | `PROGRESS.md` |
 | Delegation policy | `.agent-workspace/ORCHESTRATION.md` |

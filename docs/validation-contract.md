@@ -160,6 +160,41 @@ are independently checkable against fixtures.
 - a bounded benchmark reports persisted size and runtime for direct count, compatibility
   production, and replay, with the v0.9 BAM baseline stated separately.
 
+## 8b. Count-fact authority cases
+
+These cover the second fact authority added by D088, which is accepted. The factory/output
+smoke and the CLI cases below now pass. The corrected 1M comparison establishes CR7
+equivalence and records strict differences; the user removed strict parity as an acceptance
+requirement on 2026-09-15. The current research record separates this from older outputs.
+
+- **Route discrepancy record.** Compare `count --count-bundle` and `count --annotation` on the
+  one-million-read chr20/21/22 fixture and retain differences in `summary.tsv`, Parquet tables,
+  and route-specific manifest fields as diagnostic evidence. Strict-profile bit-exact route
+  parity is not an acceptance requirement, per the 2026-09-15 user decision; CR7's existing
+  parity requirement is unchanged. The completed current-binary result
+  has 322 strict diagnostic assignment changes and 209 differing matrix coordinates; CR7 is
+  exact. This comparison neither establishes annotation accuracy nor authorizes a policy choice.
+  The September 13 A/B on an older executable and the subsequent bundle-policy findings remain
+  historical evidence; the tiny CLI fixture does not replace the production comparison;
+- **End-to-end annotation route.** At least one test must drive `--annotation` through
+  `write_count_outputs`. `count_fact_annotation_smoke` covers the factory/writer; the
+  graph-backed `direct_count_annotation_cli` additionally covers actual argument routing,
+  counting and publication through `main.cpp`, with eight independently expected UMIs in
+  each profile. Its barcode/count/molecule tables match the tiny bundle fixture. The fixture's
+  optional display-name metadata is bundle-only, so this check does not assert feature-table
+  byte parity;
+- **Usage refusals.** Supplying both `--count-bundle` and `--annotation`, supplying neither,
+  supplying `--annotation` without `--annotation-reference` or without `--path-identity-ledger`,
+  and supplying `--path-identity-ledger` on the bundle route must each fail with a usage error
+  before GAMP consumption. All five cases are checked by `direct_count_annotation_cli` with
+  nonexistent graph/read paths and exact refusal messages before initialization;
+- **Receipt fields.** `fact_authority` must be present and non-empty on both routes, and the
+  annotation route's `fact_bundle_content_id` must change when any of its three input files
+  changes. The CLI test checks all three input identities and both authority labels, including
+  successful parsing of gzipped corrected and reference annotations;
+- **Replay refusal.** `--compatibility-in` combined with `--annotation` must be refused as a
+  usage error. The CLI test checks that refusal before initialization and output creation.
+
 ## 9. Production-applicability fixture
 
 - `docs/testing_fixture_creation.md` is the human-pangenome GAMP-to-RAD fixture plan (D047):
