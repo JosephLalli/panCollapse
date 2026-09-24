@@ -2,12 +2,15 @@
 
 #include <openssl/evp.h>
 #include <simdjson.h>
+#include <zlib.h>
 
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <memory>
@@ -599,10 +602,531 @@ CountFactBundle load_count_fact_bundle(const std::filesystem::path& requested_ro
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Deriving count facts directly from a corrected annotation.
+//
+// The correction chain writes every classifier verdict onto the GFF3 as a tag so that, in its
+// own words, "the counter needs no new code" and which categories disqualify becomes a per-run
+// choice rather than a rule baked into an artifact. panSC's cache builder documents the same
+// contract from the other side: its cache "must agree with direct annotation parsing". This
+// factory performs that parsing, so a run needs the annotation and the ledger and nothing else.
+//
+// count_gene comes from the same normalized_locus() the bundle loader uses, so the two cannot
+// disagree by construction.
+// ---------------------------------------------------------------------------
+namespace {
+
+// The annotation's ways of spelling "absent", matching count_cr.py's MISSING_ANNOTATION_VALUES.
+bool is_missing_annotation_value(std::string_view value) {
+    return value.empty() || value == "." || value == "N/A" || value == "NA" ||
+           value == "nan" || value == "None";
+}
+
+// Reference genes are keyed without their version suffix, because a CAT source_gene carries
+// one and the reference row may not agree on it.
+std::string strip_gene_version(std::string_view value) {
+    const size_t dot = value.rfind('.');
+    if (dot == std::string_view::npos || dot + 1 >= value.size()) return std::string(value);
+    for (size_t index = dot + 1; index < value.size(); ++index) {
+        if (std::isdigit(static_cast<unsigned char>(value[index])) == 0) {
+            return std::string(value);
+        }
+    }
+    return std::string(value.substr(0, dot));
+}
+
+// Categories a count profile may act on. Tags outside this set (basic, CCDS, MANE_Select and
+// the rest) are annotation metadata, not count policy.
+const std::set<std::string, std::less<>>& selected_category_tags() {
+    static const std::set<std::string, std::less<>> tags{
+        "candidate_novel_locus", "identity_candidate_reassignment", "identity_unresolved",
+        "independent_single_gene_support_strong_local_structure", "label_conflict",
+        "nested_same_strand", "no_source_provenance", "overlaps_pseudogene",
+        "readthrough_gene", "readthrough_transcript", "source_gene_label_conflict",
+        "structural_readthrough"};
+    return tags;
+}
+
+constexpr std::string_view kStrongSupportTag =
+    "independent_single_gene_support_strong_local_structure";
+
+// Public 10x 2024-A gene_type allowlist, and the demotion vocabulary count_cr.py applies to a
+// gene whose single biotype falls outside it.
+const std::set<std::string, std::less<>>& allowed_gene_types_2024_a() {
+    static const std::set<std::string, std::less<>> types{
+        "protein_coding", "protein_coding_LoF", "lncRNA",
+        "IG_C_gene", "IG_D_gene", "IG_J_gene", "IG_LV_gene", "IG_V_gene",
+        "IG_V_pseudogene", "IG_J_pseudogene", "IG_C_pseudogene",
+        "TR_C_gene", "TR_D_gene", "TR_J_gene", "TR_V_gene",
+        "TR_V_pseudogene", "TR_J_pseudogene"};
+    return types;
+}
+
+// The transcript_type allowlist is a strict superset: isoform-quality categories are legitimate
+// for one alternative transcript of an otherwise countable gene.
+bool transcript_type_qualifies(const std::string& value) {
+    static const std::set<std::string, std::less<>> extra{
+        "retained_intron", "protein_coding_CDS_not_defined", "nonsense_mediated_decay",
+        "non_stop_decay", "TEC"};
+    return allowed_gene_types_2024_a().count(value) != 0 || extra.count(value) != 0;
+}
+
+std::string gene_type_fallback_reason(const std::string& gene_type) {
+    static const std::set<std::string, std::less<>> small_rna{
+        "miRNA", "misc_RNA", "rRNA", "ribozyme", "sRNA", "scaRNA", "scRNA",
+        "snRNA", "snoRNA", "tRNA", "vault_RNA"};
+    static const std::set<std::string, std::less<>> mitochondrial{"Mt_rRNA", "Mt_tRNA"};
+    if (small_rna.count(gene_type) != 0) return "small_rna";
+    if (mitochondrial.count(gene_type) != 0) return "mt_structural";
+    if (gene_type == "TEC") return "TEC";
+    if (gene_type == "artifact") return "artifact";
+    std::string lowered = gene_type;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lowered.find("pseudogene") != std::string::npos) return "pseudogene";
+    return "";
+}
+
+std::string percent_decode(std::string_view value) {
+    std::string out;
+    out.reserve(value.size());
+    for (size_t index = 0; index < value.size(); ++index) {
+        if (value[index] == '%' && index + 2 < value.size()) {
+            const auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            const int high = hex(value[index + 1]);
+            const int low = hex(value[index + 2]);
+            if (high >= 0 && low >= 0) {
+                out.push_back(static_cast<char>(high * 16 + low));
+                index += 2;
+                continue;
+            }
+        }
+        out.push_back(value[index]);
+    }
+    return out;
+}
+
+// One GFF3 attribute column. Repeated keys accumulate, which is how tag= lists arrive.
+std::map<std::string, std::vector<std::string>, std::less<>> gff_attributes(
+    std::string_view column) {
+    std::map<std::string, std::vector<std::string>, std::less<>> out;
+    size_t start = 0;
+    while (start <= column.size()) {
+        const size_t end = column.find(';', start);
+        std::string_view part = column.substr(
+            start, end == std::string_view::npos ? std::string_view::npos : end - start);
+        const size_t equals = part.find('=');
+        if (equals != std::string_view::npos) {
+            out[std::string(part.substr(0, equals))].push_back(
+                percent_decode(part.substr(equals + 1)));
+        }
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return out;
+}
+
+std::string attribute_value(
+    const std::map<std::string, std::vector<std::string>, std::less<>>& attributes,
+    std::string_view key) {
+    const auto found = attributes.find(key);
+    if (found == attributes.end()) return {};
+    for (const std::string& value : found->second) {
+        if (!is_missing_annotation_value(value)) return value;
+    }
+    return {};
+}
+
+std::set<std::string, std::less<>> row_tags(
+    const std::map<std::string, std::vector<std::string>, std::less<>>& attributes) {
+    std::set<std::string, std::less<>> tags;
+    const auto found = attributes.find("tag");
+    if (found == attributes.end()) return tags;
+    for (const std::string& value : found->second) {
+        size_t start = 0;
+        while (start <= value.size()) {
+            const size_t end = value.find(',', start);
+            std::string token = value.substr(
+                start, end == std::string::npos ? std::string::npos : end - start);
+            if (!token.empty()) tags.insert(std::move(token));
+            if (end == std::string::npos) break;
+            start = end + 1;
+        }
+    }
+    return tags;
+}
+
+// Line reader that transparently handles a gzipped annotation.
+class AnnotationReader {
+  public:
+    explicit AnnotationReader(const std::filesystem::path& path)
+        : handle_(gzopen(path.c_str(), "rb")) {
+        if (handle_ == nullptr) {
+            throw std::runtime_error("cannot open annotation " + path.string());
+        }
+        gzbuffer(handle_, 1u << 20);
+    }
+    ~AnnotationReader() { if (handle_ != nullptr) gzclose(handle_); }
+    AnnotationReader(const AnnotationReader&) = delete;
+    AnnotationReader& operator=(const AnnotationReader&) = delete;
+
+    bool next(std::string& line) {
+        line.clear();
+        char buffer[1 << 16];
+        while (gzgets(handle_, buffer, sizeof(buffer)) != nullptr) {
+            line.append(buffer);
+            if (!line.empty() && line.back() == '\n') {
+                line.pop_back();
+                return true;
+            }
+        }
+        return !line.empty();
+    }
+
+  private:
+    gzFile handle_ = nullptr;
+};
+
+std::vector<std::string_view> split_columns(std::string_view line) {
+    std::vector<std::string_view> columns;
+    size_t start = 0;
+    while (start <= line.size()) {
+        const size_t end = line.find('\t', start);
+        columns.push_back(line.substr(
+            start, end == std::string_view::npos ? std::string_view::npos : end - start));
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return columns;
+}
+
+}  // namespace
+
+CountFactCatalog CountFactCatalog::from_annotation(
+    const std::filesystem::path& annotation,
+    const std::filesystem::path& reference,
+    const path_identity::PathIdentityLedger& path_ledger,
+    const std::vector<ProfileId>& profile_ids) {
+    // No bundle means no published content_id, so the facts are identified by the files
+    // they were derived from. Hashing bytes, not the derived catalog: a gzipped and a plain
+    // copy of the same GFF3 get different ids, which matches how `gamp` and `xg` are
+    // recorded in the receipt and keeps the id cheap to compute.
+    CountFactCatalog result;
+    {
+        std::string inputs = sha256_file(annotation);
+        inputs += '\n';
+        inputs += sha256_file(reference);
+        inputs += '\n';
+        inputs += sha256_file(path_ledger.source_path);
+        inputs += '\n';
+        result.content_id_ = "sha256:" + digest_bytes(inputs);
+        result.authority_ = "annotation";
+    }
+    // Reference gene tags first: CAT drops them when it projects a model, and panSC restores
+    // them through source_gene. overlaps_pseudogene reaches 234,932 Parents that way on the
+    // joint chr20-22 surface, so skipping this step silently under-tags the annotation.
+    std::map<std::string, std::set<std::string, std::less<>>, std::less<>> reference_tags;
+    {
+        AnnotationReader reader(reference);
+        std::string line;
+        while (reader.next(line)) {
+            if (line.empty() || line.front() == '#') continue;
+            const auto columns = split_columns(line);
+            if (columns.size() < 9 || columns[2] != "gene") continue;
+            const auto attributes = gff_attributes(columns[8]);
+            std::string identifier = attribute_value(attributes, "ID");
+            if (identifier.empty()) identifier = attribute_value(attributes, "gene_id");
+            if (identifier.empty()) continue;
+            auto tags = row_tags(attributes);
+            if (!tags.empty()) {
+                reference_tags.emplace(strip_gene_version(identifier), std::move(tags));
+            }
+        }
+    }
+
+    struct AnnotationGene {
+        std::set<std::string, std::less<>> tags;
+        std::string biotype;
+        std::string nested_host;
+    };
+    struct AnnotationTranscript {
+        std::string gene;              // Parent: on a transcript row this is the gene
+        std::string source_gene;
+        std::string gene_biotype;
+        std::string transcript_biotype;
+        std::set<std::string, std::less<>> tags;
+    };
+    std::map<std::string, AnnotationGene, std::less<>> annotation_genes;
+    std::map<std::string, AnnotationTranscript, std::less<>> annotation_transcripts;
+    {
+        AnnotationReader reader(annotation);
+        std::string line;
+        while (reader.next(line)) {
+            if (line.empty() || line.front() == '#') continue;
+            const auto columns = split_columns(line);
+            if (columns.size() < 9) continue;
+            const bool is_gene = columns[2] == "gene";
+            const bool is_transcript = columns[2] == "transcript" || columns[2] == "mRNA";
+            if (!is_gene && !is_transcript) continue;
+            const auto attributes = gff_attributes(columns[8]);
+            // Only ID is a unique key; transcript_id and gene_id are bare and assembly-local.
+            const std::string identifier = attribute_value(attributes, "ID");
+            if (identifier.empty()) continue;
+            if (is_gene) {
+                AnnotationGene gene;
+                gene.tags = row_tags(attributes);
+                gene.biotype = attribute_value(attributes, "gene_biotype");
+                if (gene.biotype.empty()) gene.biotype = attribute_value(attributes, "gene_type");
+                gene.nested_host = attribute_value(attributes, "nested_host_gene");
+                annotation_genes.insert_or_assign(identifier, std::move(gene));
+                continue;
+            }
+            AnnotationTranscript transcript;
+            transcript.gene = attribute_value(attributes, "Parent");
+            transcript.source_gene = attribute_value(attributes, "source_gene");
+            transcript.gene_biotype = attribute_value(attributes, "gene_biotype");
+            if (transcript.gene_biotype.empty()) {
+                transcript.gene_biotype = attribute_value(attributes, "gene_type");
+            }
+            transcript.transcript_biotype = attribute_value(attributes, "transcript_biotype");
+            if (transcript.transcript_biotype.empty()) {
+                transcript.transcript_biotype = attribute_value(attributes, "transcript_type");
+            }
+            transcript.tags = row_tags(attributes);
+            annotation_transcripts.insert_or_assign(identifier, std::move(transcript));
+        }
+    }
+
+    for (const ProfileId profile_id : profile_ids) {
+        result.profile_genes_.try_emplace(profile_id);
+    }
+
+    // Per-count-gene aggregate, built while walking Parents so the classifier sees every row.
+    struct GeneAggregate {
+        std::set<std::string, std::less<>> gene_row_types;
+        std::set<std::string, std::less<>> gene_types;
+        std::set<std::string, std::less<>> transcript_types;
+        bool qualifying_transcript = false;
+        bool source_less = true;
+        // Readthrough is two independent signals with different quantifiers, and conflating
+        // them into one bool is what made a single tagged copy delete a whole locus. A gene row
+        // declaring readthrough_gene excludes the locus on its own, so that is a disjunction.
+        // readthrough_transcript only excludes the locus when EVERY observation carries it:
+        // a locus with some readthrough isoforms still has legitimate ones, and those are
+        // dropped individually by filter_categories rather than by deleting the gene. An
+        // observation is a Parent, so the conjunction runs over the gene's Parents.
+        bool readthrough_gene_declared = false;
+        std::uint64_t transcript_observations = 0;
+        std::uint64_t readthrough_transcript_observations = 0;
+        std::string nested_host;
+    };
+    std::map<std::string, GeneAggregate, std::less<>> aggregates;
+
+    for (const auto& [parent, identity_pointer] : path_ledger.identities_by_parent) {
+        const path_identity::AnnotationIdentity& identity = *identity_pointer;
+        ParentFact fact;
+        fact.unique_parent = parent;
+        fact.count_gene = normalized_locus(identity);
+        fact.runtime_gene = identity.gene_id;
+        fact.canonical_transcript = identity.canonical_transcript;
+        fact.sample = identity.sample;
+        fact.feature_layer = identity.feature_layer;
+
+        std::set<std::string, std::less<>> tags;
+        const auto transcript = annotation_transcripts.find(parent);
+        const AnnotationGene* gene_row = nullptr;
+        if (transcript != annotation_transcripts.end()) {
+            tags = transcript->second.tags;
+            // `Parent` is level-dependent, and on this annotation it is not always the gene.
+            // A body row (panSCbody1_<sha256>, feature_layer=transcript_body) names the
+            // exon-layer transcript it was derived from, so the locus sits one hop further up:
+            // gene -> exon transcript -> body transcript. Following only the first hop left
+            // every one of the 1,231,247 body Parents with no gene row at all, and therefore
+            // without the two selected categories that appear on gene rows only --
+            // overlaps_pseudogene on 161,619 Parents and readthrough_gene on 20,062.
+            const AnnotationTranscript* locus_row = &transcript->second;
+            auto gene = annotation_genes.find(locus_row->gene);
+            if (gene == annotation_genes.end()) {
+                const auto host = annotation_transcripts.find(locus_row->gene);
+                if (host != annotation_transcripts.end()) {
+                    locus_row = &host->second;
+                    gene = annotation_genes.find(locus_row->gene);
+                }
+            }
+            if (gene != annotation_genes.end()) {
+                gene_row = &gene->second;
+                tags.insert(gene->second.tags.begin(), gene->second.tags.end());
+            }
+            const auto inherited =
+                reference_tags.find(strip_gene_version(transcript->second.source_gene));
+            if (inherited != reference_tags.end()) {
+                tags.insert(inherited->second.begin(), inherited->second.end());
+            }
+        }
+        for (const std::string& tag : tags) {
+            if (selected_category_tags().count(tag) != 0) {
+                fact.raw_categories.push_back(tag);
+            }
+        }
+        std::sort(fact.raw_categories.begin(), fact.raw_categories.end());
+        fact.strong_local_support =
+            std::binary_search(fact.raw_categories.begin(), fact.raw_categories.end(),
+                               std::string(kStrongSupportTag));
+        // The projected-nesting protection is a spatial relation the annotation does not
+        // state, so a derived catalog leaves it unset rather than guessing.
+        fact.protected_primary_protein_nested_host = false;
+        if (const auto parsed = ensembl_identity(identity.source_gene);
+            parsed && !parsed->discriminator.empty()) {
+            fact.novel_paralog = true;
+            fact.novel_origin_gene = parsed->stable_gene;
+        }
+
+        GeneAggregate& aggregate = aggregates[fact.count_gene];
+        if (transcript != annotation_transcripts.end()) {
+            if (gene_row != nullptr && !is_missing_annotation_value(gene_row->biotype)) {
+                aggregate.gene_row_types.insert(gene_row->biotype);
+            }
+            if (!is_missing_annotation_value(transcript->second.gene_biotype)) {
+                aggregate.gene_types.insert(transcript->second.gene_biotype);
+            }
+            if (!is_missing_annotation_value(transcript->second.transcript_biotype)) {
+                aggregate.transcript_types.insert(transcript->second.transcript_biotype);
+                if (transcript_type_qualifies(transcript->second.transcript_biotype)) {
+                    aggregate.qualifying_transcript = true;
+                }
+            }
+            // source_less is an OR over the gene's rows: one row with provenance clears it.
+            if (!is_missing_annotation_value(transcript->second.source_gene)) {
+                aggregate.source_less = false;
+            }
+            if (gene_row != nullptr && aggregate.nested_host.empty()) {
+                aggregate.nested_host = gene_row->nested_host;
+            }
+        }
+        // readthrough_gene is a gene-level declaration, so it is read from the gene row and
+        // from the reference gene inherited through source_gene, never from a transcript row.
+        if (gene_row != nullptr && gene_row->tags.count("readthrough_gene") != 0) {
+            aggregate.readthrough_gene_declared = true;
+        }
+        if (transcript != annotation_transcripts.end()) {
+            const auto inherited_gene_tags =
+                reference_tags.find(strip_gene_version(transcript->second.source_gene));
+            if (inherited_gene_tags != reference_tags.end() &&
+                inherited_gene_tags->second.count("readthrough_gene") != 0) {
+                aggregate.readthrough_gene_declared = true;
+            }
+            // The conjunction counts only Parents that actually have a transcript row; one
+            // with none abstains rather than voting "not readthrough" and overturning the locus.
+            ++aggregate.transcript_observations;
+            if (transcript->second.tags.count("readthrough_transcript") != 0) {
+                ++aggregate.readthrough_transcript_observations;
+            }
+        }
+        result.parents_.emplace(parent, std::move(fact));
+    }
+
+    for (const auto& [count_gene, aggregate] : aggregates) {
+        const auto& types = aggregate.gene_row_types.empty() ? aggregate.gene_types
+                                                             : aggregate.gene_row_types;
+        GeneFact gene_fact;
+        gene_fact.count_gene = count_gene;
+        gene_fact.gene_types.assign(types.begin(), types.end());
+        result.genes_.emplace(count_gene, std::move(gene_fact));
+
+        // Port of count_cr.py classify_annotation_aggregate. UNKNOWN is not a safe default:
+        // gene competition keeps only PRIMARY candidates unless the profile's membership is
+        // all_annotated, so a blanket UNKNOWN empties the matrix under cellranger_2024_a.
+        CompetitionClass competition = CompetitionClass::unknown;
+        std::string reason;
+        const bool all_allowlisted =
+            !types.empty() &&
+            std::all_of(types.begin(), types.end(), [](const std::string& type) {
+                return allowed_gene_types_2024_a().count(type) != 0;
+            });
+        if (aggregate.source_less) {
+            reason = "source_less";
+        } else if (types.empty()) {
+            reason = "missing_gene_type";
+        } else if (types.size() > 1 && !all_allowlisted) {
+            reason = "gene_type_membership_veto";
+        } else if (aggregate.readthrough_gene_declared) {
+            competition = CompetitionClass::fallback;
+            reason = "readthrough_gene";
+        } else if (aggregate.transcript_observations > 0 &&
+                   aggregate.readthrough_transcript_observations ==
+                       aggregate.transcript_observations) {
+            competition = CompetitionClass::fallback;
+            reason = "all_readthrough_transcripts";
+        } else if (all_allowlisted) {
+            if (!aggregate.transcript_types.empty() && !aggregate.qualifying_transcript) {
+                competition = CompetitionClass::fallback;
+                reason = "no_qualifying_transcript_type";
+            } else {
+                competition = CompetitionClass::primary;
+                reason = types.size() > 1 ? "all_gene_type_members_allowlisted" : "allowlisted";
+            }
+        } else if (std::string fallback = gene_type_fallback_reason(*types.begin());
+                   !fallback.empty()) {
+            competition = CompetitionClass::fallback;
+            reason = std::move(fallback);
+        } else {
+            reason = "unrecognized_gene_type";
+        }
+
+        for (const ProfileId profile_id : profile_ids) {
+            ProfileGeneFact profile_fact;
+            profile_fact.profile_id = profile_id;
+            profile_fact.count_gene = count_gene;
+            profile_fact.competition = competition;
+            profile_fact.competition_reason = reason;
+            // equivalence_gene equals count_gene in every row of the reference bundle.
+            profile_fact.equivalence_gene = count_gene;
+            profile_fact.source_annotation = "annotation:" + annotation.filename().string();
+            profile_fact.nested_host = aggregate.nested_host;
+            result.profile_genes_[profile_id].emplace(count_gene, std::move(profile_fact));
+        }
+    }
+
+    // A novel-paralog origin gene may have no ledger row of its own; the frozen profiles look
+    // a lumped copy up through it, so give it the same UNKNOWN row count_cr.py constructs.
+    std::vector<std::string> origin_genes;
+    for (const auto& [parent, fact] : result.parents_) {
+        static_cast<void>(parent);
+        if (fact.novel_paralog && !result.genes_.contains(fact.novel_origin_gene)) {
+            origin_genes.push_back(fact.novel_origin_gene);
+        }
+    }
+    std::sort(origin_genes.begin(), origin_genes.end());
+    origin_genes.erase(std::unique(origin_genes.begin(), origin_genes.end()),
+                       origin_genes.end());
+    for (const std::string& origin : origin_genes) {
+        result.genes_.emplace(origin, GeneFact{origin, {}, std::nullopt});
+        for (const ProfileId profile_id : profile_ids) {
+            ProfileGeneFact missing;
+            missing.profile_id = profile_id;
+            missing.count_gene = origin;
+            missing.competition = CompetitionClass::unknown;
+            missing.competition_reason = "missing_from_ledger";
+            missing.equivalence_gene = origin;
+            missing.source_annotation = "missing_from_ledger";
+            result.profile_genes_[profile_id].emplace(origin, std::move(missing));
+        }
+    }
+    return result;
+}
+
 CountFactCatalog CountFactCatalog::load(
     const CountFactBundle& bundle,
     const path_identity::PathIdentityLedger& path_ledger) {
     CountFactCatalog result;
+    result.content_id_ = bundle.content_id;
+    result.authority_ = "count-bundle";
     const auto gene_rows = read_tsv(
         required_file(bundle, "profile_gene_policy").path,
         {"profile_id", "count_gene", "gene_type", "competition_class",
@@ -853,7 +1377,16 @@ AssignmentCandidate CountFactCatalog::candidate(const EffectiveProfile& effectiv
                                                 EvidenceTier tier,
                                                 EvidenceStrand strand,
                                                 std::uint32_t body_sample_support) const {
-    const ParentFact& parent_fact = parent(unique_parent);
+    return candidate(effective, parent(unique_parent), score, tier, strand,
+                     body_sample_support);
+}
+
+AssignmentCandidate CountFactCatalog::candidate(const EffectiveProfile& effective,
+                                                const ParentFact& parent_fact,
+                                                std::int64_t score,
+                                                EvidenceTier tier,
+                                                EvidenceStrand strand,
+                                                std::uint32_t body_sample_support) const {
     const ProfileId profile_id = profile_policy_source(effective);
 
     // count_cr applies novel-paralog identity policy before consulting the gene-policy
@@ -921,7 +1454,7 @@ AssignmentFacts CountFactCatalog::assignment_facts(
                 "compatibility exact Parent changed canonical transcript: " +
                 fact.unique_parent);
         }
-        result.exact.push_back(candidate(effective, fact.unique_parent, fact.score,
+        result.exact.push_back(candidate(effective, current, fact.score,
                                          fact.tier, fact.strand));
     }
     for (const StructuralCompatibilityFact& fact : compatibility.structural) {
@@ -937,7 +1470,7 @@ AssignmentFacts CountFactCatalog::assignment_facts(
                     unique_parent);
             }
             result.gene_fallback.push_back(
-                candidate(effective, unique_parent, fact.score,
+                candidate(effective, current, fact.score,
                           EvidenceTier::gene, fact.strand));
         }
     }

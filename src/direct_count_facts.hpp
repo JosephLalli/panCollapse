@@ -74,6 +74,24 @@ class CountFactCatalog {
     static CountFactCatalog load(const CountFactBundle& bundle,
                                  const path_identity::PathIdentityLedger& path_ledger);
 
+    // Build the same facts directly from a corrected annotation, with no bundle in the loop.
+    // The correction chain writes every classifier verdict onto the GFF3 as a tag, and panSC's
+    // own cache builder documents that its cache "must agree with direct annotation parsing",
+    // so the cache is an acceleration artifact rather than an input. `reference` supplies the
+    // gene tags CAT drops when it projects a model; they are inherited through source_gene.
+    static CountFactCatalog from_annotation(
+        const std::filesystem::path& annotation,
+        const std::filesystem::path& reference,
+        const path_identity::PathIdentityLedger& path_ledger,
+        const std::vector<ProfileId>& profile_ids);
+
+    // The identity of these facts, whichever factory built them: the bundle's own
+    // content_id on the bundle route, and a digest over the annotation inputs on the
+    // annotation route. `authority` names the route so a receipt reader never mistakes
+    // one for the other, and callers never have to reach back to a route-specific object.
+    const std::string& content_id() const { return content_id_; }
+    const std::string& authority() const { return authority_; }
+
     const ParentFact& parent(std::string_view unique_parent) const;
     const GeneFact& gene(std::string_view count_gene) const;
     const ProfileGeneFact& profile_gene(ProfileId profile_id,
@@ -87,6 +105,14 @@ class CountFactCatalog {
 
     AssignmentCandidate candidate(const EffectiveProfile& profile,
                                   std::string_view unique_parent, std::int64_t score,
+                                  EvidenceTier tier, EvidenceStrand strand,
+                                  std::uint32_t body_sample_support = 0) const;
+
+    // Avoid repeating the Parent-name lookup for an already resolved identity.
+    // parent_fact must belong to this catalog; keep the catalog immutable and
+    // alive until all consumers of its Parent references have finished.
+    AssignmentCandidate candidate(const EffectiveProfile& profile,
+                                  const ParentFact& parent_fact, std::int64_t score,
                                   EvidenceTier tier, EvidenceStrand strand,
                                   std::uint32_t body_sample_support = 0) const;
 
@@ -113,6 +139,8 @@ class CountFactCatalog {
         const path_identity::PathIdentityLedger& path_ledger) const;
 
   private:
+    std::string content_id_;
+    std::string authority_;
     std::map<std::string, ParentFact, std::less<>> parents_;
     std::map<std::string, GeneFact, std::less<>> genes_;
     std::map<ProfileId, std::map<std::string, ProfileGeneFact, std::less<>>>

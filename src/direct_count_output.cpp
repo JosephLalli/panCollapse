@@ -324,6 +324,7 @@ CountOutputReceipt write_count_outputs(
     const CountFactCatalog& facts, const CountOutputOptions& options) {
     if (options.output_directory.empty() || options.pancollapse_version.empty() ||
         options.analysis_scope.empty() || options.fact_bundle_content_id.empty() ||
+        options.fact_authority.empty() ||
         options.parquet_row_group_rows == 0) {
         throw std::invalid_argument("direct-count output metadata is incomplete");
     }
@@ -856,6 +857,7 @@ CountOutputReceipt write_count_outputs(
         manifest << "}}"
                  << ",\"fact_bundle_content_id\":"
                  << json_string(options.fact_bundle_content_id)
+                 << ",\"fact_authority\":" << json_string(options.fact_authority)
                  << ",\"libraries\":{\"arrow\":\"" ARROW_VERSION_STRING
                     "\",\"parquet\":\"17.0.0\",\"zstd\":"
                  << json_string(ZSTD_versionString()) << "},\"inputs\":{";
@@ -912,7 +914,15 @@ CountOutputReceipt write_count_outputs(
         manifest << "},\"threads\":" << options.threads << ",\"timings\":{"
                  << "\"initialization_seconds\":" << std::fixed << std::setprecision(9)
                  << options.initialization_seconds << ",\"processing_seconds\":"
-                 << options.processing_seconds << "}}\n";
+                 << options.processing_seconds;
+        if (options.processing_phases) {
+            const auto& phases = *options.processing_phases;
+            manifest << ",\"read_processing_seconds\":" << phases.read_processing_seconds
+                     << ",\"compatibility_finalize_seconds\":" << phases.compatibility_finalize_seconds
+                     << ",\"count_finalize_seconds\":" << phases.count_finalize_seconds
+                     << ",\"diagnostics_merge_export_seconds\":" << phases.diagnostics_merge_export_seconds;
+        }
+        manifest << "}}\n";
         write_file(staging / "manifest.json", manifest.str());
 
         std::filesystem::rename(staging, options.output_directory);

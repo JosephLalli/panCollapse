@@ -282,8 +282,8 @@ def main() -> None:
             "logical_tables"
         ] == separate_hashes
     if len(sys.argv) == 6:
-        # Four workers with the ordered diagnostics spool as the only ordered sink:
-        # tables stay byte-identical and the spool preserves input order exactly.
+        # Four workers independently spool diagnostics, then merge after counting:
+        # final bytes and both diagnostic hashes preserve the one-worker result.
         four_spool = Path(sys.argv[5])
         spool_manifest = json.loads((four_spool / "manifest.json").read_text())
         assert spool_manifest["threads"] == 4
@@ -297,6 +297,13 @@ def main() -> None:
             four_spool / "diagnostics/read_assignments.parquet"
         ).to_pylist()
         assert spool_rows == one_rows
+        assert (one / "diagnostics/read_assignments.parquet").read_bytes() == (
+            four_spool / "diagnostics/read_assignments.parquet"
+        ).read_bytes()
+        for key in ("logical_sha256", "output_sha256"):
+            assert one_manifest["outputs"]["read_assignments"][key] == (
+                spool_manifest["outputs"]["read_assignments"][key]
+            )
 
 
 if __name__ == "__main__":

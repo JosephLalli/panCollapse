@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace pancollapse::direct_count {
 
@@ -48,6 +49,9 @@ class DirectCountDiagnosticsSpool {
 struct DirectCountDiagnosticsParquetOptions {
     std::filesystem::path output_path;
     std::uint64_t row_group_rows = 65536;
+    // Native count knows every read group must contribute every selected profile.
+    // Replay may intentionally omit rows, so it leaves this unset.
+    std::optional<std::uint64_t> expected_read_groups;
 };
 struct DirectCountDiagnosticsParquetResult {
     std::uint64_t rows = 0;
@@ -60,6 +64,12 @@ struct DirectCountDiagnosticsParquetResult {
 // runtime whitelist spelling.
 DirectCountDiagnosticsParquetResult write_direct_count_diagnostics_parquet(
     const std::filesystem::path& spool_path, const CountRuntime& runtime,
+    const DirectCountDiagnosticsParquetOptions& options);
+
+// Merges independently ordered native-worker spools. Each spool is authenticated
+// before its exhaustion is accepted; only one pending record per spool is retained.
+DirectCountDiagnosticsParquetResult write_direct_count_diagnostics_parquet(
+    const std::vector<std::filesystem::path>& spool_paths, const CountRuntime& runtime,
     const DirectCountDiagnosticsParquetOptions& options);
 
 }  // namespace pancollapse::direct_count

@@ -9,6 +9,19 @@ target_link_libraries(ordered_gamp_reader_test PRIVATE panCollapse::vg_boundary 
 add_test(NAME ordered_gamp_reader_test COMMAND ordered_gamp_reader_test)
 set_tests_properties(ordered_gamp_reader_test PROPERTIES LABELS "vg;input;gamp;threads" TIMEOUT 120)
 
+add_executable(read_granular_input_test read_granular_input_test.cpp)
+target_include_directories(read_granular_input_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(read_granular_input_test PRIVATE panCollapse::vg_boundary panCollapse::warnings Threads::Threads)
+add_test(NAME read_granular_input_test COMMAND read_granular_input_test)
+set_tests_properties(read_granular_input_test PROPERTIES LABELS "vg;input;gamp" TIMEOUT 120)
+
+# D091: each HST's best alignment path, checked against brute-force path enumeration.
+add_executable(route_tally_test route_tally_test.cpp)
+target_include_directories(route_tally_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(route_tally_test PRIVATE panCollapse::vg_boundary panCollapse::warnings)
+add_test(NAME route_tally_test COMMAND route_tally_test)
+set_tests_properties(route_tally_test PROPERTIES LABELS "vg;pathtally" TIMEOUT 120)
+
 # PathTally unit tests (self-contained; no external data).
 add_executable(pathtally_score_test pathtally_score_test.cpp)
 target_include_directories(pathtally_score_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
@@ -21,6 +34,12 @@ target_include_directories(pathtally_pipeline_test PRIVATE "${CMAKE_SOURCE_DIR}/
 target_link_libraries(pathtally_pipeline_test PRIVATE panCollapse::vg_boundary panCollapse::warnings)
 add_test(NAME pathtally_pipeline_test COMMAND pathtally_pipeline_test)
 set_tests_properties(pathtally_pipeline_test PROPERTIES LABELS "vg;pathtally")
+
+add_executable(node_tally_cache_test node_tally_cache_test.cpp)
+target_include_directories(node_tally_cache_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(node_tally_cache_test PRIVATE panCollapse::vg_boundary panCollapse::warnings)
+add_test(NAME node_tally_cache_test COMMAND node_tally_cache_test)
+set_tests_properties(node_tally_cache_test PROPERTIES LABELS "vg;pathtally;cache")
 
 # Ledger count-mode rules (Gene/GeneFull/variants); pure, no graph.
 add_executable(pathtally_ledger_test pathtally_ledger_test.cpp)
@@ -882,6 +901,38 @@ set_tests_properties(direct_count_threads_1 PROPERTIES
   FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
   FIXTURES_SETUP direct_count_one)
 
+# D090: read-granular input decodes each read on the worker that counts it. Both parallel
+# input modes must reproduce the one-worker tables and read-assignment diagnostics exactly.
+add_test(NAME direct_count_input_modes
+  COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_input_mode_verify.py"
+    $<TARGET_FILE:panCollapse> "${EX50_DIR}" "${EX50_FIX}" "${DIRECT_COUNT_BUNDLE}"
+    "${DIRECT_COUNT_ONE}" "${EX50_DIR}/direct_count_input_modes")
+set_tests_properties(direct_count_input_modes PROPERTIES
+  LABELS "vg;count;direct-count;threads;input;parquet"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle;direct_count_one"
+  TIMEOUT 180)
+
+# D088's factory smoke cannot catch main.cpp passing incomplete output provenance.
+add_test(NAME direct_count_annotation_cli
+  COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_annotation_verify.py"
+    $<TARGET_FILE:panCollapse> "${EX50_FIX}" "${EX50_DIR}" "${DIRECT_COUNT_ONE}")
+set_tests_properties(direct_count_annotation_cli PROPERTIES
+  LABELS "vg;count;direct-count;annotation;parquet"
+  FIXTURES_REQUIRED direct_count_one
+  TIMEOUT 180)
+
+add_test(NAME direct_count_cache_cli
+  COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_cache_verify.py"
+    $<TARGET_FILE:panCollapse> "${PT_VG}" "${EX50_FIX}" "${EX50_DIR}"
+    "${DIRECT_COUNT_BUNDLE}")
+set_tests_properties(direct_count_cache_cli PROPERTIES
+  LABELS "vg;count;direct-count;cache;annotation;parquet;threads"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
+  TIMEOUT 180)
+
 add_test(NAME direct_count_threads_4
   COMMAND $<TARGET_FILE:panCollapse> count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
@@ -895,8 +946,8 @@ set_tests_properties(direct_count_threads_4 PROPERTIES
   FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
   FIXTURES_SETUP direct_count_four)
 
-# The ordered diagnostics spool is the only ordered sink here, so every worker must
-# retire its output turn from inside the count block.
+# Each worker spools read-assignment diagnostics privately; the spools merge by ordinal after
+# counting. These flags write no RAD or compatibility output, so no ordered sink is active.
 add_test(NAME direct_count_threads_4_spool
   COMMAND $<TARGET_FILE:panCollapse> count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"

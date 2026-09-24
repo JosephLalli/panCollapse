@@ -50,6 +50,15 @@ struct CountCompatibilityIdentity {
     std::uint64_t manifest_size_bytes = 0;
 };
 
+// Non-overlapping native GAMP phases within processing_seconds. Read processing
+// includes any requested per-read diagnostic spooling, but never its final merge.
+struct CountProcessingPhases {
+    double read_processing_seconds = 0.0;
+    double compatibility_finalize_seconds = 0.0;
+    double count_finalize_seconds = 0.0;
+    double diagnostics_merge_export_seconds = 0.0;
+};
+
 struct CountOutputOptions {
     std::filesystem::path output_directory;
     // Optional caller-owned sibling stage (for an ordered RAD/diagnostic sink
@@ -60,6 +69,9 @@ struct CountOutputOptions {
     std::string command_line;
     std::string analysis_scope = "frozen-profiles";
     std::string fact_bundle_content_id;
+    // Which factory produced the facts: "count-bundle" or "annotation". Without it a
+    // receipt reader cannot tell a published bundle id from one derived over GFF3 bytes.
+    std::string fact_authority;
     std::optional<CountCompatibilityIdentity> compatibility_bundle;
     std::vector<CountInputIdentity> inputs;
     std::uint64_t threads = 1;
@@ -79,6 +91,7 @@ struct CountOutputOptions {
         profile_assignment_terminals;
     double initialization_seconds = 0.0;
     double processing_seconds = 0.0;
+    std::optional<CountProcessingPhases> processing_phases;
     bool write_10x_mex = false;
     std::uint64_t rad_records = 0;
     std::optional<CountTableIdentity> read_assignments;

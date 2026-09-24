@@ -10,11 +10,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -374,6 +376,128 @@ DirectCountDiagnosticRecord decode_record(ZstdReader& input) {
     return result;
 }
 
+class AuthenticatedSpoolCursor {
+  public:
+    AuthenticatedSpoolCursor(const std::filesystem::path& path, size_t profile_count)
+        : input_(path), profile_count_(profile_count) {
+        std::array<char, kMagic.size()> magic{};
+        input_.read_exact(magic.data(), magic.size());
+        if (magic != kMagic || read_u32(input_) != kVersion) {
+            fail("diagnostics spool has invalid magic or version");
+        }
+    }
+
+    bool next() {
+        if (finished_) {
+            return false;
+        }
+        char marker = 0;
+        input_.read_exact(&marker, 1);
+        if (marker == kTrailerMarker) {
+            const std::uint64_t declared_rows = read_u64(input_);
+            const std::string declared_digest = read_text(input_);
+            if (declared_rows != row_count_ || declared_digest != raw_digest_.finish()) {
+                fail("diagnostics spool trailer validation failed");
+            }
+            input_.require_eof();
+            finished_ = true;
+            return false;
+        }
+        if (marker != kRecordMarker) {
+            fail("diagnostics spool has an invalid record marker");
+        }
+        record_ = decode_record(input_);
+        if (record_.terminal_class.empty()) {
+            fail("diagnostics spool has an empty terminal class");
+        }
+        if (record_.profile_index >= profile_count_) {
+            fail("diagnostics spool profile index is outside runtime dictionary");
+        }
+        const auto key = std::pair(record_.ordinal, record_.profile_index);
+        if (previous_key_ && key <= *previous_key_) {
+            fail("diagnostics spool order is not strictly ordinal/profile");
+        }
+        previous_key_ = key;
+        raw_digest_.update(encode_record(record_));
+        if (row_count_ == std::numeric_limits<std::uint64_t>::max()) {
+            fail("diagnostics spool row count overflow");
+        }
+        ++row_count_;
+        return true;
+    }
+
+    const DirectCountDiagnosticRecord& record() const { return record_; }
+
+  private:
+    ZstdReader input_;
+    size_t profile_count_ = 0;
+    Sha256Digest raw_digest_;
+    std::uint64_t row_count_ = 0;
+    std::optional<std::pair<std::uint64_t, std::uint32_t>> previous_key_;
+    DirectCountDiagnosticRecord record_;
+    bool finished_ = false;
+};
+
+constexpr size_t kMaximumMergeFanIn = 32;
+
+// Authenticates every input while retaining only one head record per input. The
+// intermediate is the same compressed, checksummed spool format, so later
+// stages authenticate it again before it reaches Parquet rendering.
+void merge_diagnostics_spools_to_spool(
+    const std::vector<std::filesystem::path>& paths, size_t profile_count,
+    const std::filesystem::path& output_path) {
+    if (paths.empty() || paths.size() > kMaximumMergeFanIn) {
+        fail("diagnostics spool merge fan-in is invalid");
+    }
+    std::vector<std::unique_ptr<AuthenticatedSpoolCursor>> cursors;
+    cursors.reserve(paths.size());
+    for (const auto& path : paths) {
+        cursors.push_back(std::make_unique<AuthenticatedSpoolCursor>(path, profile_count));
+    }
+    struct HeapEntry { size_t cursor_index = 0; };
+    const auto later = [&cursors](const HeapEntry& left, const HeapEntry& right) {
+        const auto& a = cursors[left.cursor_index]->record();
+        const auto& b = cursors[right.cursor_index]->record();
+        return std::pair(a.ordinal, a.profile_index) > std::pair(b.ordinal, b.profile_index);
+    };
+    std::priority_queue<HeapEntry, std::vector<HeapEntry>, decltype(later)> pending(later);
+    for (size_t index = 0; index < cursors.size(); ++index) {
+        if (cursors[index]->next()) pending.push({index});
+    }
+
+    ZstdWriter writer(output_path);
+    std::string header(kMagic.begin(), kMagic.end());
+    append_u32(header, kVersion);
+    writer.write(header);
+    Sha256Digest digest;
+    std::uint64_t count = 0;
+    std::optional<std::pair<std::uint64_t, std::uint32_t>> previous_key;
+    while (!pending.empty()) {
+        const HeapEntry entry = pending.top();
+        pending.pop();
+        const DirectCountDiagnosticRecord& record = cursors[entry.cursor_index]->record();
+        const auto key = std::pair(record.ordinal, record.profile_index);
+        if (previous_key && key <= *previous_key) {
+            fail("diagnostics spool merge order is not strictly ordinal/profile");
+        }
+        previous_key = key;
+        const std::string encoded = encode_record(record);
+        writer.write(std::string_view(&kRecordMarker, 1));
+        writer.write(encoded);
+        digest.update(encoded);
+        if (count == std::numeric_limits<std::uint64_t>::max()) {
+            fail("diagnostics spool row count overflow");
+        }
+        ++count;
+        if (cursors[entry.cursor_index]->next()) pending.push(entry);
+    }
+    std::string trailer(1, kTrailerMarker);
+    append_u64(trailer, count);
+    append_text(trailer, digest.finish());
+    writer.write(trailer);
+    writer.finish();
+}
+
 std::string file_sha256(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
@@ -460,6 +584,13 @@ void DirectCountDiagnosticsSpool::finish() {
 DirectCountDiagnosticsParquetResult write_direct_count_diagnostics_parquet(
     const std::filesystem::path& spool_path, const CountRuntime& runtime,
     const DirectCountDiagnosticsParquetOptions& options) {
+    return write_direct_count_diagnostics_parquet(
+        std::vector<std::filesystem::path>{spool_path}, runtime, options);
+}
+
+DirectCountDiagnosticsParquetResult write_direct_count_diagnostics_parquet(
+    const std::vector<std::filesystem::path>& spool_paths, const CountRuntime& runtime,
+    const DirectCountDiagnosticsParquetOptions& options) {
     if (options.output_path.empty() || options.row_group_rows == 0 ||
         options.row_group_rows >
             static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
@@ -497,23 +628,80 @@ DirectCountDiagnosticsParquetResult write_direct_count_diagnostics_parquet(
             parquet_properties.build(), arrow_properties.build()),
         "cannot open diagnostics Parquet writer");
 
-    ZstdReader spool(spool_path);
-    std::array<char, kMagic.size()> magic{};
-    spool.read_exact(magic.data(), magic.size());
-    if (magic != kMagic || read_u32(spool) != kVersion) {
-        fail("diagnostics spool has invalid magic or version");
+    if (spool_paths.empty()) {
+        fail("at least one diagnostics spool is required");
     }
-
-    Sha256Digest raw_digest;
     Sha256Digest logical_digest;
     std::uint64_t row_count = 0;
-    std::uint64_t last_ordinal = 0;
-    bool have_ordinal = false;
-    bool done = false;
     const auto& profiles = runtime.profiles();
     const auto& whitelist = runtime.whitelist();
+    if (profiles.empty()) {
+        fail("diagnostics runtime has no profiles");
+    }
 
-    while (!done) {
+    if (options.expected_read_groups &&
+        *options.expected_read_groups >
+            std::numeric_limits<std::uint64_t>::max() / profiles.size()) {
+        fail("expected diagnostic row count overflow");
+    }
+    std::vector<std::filesystem::path> intermediate_paths;
+    struct IntermediateCleanup {
+        std::vector<std::filesystem::path>& paths;
+        ~IntermediateCleanup() {
+            std::error_code ignored;
+            for (const auto& path : paths) std::filesystem::remove(path, ignored);
+        }
+    } cleanup{intermediate_paths};
+    std::vector<std::filesystem::path> final_spools = spool_paths;
+    size_t stage = 0;
+    while (final_spools.size() > kMaximumMergeFanIn) {
+        std::vector<std::filesystem::path> next;
+        for (size_t begin = 0; begin < final_spools.size(); begin += kMaximumMergeFanIn) {
+            const size_t end = std::min(final_spools.size(), begin + kMaximumMergeFanIn);
+            std::vector<std::filesystem::path> batch(
+                final_spools.begin() + static_cast<std::ptrdiff_t>(begin),
+                final_spools.begin() + static_cast<std::ptrdiff_t>(end));
+            const auto intermediate = options.output_path.parent_path() /
+                (options.output_path.filename().string() + ".diagnostics-merge-" +
+                 std::to_string(stage) + "-" + std::to_string(begin / kMaximumMergeFanIn) +
+                 ".spool.zst");
+            try {
+                merge_diagnostics_spools_to_spool(batch, profiles.size(), intermediate);
+            } catch (...) {
+                std::error_code ignored;
+                std::filesystem::remove(intermediate, ignored);
+                throw;
+            }
+            intermediate_paths.push_back(intermediate);
+            next.push_back(intermediate);
+        }
+        final_spools = std::move(next);
+        ++stage;
+    }
+
+    std::vector<std::unique_ptr<AuthenticatedSpoolCursor>> cursors;
+    cursors.reserve(final_spools.size());
+    for (const std::filesystem::path& path : final_spools) {
+        cursors.push_back(std::make_unique<AuthenticatedSpoolCursor>(path, profiles.size()));
+    }
+    struct HeapEntry {
+        size_t cursor_index = 0;
+    };
+    const auto later = [&cursors](const HeapEntry& left, const HeapEntry& right) {
+        const auto& left_record = cursors[left.cursor_index]->record();
+        const auto& right_record = cursors[right.cursor_index]->record();
+        return std::pair(left_record.ordinal, left_record.profile_index) >
+               std::pair(right_record.ordinal, right_record.profile_index);
+    };
+    std::priority_queue<HeapEntry, std::vector<HeapEntry>, decltype(later)> pending(later);
+    for (size_t index = 0; index < cursors.size(); ++index) {
+        if (cursors[index]->next()) {
+            pending.push({index});
+        }
+    }
+    std::optional<std::pair<std::uint64_t, std::uint32_t>> previous_key;
+
+    while (!pending.empty()) {
         arrow::UInt64Builder ordinal_builder;
         arrow::StringBuilder qname_builder;
         arrow::StringBuilder profile_builder;
@@ -526,32 +714,24 @@ DirectCountDiagnosticsParquetResult write_direct_count_diagnostics_parquet(
         arrow::UInt64Builder reason_builder;
         std::int64_t rows_in_group = 0;
 
-        while (rows_in_group < static_cast<std::int64_t>(options.row_group_rows)) {
-            char marker = 0;
-            spool.read_exact(&marker, 1);
-            if (marker == kTrailerMarker) {
-                const std::uint64_t declared_rows = read_u64(spool);
-                const std::string declared_digest = read_text(spool);
-                if (declared_rows != row_count ||
-                    declared_digest != raw_digest.finish()) {
-                    fail("diagnostics spool trailer validation failed");
+        while (rows_in_group < static_cast<std::int64_t>(options.row_group_rows) &&
+               !pending.empty()) {
+            const HeapEntry entry = pending.top();
+            pending.pop();
+            DirectCountDiagnosticRecord record = cursors[entry.cursor_index]->record();
+            const auto key = std::pair(record.ordinal, record.profile_index);
+            if (previous_key && key <= *previous_key) {
+                fail("diagnostics spool merge order is not strictly ordinal/profile");
+            }
+            previous_key = key;
+            if (options.expected_read_groups) {
+                const std::uint64_t expected_ordinal = row_count / profiles.size();
+                const std::uint32_t expected_profile = static_cast<std::uint32_t>(
+                    row_count % profiles.size());
+                if (record.ordinal != expected_ordinal ||
+                    record.profile_index != expected_profile) {
+                    fail("diagnostics spool merged sequence does not match read/profile order");
                 }
-                done = true;
-                break;
-            }
-            if (marker != kRecordMarker) {
-                fail("diagnostics spool has an invalid record marker");
-            }
-
-            DirectCountDiagnosticRecord record = decode_record(spool);
-            if (have_ordinal && record.ordinal < last_ordinal) {
-                fail("diagnostics spool ordinal order is not deterministic");
-            }
-            have_ordinal = true;
-            last_ordinal = record.ordinal;
-            raw_digest.update(encode_record(record));
-            if (record.profile_index >= profiles.size()) {
-                fail("diagnostics spool profile index is outside runtime dictionary");
             }
 
             std::optional<std::string> corrected_barcode;
@@ -621,6 +801,9 @@ DirectCountDiagnosticsParquetResult write_direct_count_diagnostics_parquet(
                         "append diagnostic reason bits");
             ++row_count;
             ++rows_in_group;
+            if (cursors[entry.cursor_index]->next()) {
+                pending.push(entry);
+            }
         }
 
         if (rows_in_group != 0) {
@@ -664,7 +847,11 @@ DirectCountDiagnosticsParquetResult write_direct_count_diagnostics_parquet(
         }
     }
 
-    spool.require_eof();
+    if (options.expected_read_groups &&
+        row_count != *options.expected_read_groups * profiles.size()) {
+        fail("diagnostics spool merged row count does not match expected read groups");
+    }
+
     check_arrow(writer->Close(), "close diagnostics Parquet writer");
     check_arrow(output->Close(), "close diagnostics Parquet stream");
     return {row_count, logical_digest.finish(), file_sha256(options.output_path)};

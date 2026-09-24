@@ -4,9 +4,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -1281,6 +1284,11 @@ CountRuntimeResult CountRuntime::finalize() {
         throw std::logic_error("direct count runtime can be finalized only once");
     }
     impl_->finalized = true;
+    using Clock = std::chrono::steady_clock;
+    const bool profile_timing = std::getenv("PANCOLLAPSE_PROFILE_TIMING") != nullptr;
+    const auto begin = profile_timing ? Clock::now() : Clock::time_point{};
+    double umi_collapse_seconds = 0;
+    std::uint64_t feature_groups = 0, distinct_umis = 0, max_feature_umis = 0;
     const bool external_merge = !impl_->exact_runs.empty() || !impl_->deferred_runs.empty();
     std::vector<ExactRow> resident_exact;
     std::vector<DeferredRow> resident_deferred;
@@ -1291,27 +1299,46 @@ CountRuntimeResult CountRuntime::finalize() {
     } else {
         // The normal no-spill path remains entirely in memory. Finalization must not
         // turn every successful run into an evidence spool merely for convenience.
+        size_t resident_exact_size = 0;
         for (auto& shard : impl_->exact_shards) {
             std::lock_guard<std::mutex> lock(shard.mutex);
-            resident_exact.reserve(resident_exact.size() + shard.values.size());
+            if (shard.values.size() > resident_exact.max_size() - resident_exact_size) {
+                throw std::length_error("resident exact aggregate exceeds vector capacity");
+            }
+            resident_exact_size += shard.values.size();
+        }
+        resident_exact.reserve(resident_exact_size);
+        for (auto& shard : impl_->exact_shards) {
+            std::lock_guard<std::mutex> lock(shard.mutex);
             for (auto& [key, count] : shard.values) {
                 resident_exact.push_back({std::move(key), count});
             }
             shard.values.clear();
         }
+
+        size_t resident_deferred_size = 0;
         for (auto& shard : impl_->deferred_shards) {
             std::lock_guard<std::mutex> lock(shard.mutex);
-            resident_deferred.reserve(resident_deferred.size() + shard.values.size());
+            if (shard.values.size() > resident_deferred.max_size() - resident_deferred_size) {
+                throw std::length_error("resident deferred aggregate exceeds vector capacity");
+            }
+            resident_deferred_size += shard.values.size();
+        }
+        resident_deferred.reserve(resident_deferred_size);
+        for (auto& shard : impl_->deferred_shards) {
+            std::lock_guard<std::mutex> lock(shard.mutex);
             for (auto& [key, count] : shard.values) {
                 resident_deferred.push_back({std::move(key), count});
             }
             shard.values.clear();
         }
         impl_->approximate_bytes.store(0, std::memory_order_relaxed);
-        sort_and_combine(resident_exact);
+        // Exact keys are already unique across shards; sort them once after
+        // barcode-corrected deferred rows have been appended below.
         sort_and_combine(resident_deferred);
     }
 
+    const auto resident_done = profile_timing ? Clock::now() : Clock::time_point{};
     std::vector<ExactRow> corrected_buffer;
     const size_t corrected_limit = static_cast<size_t>(std::max<std::uint64_t>(
         1, impl_->options.memory_budget_bytes / (4 * kExactEntryBytes)));
@@ -1376,6 +1403,7 @@ CountRuntimeResult CountRuntime::finalize() {
         sort_and_combine(resident_exact);
     }
 
+    const auto correction_done = profile_timing ? Clock::now() : Clock::time_point{};
     CountRuntimeResult result;
     std::optional<std::pair<std::uint32_t, std::uint32_t>> current_barcode;
     std::optional<std::uint32_t> current_feature;
@@ -1405,7 +1433,15 @@ CountRuntimeResult CountRuntime::finalize() {
             feature_umis.clear();
             return;
         }
+        const auto collapse_begin = profile_timing ? Clock::now() : Clock::time_point{};
         const auto labels = collapse_1mm_cr(feature_umis);
+        if (profile_timing) {
+            umi_collapse_seconds += std::chrono::duration<double>(Clock::now() - collapse_begin).count();
+            ++feature_groups;
+            distinct_umis += feature_umis.size();
+            max_feature_umis = std::max(max_feature_umis,
+                                      static_cast<std::uint64_t>(feature_umis.size()));
+        }
         struct Aggregate {
             std::uint64_t supporting_reads = 0;
             std::uint64_t raw_umis = 0;
@@ -1590,6 +1626,20 @@ CountRuntimeResult CountRuntime::finalize() {
         // Ownership ends here so the destructor cannot remove a directory that a
         // caller recreates at the same path after finalize.
         impl_->owns_spill_directory = false;
+    }
+    if (profile_timing) {
+        std::cerr << "panCollapse: count_finalize_profile"
+                  << " resident_prepare_seconds="
+                  << std::chrono::duration<double>(resident_done - begin).count()
+                  << " correction_seconds="
+                  << std::chrono::duration<double>(correction_done - resident_done).count()
+                  << " molecule_stage_seconds="
+                  << std::chrono::duration<double>(Clock::now() - correction_done).count()
+                  << " umi_collapse_seconds=" << umi_collapse_seconds
+                  << " feature_groups=" << feature_groups
+                  << " distinct_umis=" << distinct_umis
+                  << " max_feature_umis=" << max_feature_umis
+                  << " external_merge=" << external_merge << '\n';
     }
     return result;
 }

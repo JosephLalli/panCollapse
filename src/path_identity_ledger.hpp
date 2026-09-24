@@ -106,6 +106,9 @@ struct PathIdentityLedger {
     // cannot be invalidated by an accidental deep copy.
     std::map<std::string, const AnnotationIdentity*> identities_by_parent;
     std::map<std::string, std::string> canonical_gene;
+    // Where these rows were read from, so a consumer deriving an identity from the ledger
+    // does not have to be handed the path a second time alongside the ledger itself.
+    std::filesystem::path source_path;
     bool has_body_layer = false;
 
     PathIdentityLedger() = default;
@@ -274,6 +277,7 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
     };
 
     PathIdentityLedger ledger;
+    ledger.source_path = filename;
     std::string line;
     size_t line_number = 1;
     while (std::getline(in, line)) {

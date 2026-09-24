@@ -9,6 +9,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace pancollapse::direct_count;
 
@@ -44,6 +45,23 @@ std::string digest_text(const std::filesystem::path& root, const std::string& te
     const std::string result = sha256_file(temporary);
     std::filesystem::remove(temporary);
     return result;
+}
+
+bool same_candidate(const AssignmentCandidate& left, const AssignmentCandidate& right) {
+    return left.gene == right.gene &&
+           left.equivalence_gene == right.equivalence_gene &&
+           left.nested_host == right.nested_host && left.score == right.score &&
+           left.tier == right.tier && left.strand == right.strand &&
+           left.competition == right.competition && left.categories == right.categories &&
+           left.gene_types == right.gene_types &&
+           left.body_support_units == right.body_support_units &&
+           left.body_sample_support == right.body_sample_support &&
+           left.identity_known == right.identity_known &&
+           left.novel_paralog == right.novel_paralog &&
+           left.novel_origin_gene == right.novel_origin_gene &&
+           left.strong_local_support == right.strong_local_support &&
+           left.protected_primary_protein_nested_host ==
+               right.protected_primary_protein_nested_host;
 }
 
 }  // namespace
@@ -184,6 +202,13 @@ int main() {
         const path_identity::PathIdentityLedger path_ledger = path_identity::read(
             bundle.files.at("path_identity_ledger").path, true);
         const CountFactCatalog catalog = CountFactCatalog::load(bundle, path_ledger);
+        const EffectiveProfile cr7_profile = effective_profile(ProfileId::cr7_v1);
+        const EffectiveProfile pansc_profile =
+            effective_profile(ProfileId::pansc_strict_v1);
+        const EffectiveProfile cr7_conjunctive_profile = effective_profile(
+            ProfileId::cr7_v1,
+            {parse_profile_override(
+                "cr7-v1:membership-class=conjunctive-2024-a")});
         const AssignmentCandidate candidate = catalog.candidate(
             ProfileId::cr7_v1, "exon-parent", 100, EvidenceTier::exon,
             EvidenceStrand::forward);
@@ -209,6 +234,10 @@ int main() {
             ProfileId::pansc_strict_v1,
             {parse_profile_override(
                 "pansc-strict-v1:novel-paralog-policy=separate")});
+        const EffectiveProfile ignore_profile = effective_profile(
+            ProfileId::pansc_strict_v1,
+            {parse_profile_override(
+                "pansc-strict-v1:novel-paralog-policy=ignore")});
         const AssignmentCandidate separated_copy = catalog.candidate(
             separate_profile, "copy-parent", 100, EvidenceTier::exon,
             EvidenceStrand::forward);
@@ -221,6 +250,45 @@ int main() {
             !separated_copy.gene_types.empty()) {
             throw std::runtime_error(
                 "novel-copy catalog policy differs from frozen lump/separate semantics");
+        }
+
+        // Reusing an immutable ParentFact must preserve the string lookup API exactly,
+        // including alias equivalence, every dynamic field, and each novel-paralog policy.
+        for (const EffectiveProfile& profile :
+             std::vector<EffectiveProfile>{cr7_profile, pansc_profile, separate_profile,
+                                           ignore_profile, cr7_conjunctive_profile}) {
+            for (const std::string& unique_parent :
+                 std::vector<std::string>{"exon-parent", "body-parent", "copy-parent"}) {
+                for (const EvidenceTier tier : std::vector<EvidenceTier>{
+                         EvidenceTier::gene, EvidenceTier::exon,
+                         EvidenceTier::partial_exon, EvidenceTier::body}) {
+                    for (const EvidenceStrand strand : std::vector<EvidenceStrand>{
+                             EvidenceStrand::forward, EvidenceStrand::reverse}) {
+                        for (const std::uint32_t support : {0U, 17U}) {
+                            const AssignmentCandidate from_string = catalog.candidate(
+                                profile, unique_parent, -37, tier, strand, support);
+                            const AssignmentCandidate from_parent = catalog.candidate(
+                                profile, catalog.parent(unique_parent), -37, tier, strand,
+                                support);
+                            if (!same_candidate(from_string, from_parent)) {
+                                throw std::runtime_error(
+                                    "ParentFact candidate overload changed assignment fields");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        bool missing_parent_rejected = false;
+        try {
+            static_cast<void>(catalog.candidate(
+                cr7_profile, "missing-parent", 1, EvidenceTier::exon,
+                EvidenceStrand::forward));
+        } catch (const std::exception&) {
+            missing_parent_rejected = true;
+        }
+        if (!missing_parent_rejected) {
+            throw std::runtime_error("string candidate lookup accepted a missing Parent");
         }
 
         CompatibilityFactSet compatibility;
@@ -276,6 +344,7 @@ int main() {
         output_options.pancollapse_version = "0.10.0-test";
         output_options.command_line = "panCollapse count fixture";
         output_options.fact_bundle_content_id = bundle.content_id;
+        output_options.fact_authority = "count-bundle";
         output_options.threads = 2;
         output_options.memory_budget_bytes = runtime_options.memory_budget_bytes;
         output_options.write_10x_mex = true;
