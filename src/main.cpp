@@ -2324,7 +2324,10 @@ private:
 // Assignment signatures repeat heavily in production, but their result is independent of
 // barcode and UMI. Keep a bounded insertion-only cache: an exact key match is reusable across
 // workers, while a full shard simply evaluates new evidence without caching it. There is no
-// eviction order that could vary with scheduling.
+// eviction order that could vary with scheduling. A miss is built with no lock held: the value is
+// a pure function of the key, so two workers that miss together build equal values and the first
+// insert wins. Building under the exclusive lock stalled every lookup on the shard behind dense
+// reads, and once the cache fills nearly every read misses.
 template<class Key, class Value, size_t ShardCount = 256>
 class BoundedShardedCache {
 public:
@@ -2348,14 +2351,16 @@ public:
                 return found->second;
             }
         }
+        auto value = std::make_shared<const Value>(builder());
         std::unique_lock<std::shared_mutex> lock(shard.mutex);
         const auto found = shard.values.find(key);
         if (found != shard.values.end()) {
+            // Another worker inserted this key while ours was building. Report it as a hit so the
+            // counters stay those of single-flight construction: misses == entries + uncached.
             hits_.fetch_add(1, std::memory_order_relaxed);
             return found->second;
         }
         misses_.fetch_add(1, std::memory_order_relaxed);
-        auto value = std::make_shared<const Value>(builder());
         if (shard.values.size() < entries_per_shard_) {
             shard.values.emplace(key, value);
             entries_.fetch_add(1, std::memory_order_relaxed);
@@ -2363,6 +2368,27 @@ public:
             uncached_.fetch_add(1, std::memory_order_relaxed);
         }
         return value;
+    }
+
+    // Heap held by the cache: map nodes, buckets, keys, and whatever `value_bytes` reports for a
+    // value, excluding allocator overhead. Call only after the workers have stopped.
+    template<class ValueBytes>
+    size_t approximate_bytes(ValueBytes&& value_bytes) const {
+        size_t total = 0;
+        for (const Shard& shard : shards_) {
+            total += shard.values.bucket_count() * sizeof(void*);
+            for (const auto& [key, value] : shard.values) {
+                total += sizeof(typename decltype(shard.values)::value_type) + 2 * sizeof(void*);
+                total += string_heap_bytes(key);
+                // make_shared: one block holding the control block and the value.
+                total += 2 * sizeof(long) + value_bytes(*value);
+            }
+        }
+        return total;
+    }
+
+    static size_t string_heap_bytes(const std::string& value) {
+        return value.capacity() > 15 ? value.capacity() + 1 : 0;
     }
 
     size_t hits() const { return hits_.load(std::memory_order_relaxed); }
@@ -3215,7 +3241,23 @@ int run_convert(int argc, char** argv) {
         };
         std::vector<ExactStep> exact_exon_steps;
         std::vector<ExactStep> exact_body_steps;
+        // Fallback-only skip: 0 no Parent crosses the node, 1 every Parent's gene is FALLBACK in
+        // every profile, 2 otherwise. For state 1, fallback_genes holds per profile the node's
+        // one equivalence gene, or kSeveralFallbackGenes.
+        uint8_t fallback_state = 0;
+        std::vector<uint32_t> fallback_genes;
     };
+    // A read whose every overlapped gene is FALLBACK in every profile, with at least two such
+    // genes, cannot be counted by any profile, so its route tally and exact evidence are skipped
+    // (user decision 2026-09-25; one FALLBACK gene still takes the full path). Set before the
+    // first node ledger is built and never changed, so every cached node summary agrees with it.
+    bool fallback_only_skip = false;
+    std::vector<uint8_t> parent_fallback_only;   // by ledger Parent rank
+    std::vector<uint32_t> parent_fallback_gene;  // rank * profiles + profile -> gene id
+    size_t fallback_profile_count = 0;
+    constexpr uint32_t kSeveralFallbackGenes = std::numeric_limits<uint32_t>::max();
+    constexpr uint32_t kNoFallbackGene = kSeveralFallbackGenes - 1;
+    std::atomic<uint64_t> fallback_only_skipped_reads{0};
     ShardedLazyCache<int64_t, NodeLedger> node_ledger_cache(options.threads > 1);
     using ReadNodeCache = pathtally::ReadNodeTallyCache<NodeLedger>;
     std::function<const NodeLedger&(int64_t)> node_ledger_of;
@@ -3264,6 +3306,61 @@ int run_convert(int argc, char** argv) {
                 }
                 count_parent_facts.push_back(&fact->second);
                 ++fact;
+            }
+            // Compatibility capture and RAD record policy-neutral evidence, so they keep every
+            // read. PANCOLLAPSE_FALLBACK_ONLY_SKIP=off restores the full path for comparison.
+            const char* skip_switch = std::getenv("PANCOLLAPSE_FALLBACK_ONLY_SKIP");
+            fallback_only_skip = options.direct_count && options.compatibility_out.empty() &&
+                                 !options.count_rad_out &&
+                                 !(skip_switch != nullptr && std::string_view(skip_switch) == "off");
+            if (fallback_only_skip) {
+                // Classify each Parent exactly as gene competition will: through candidate(),
+                // which applies novel-paralog identity and reads the equivalence row.
+                const auto classify_started = std::chrono::steady_clock::now();
+                fallback_profile_count = options.count_profiles.size();
+                parent_fallback_only.assign(count_parent_facts.size(), 0);
+                parent_fallback_gene.assign(count_parent_facts.size() * fallback_profile_count,
+                                            kNoFallbackGene);
+                std::unordered_map<std::string, uint32_t> fallback_gene_ids;
+                size_t fallback_parents = 0;
+                for (size_t rank = 0; rank < count_parent_facts.size(); ++rank) {
+                    bool all_fallback = true;
+                    std::vector<std::string> genes;
+                    genes.reserve(fallback_profile_count);
+                    for (const auto& profile : options.count_profiles) {
+                        const pancollapse::direct_count::AssignmentCandidate candidate =
+                            count_facts->candidate(
+                                profile, *count_parent_facts[rank], 0,
+                                pancollapse::direct_count::EvidenceTier::exon,
+                                pancollapse::direct_count::EvidenceStrand::forward);
+                        if (candidate.competition !=
+                            pancollapse::direct_count::CompetitionClass::fallback) {
+                            all_fallback = false;
+                            break;
+                        }
+                        genes.push_back(candidate.equivalence_gene.empty()
+                                            ? candidate.gene
+                                            : candidate.equivalence_gene);
+                    }
+                    if (!all_fallback) {
+                        continue;
+                    }
+                    parent_fallback_only[rank] = 1;
+                    ++fallback_parents;
+                    for (size_t profile = 0; profile < fallback_profile_count; ++profile) {
+                        const auto [id, inserted] = fallback_gene_ids.try_emplace(
+                            genes[profile], static_cast<uint32_t>(fallback_gene_ids.size()));
+                        static_cast<void>(inserted);
+                        parent_fallback_gene[rank * fallback_profile_count + profile] = id->second;
+                    }
+                }
+                std::cerr << "panCollapse: initialization: phase=fallback_only_parents parents="
+                          << count_parent_facts.size() << " fallback_only_parents="
+                          << fallback_parents << " fallback_genes=" << fallback_gene_ids.size()
+                          << " seconds="
+                          << std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                           classify_started).count()
+                          << '\n';
             }
         }
     }
@@ -4142,6 +4239,26 @@ int run_convert(int argc, char** argv) {
                     // un-collapsed, is a scoreable reference for tally_read_group_into.
                     nl.ref_paths.push_back(
                         {path_handle, &it->second.path_name(), path_is_reverse});
+                    if (fallback_only_skip && nl.fallback_state != 2) {
+                        const uint32_t rank = it->second.parent_rank;
+                        if (parent_fallback_only.at(rank) == 0) {
+                            nl.fallback_state = 2;
+                            nl.fallback_genes.clear();
+                        } else {
+                            const uint32_t* genes =
+                                &parent_fallback_gene[rank * fallback_profile_count];
+                            if (nl.fallback_state == 0) {
+                                nl.fallback_state = 1;
+                                nl.fallback_genes.assign(genes, genes + fallback_profile_count);
+                            } else {
+                                for (size_t p = 0; p < fallback_profile_count; ++p) {
+                                    if (nl.fallback_genes[p] != genes[p]) {
+                                        nl.fallback_genes[p] = kSeveralFallbackGenes;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if (exact_ex50) {
                         NodeLedger::ExactStep exact_step{
                             path_handle, path_is_reverse,
@@ -5048,7 +5165,9 @@ int run_convert(int argc, char** argv) {
         std::getenv("PANCOLLAPSE_PROFILE_TIMING") != nullptr;
     using CachedAssignmentResults =
         std::vector<pancollapse::direct_count::AssignmentResult>;
-    constexpr size_t kAssignmentSignatureCacheEntries = 131072;
+    // Five times the original 131,072: at 32 workers the full filtered input filled the smaller
+    // cache and 71% of reads then missed it (user-approved, 2026-09-25).
+    constexpr size_t kAssignmentSignatureCacheEntries = 655360;
     std::unique_ptr<BoundedShardedCache<std::string, CachedAssignmentResults>>
         assignment_cache;
     std::vector<std::unique_ptr<pancollapse::direct_count::CountWorker>> count_workers;
@@ -5272,6 +5391,7 @@ int run_convert(int argc, char** argv) {
         // Unique RAD drop, which is a multi-GENE rule, not a multi-transcript one (a gene with >=2
         // emitted isoforms is still one gene).
         std::set<std::string> ledger_genes;
+        bool fallback_only_skipped = false;
         if (options.count_mode == pathtally::CountMode::Score) {
             std::vector<const vg::MultipathAlignment*> record_ptrs;
             record_ptrs.reserve(current_group.records.size());
@@ -5316,7 +5436,51 @@ int run_convert(int argc, char** argv) {
                 record_ptrs.push_back(&record);
             }
             mark(runtime_timing.prelude_ns);
-            if (production_identity) {
+            if (fallback_only_skip && production_identity) {
+                // Any node carrying a countable Parent vetoes the skip, aligned or not; genes are
+                // gathered only where the read aligns bases.
+                bool any_fallback = false;
+                bool countable = false;
+                std::vector<uint32_t> genes(fallback_profile_count, kNoFallbackGene);
+                for (const vg::MultipathAlignment* record : record_ptrs) {
+                    for (int s = 0; s < record->subpath_size() && !countable; ++s) {
+                        const vg::Path& path = record->subpath(s).path();
+                        for (int i = 0; i < path.mapping_size(); ++i) {
+                            const vg::Mapping& mapping = path.mapping(i);
+                            const NodeLedger& nl =
+                                read_node_ledger_of(mapping.position().node_id());
+                            if (nl.fallback_state == 2) {
+                                countable = true;
+                                break;
+                            }
+                            if (nl.fallback_state == 0 ||
+                                pathtally::mapping_aligned_bases(mapping) == 0) {
+                                continue;
+                            }
+                            any_fallback = true;
+                            for (size_t p = 0; p < fallback_profile_count; ++p) {
+                                if (genes[p] == kNoFallbackGene) {
+                                    genes[p] = nl.fallback_genes[p];
+                                } else if (genes[p] != nl.fallback_genes[p]) {
+                                    genes[p] = kSeveralFallbackGenes;
+                                }
+                            }
+                        }
+                    }
+                    if (countable) {
+                        break;
+                    }
+                }
+                fallback_only_skipped =
+                    !countable && any_fallback &&
+                    std::all_of(genes.begin(), genes.end(), [&](uint32_t gene) {
+                        return gene == kSeveralFallbackGenes;
+                    });
+            }
+            if (fallback_only_skipped) {
+                numeric_tally_workspace.clear();
+                fallback_only_skipped_reads.fetch_add(1, std::memory_order_relaxed);
+            } else if (production_identity) {
                 tally_numeric_ledger_group_into(numeric_tally_workspace, read_nodes, record_ptrs);
             } else {
                 pathtally::tally_read_group_into(
@@ -5471,7 +5635,7 @@ int run_convert(int argc, char** argv) {
                 pathtally::splice_concordant_transcripts(read_node_pairs, splice_edges);
 
             ExactEx50EvidenceSet exact_group_evidence;
-            if (exact_ex50) {
+            if (exact_ex50 && !fallback_only_skipped) {
                 for (const vg::MultipathAlignment* record_pointer : current_group.records) {
                     const vg::MultipathAlignment& record = *record_pointer;
                     ExactEx50EvidenceSet record_evidence =
@@ -5789,6 +5953,9 @@ int run_convert(int argc, char** argv) {
                 // Domain-separate the raw-input and full-fact formats. The latter
                 // remains the capture path and includes incomplete-provenance facts.
                 signature_digest.byte(use_candidate_inputs ? 1 : 0);
+                // A skipped read shares its empty evidence with genuine no-evidence reads but
+                // carries its own reason bit, so it needs its own cache entry.
+                signature_digest.byte(fallback_only_skipped ? 1 : 0);
                 if (!use_candidate_inputs) {
                     for (const AssignmentFacts& facts : profile_assignment_facts) {
                         digest_assignment_facts(signature_digest, facts, signature_rows);
@@ -5830,6 +5997,10 @@ int run_convert(int argc, char** argv) {
                                 pancollapse::direct_count::resolve_assignment(
                                     selected_profiles[profile_index],
                                     profile_assignment_facts[profile_index]));
+                            if (fallback_only_skipped) {
+                                resolved.back().reasons |=
+                                    pancollapse::direct_count::reason_fallback_only_skipped;
+                            }
                         }
                         return resolved;
                     });
@@ -6785,6 +6956,31 @@ int run_convert(int argc, char** argv) {
         processing_started - invocation_started).count();
     const double processing_seconds = std::chrono::duration<double>(
         processing_finished - processing_started).count();
+    if (assignment_cache) {
+        using pancollapse::direct_count::AssignmentResult;
+        const size_t cache_bytes = assignment_cache->approximate_bytes(
+            [](const CachedAssignmentResults& results) {
+                size_t bytes = sizeof(results) + results.capacity() * sizeof(AssignmentResult);
+                for (const AssignmentResult& result : results) {
+                    bytes += result.genes.capacity() * sizeof(std::string);
+                    for (const std::string& gene : result.genes) {
+                        bytes += BoundedShardedCache<std::string,
+                                                     CachedAssignmentResults>::string_heap_bytes(gene);
+                    }
+                }
+                return bytes;
+            });
+        std::cerr << "panCollapse: assignment cache: capacity=" << kAssignmentSignatureCacheEntries
+                  << " entries=" << assignment_cache->entries()
+                  << " hits=" << assignment_cache->hits()
+                  << " misses=" << assignment_cache->misses()
+                  << " uncached=" << assignment_cache->uncached()
+                  << " approximate_bytes=" << cache_bytes << '\n';
+    }
+    if (fallback_only_skip) {
+        std::cerr << "panCollapse: fallback-only skip: enabled=1 skipped_read_groups="
+                  << fallback_only_skipped_reads.load() << '\n';
+    }
     std::cerr << "panCollapse: performance: workers=" << processing_threads
               << " requested_workers=" << options.threads
               << " initialization_seconds=" << initialization_seconds

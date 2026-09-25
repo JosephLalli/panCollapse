@@ -38,6 +38,9 @@ enum AssignmentReason : std::uint64_t {
   reason_umi_n = 1ULL << 14,
   reason_umi_homopolymer = 1ULL << 15,
   reason_barcode_uncorrectable = 1ULL << 16,
+  // Every gene the read overlaps is FALLBACK in every profile and there are at least two of
+  // them, so no profile can count it; tally and exact evidence were skipped.
+  reason_fallback_only_skipped = 1ULL << 17,
 };
 enum class AssignmentTerminal : std::uint8_t {
   assigned_unique, assigned_multigene, unassigned_no_evidence,

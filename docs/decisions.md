@@ -3622,6 +3622,31 @@ genes; the rest are per-assembly and Liftoff copies. RAD records on `w_precliff`
 21. The summed tally kept about a third of reads only because loci hit by more of a read's ten
 alignments won. Which gene identities count as distinct for RAD's multigene rule is undecided.
 
+### D092 — Count ENSG00000280441 (FP236383.3) as rRNA
+
+**Status: ACCEPTED** (User, 2026-09-25). Annotation correction; no code change.
+
+**Context.** On the fastp-filtered real reads (site1_donor2_asian), `cr7-v1` put 1,209,383 of
+2,597,568 UMIs (46.6%) in ENSG00000280441, against 127,794 in STARsolo GeneFull_Ex50pAS on GRCh38 and
+2 on CHM13. The gene is a HAVANA lncRNA on GRCh38 chr21:8,380,643-8,454,792 whose transcripts join
+shared first exons to copies of one exon block in two rDNA units 44 kb apart, so its introns contain
+whole 18S/5.8S/28S units. Intron-inclusive counting therefore credits rRNA reads to it; STARsolo's
+exonic `Gene` feature gives it 7 UMIs. In the CHM13 CAT annotation the same gene is only the 1.5 kb
+exon block, with alternate copies on the chr13, chr14, chr15, chr21 and chr22 rDNA arms. Evidence:
+`/mnt/ssd/lalli/star_vs_pancollapse_filtered_20260924/README.md`.
+
+**Decision (user's words).** "Mark that gene as rRNA."
+
+**Implementation.** In the count-facts bundle, the two `profile_gene_policy.tsv` rows for
+ENSG00000280441 become `rRNA` / `FALLBACK` / `small_rna`, the classification the bundle already gives
+annotated rRNA genes; FALLBACK genes are never emitted by either profile and lose to any PRIMARY
+candidate. For the STAR arms, `gene_type`/`transcript_type` (`*_biotype` on CHM13) become `rRNA` on
+every row of the gene before the Cell Ranger 2024-A filter, which then drops it. Bundle:
+`/mnt/ssd/lalli/star_vs_pancollapse_filtered_20260924/rdna_host_as_rrna/count-facts` (content_id
+`sha256:bfd7d097997fe366e1b615a321e6d3047e4e861b0442eb24ea091159a127c81a`; unchanged files hard-linked
+from `pancollapse_parent_policy_accuracy_1m_v1_20260915T171612Z/count-facts`). The corrected annotation
+and the bundle builder are not yet changed, so a rebuilt bundle would restore the lncRNA row.
+
 ### Phase 0 resolution map
 
 F001 is resolved for gate review by D023 and D033. F002 is resolved by D026 and D034.

@@ -102,7 +102,7 @@ def load_manifest(root: Path) -> dict:
     ]
     for profile in manifest["profiles"]:
         assert profile["logical_tables"] == profile_semantics(root, profile["id"])[2]
-    assert manifest["assignment_cache"]["capacity"] == 131072
+    assert manifest["assignment_cache"]["capacity"] == 655360
     assert manifest["assignment_cache"]["entries"] > 0
     assert (
         manifest["assignment_cache"]["hits"]
