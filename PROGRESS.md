@@ -1,5 +1,23 @@
 # Progress
 
+## CURRENT: rDNA host genes as rRNA; count 2.7x faster at fixed CPU (2026-09-25)
+
+**rDNA hosts (D092).** On the fastp-filtered real reads, 46.6% of `cr7-v1` UMIs sat in lncRNA
+ENSG00000280441, whose GRCh38 model spans rDNA units; relabelling it moved them to its twin
+ENSG00000278996. Both are now rRNA/FALLBACK: `cr7-v1` 1,384,692 UMIs against STAR GRCh38
+1,161,119 on 6,211 cells (STAR/`cr7-v1` 0.886 on shared genes, Spearman 0.859). Next: 41 genes
+(111k STAR UMIs, led by ENSG00000293050) that `cr7-v1` never counts but strict does.
+
+**Count speed (D093).** Unlocked cache misses, 5x cache, FALLBACK-only skip: full filtered count
+1:40:27 wall at 32 threads (was 4:20:47), outputs byte-identical. CPU-bound now.
+
+**Reads.** The GAMP tail (reads 22.0M+, 95.7% STAR-unmapped) holds ~44% of subpaths; 26% of those
+reads are low-complexity and hold 87% of the tail's subpaths. The fixture re-inserts the TSO and
+poly-A bases Cell Ranger trims (`ts`/`pa` tags; Cell Ranger 10.1.0 trims both, score >= 20); no arm
+trims them. Re-applying the trims is the user's read-preparation decision (pending).
+Evidence: `/mnt/ssd/lalli/star_vs_pancollapse_filtered_20260924/` (`README.md`,
+`count_speed/TAIL_READS.md`).
+
 ## CURRENT: Read-Granular Decode, arena decode and ordered-output reorder measured for native `count` (2026-09-23)
 
 **Read-Granular Decode (D090, accepted).** The producer groups serialized GAMP records into reads

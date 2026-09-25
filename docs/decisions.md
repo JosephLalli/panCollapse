@@ -3622,7 +3622,7 @@ genes; the rest are per-assembly and Liftoff copies. RAD records on `w_precliff`
 21. The summed tally kept about a third of reads only because loci hit by more of a read's ten
 alignments won. Which gene identities count as distinct for RAD's multigene rule is undecided.
 
-### D092 — Count ENSG00000280441 (FP236383.3) as rRNA
+### D092 — Count the rDNA host lncRNAs ENSG00000280441 and ENSG00000278996 as rRNA
 
 **Status: ACCEPTED** (User, 2026-09-25). Annotation correction; no code change.
 
@@ -3646,6 +3646,48 @@ every row of the gene before the Cell Ranger 2024-A filter, which then drops it.
 `sha256:bfd7d097997fe366e1b615a321e6d3047e4e861b0442eb24ea091159a127c81a`; unchanged files hard-linked
 from `pancollapse_parent_policy_accuracy_1m_v1_20260915T171612Z/count-facts`). The corrected annotation
 and the bundle builder are not yet changed, so a rebuilt bundle would restore the lncRNA row.
+
+**Twin host.** Relabelling ENSG00000280441 alone moved the reads to ENSG00000278996, the same
+curated `ncRNA_host` model one rDNA unit away (its ENST00000623664 ends in the identical 97/1,001/
+92/218/467 bp block; RNA5-8SN2 lies in its introns): `cr7-v1` 8,884 -> 1,229,564 UMIs, STAR GRCh38
+862 -> 1,490,179 (STARsolo counts a multimapper whose loci fall in one gene). Of all counted GRCh38
+chr20-22 genes, only these two contain an annotated 45S rDNA unit; 21 others contain only a 5S
+pseudogene. Both are relabelled (bundle `.../rdna_host_as_rrna/both_hosts/count-facts`, content_id
+`sha256:158f137587619eae2601de8ace546e91f8cb9d7e4b3dbcdc7a9f087daf4732e6`; CHM13 has no
+ENSG00000278996).
+
+**Result (2026-09-25).** On 6,211 cells, `cr7-v1` fell from 2,597,568 to 1,384,692 UMIs and STAR
+GRCh38 GeneFull_Ex50pAS from 1,285,963 to 1,161,119; CHM13 changed by 2. On 2,949 shared genes STAR
+has 0.886 of `cr7-v1`'s UMIs, pseudobulk Spearman 0.859. Evidence:
+`/mnt/ssd/lalli/star_vs_pancollapse_filtered_20260924/rdna_host_as_rrna/both_hosts/compare.log`.
+
+### D093 — Build assignment-cache misses unlocked; skip reads with only FALLBACK genes
+
+**Status: ACCEPTED** (User, 2026-09-25: "Add the skip fallback only reads unless there is only
+one gene in the overlap"; cache: "I'd be ok with increasing it to 5x current size").
+
+**Context.** The full filtered count ran at 34.8% worker utilization: 59.6 M voluntary context
+switches, all futex waits. The bounded assignment cache built each miss under its shard's
+exclusive lock; once full (131,072 entries) 71% of reads missed and every lookup on a shard
+waited behind the miss being built.
+
+**Decision.** Misses build with no lock and the first insert wins (a race loser counts as a hit,
+so counters equal single-flight construction). Capacity 655,360. A read is skipped (no route
+tally, no exact evidence; unassigned with `reason_fallback_only_skipped`) when no node it touches
+carries a Parent whose gene is PRIMARY/UNKNOWN in any profile, every aligned node's genes are
+FALLBACK in every profile, and it overlaps at least two equivalence genes in every profile. Off for
+compatibility capture and RAD; `PANCOLLAPSE_FALLBACK_ONLY_SKIP=off` restores the full path.
+
+**Result.** Full filtered input, both-hosts bundle, 32 threads, old against new binary: read phase
+15,162 -> 5,570 s (wall 4:20:47 -> 1:40:27), worker CPU 147,873 -> 150,993 s, utilization 34.8% ->
+96.8%. Count, barcode, feature and molecule tables byte-identical. 624,659 reads skipped (2.6%);
+cache full at 655,360 entries, ~233 MB, hit rate 28.5% -> 36.9%. Skipped reads no longer reach
+barcode correction or the UMI filter, so `barcode_correction_succeeded` fell 288,270 -> 278,514 and
+the UMI-drop counters by 38 to 42; no count changed. On a 1M-read slice, skip on/off: worker CPU
+-15.0%, tables identical, all 105,303 skipped reads unassigned in both profiles without the skip.
+The count is now CPU-bound (6.3 ms per read); under 1 h at 32 threads needs ~40% less CPU per read.
+Evidence: `/mnt/ssd/lalli/star_vs_pancollapse_filtered_20260924/count_speed/` and
+`.../rdna_host_as_rrna/both_hosts/pancollapse{,_new}/`.
 
 ### Phase 0 resolution map
 
