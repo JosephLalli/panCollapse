@@ -14,7 +14,10 @@ ENSG00000278996. Both are now rRNA/FALLBACK: `cr7-v1` 1,384,692 UMIs against STA
 **Reads.** The GAMP tail (reads 22.0M+, 95.7% STAR-unmapped) holds ~44% of subpaths; 26% of those
 reads are low-complexity and hold 87% of the tail's subpaths. The fixture re-inserts the TSO and
 poly-A bases Cell Ranger trims (`ts`/`pa` tags; Cell Ranger 10.1.0 trims both, score >= 20); no arm
-trims them. Re-applying the trims is the user's read-preparation decision (pending).
+trims them. Re-applied on user decision (2026-09-26): STAR/`cr7-v1` on shared genes 0.886 -> 0.989,
+Spearman 0.859 -> 0.873; `cr7-v1` lost 54,751 UMIs mostly in genes STAR never counted (TSO/poly-A
+tails placed by the graph); count 1:21:11 at 32 threads. The GAMP tail still holds 44% of subpaths
+(low-complexity content). Evidence: `/mnt/ssd/lalli/star_vs_pancollapse_filtered_20260924/crtrim/`.
 Evidence: `/mnt/ssd/lalli/star_vs_pancollapse_filtered_20260924/` (`README.md`,
 `count_speed/TAIL_READS.md`).
 
