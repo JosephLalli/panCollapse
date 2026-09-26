@@ -1,5 +1,100 @@
 # Progress
 
+## CURRENT: Measured graph-input design ready for approval (2026-09-26)
+
+**Current deliverable:** [design memo](docs/research/gbz-gbwt-count-inputs-design-20260926.md).
+Recommendation: a projection-fact interface, standard FastLocate constructed from the loaded
+GBWT, and eager in-memory prefixes restricted to selected paths, with checked 32/64-bit width.
+No external r-index flag initially: FastLocate files do not bind themselves to a source GBWT.
+No production source or default XG behavior has changed. **Gate Architecture Approved is pending.**
+
+**Measured evidence:** repeated native XG counts on `filtered_first100k.gamp` (100,000 complete
+read groups, 216,700 records) have identical Parquet, MEX, RAD and scientific counters. Wall:
+459.06 / 448.25 s; RSS: 54.063 / 54.063 GiB. Compressed MEX bytes and headers are deterministic.
+Every one of 2,461,354 joint ledger paths matches the supplied GBWT by exact name, length and
+complete oriented walk; extra paths require no rebuild. Stock VG 1.74.1 produced the test GBZ,
+graph-only XG and standard r-index without modifying source inputs or the existing count bundle.
+
+Chr21 graph-access harnesses, including in-memory FastLocate construction where needed:
+XG 71.35 s / 52.663 GiB; GBZ 229.60 s / 21.572 GiB; graph-only XG+GBWT
+169.77 s / 20.260 GiB. These are not native-count backend results. All 2,804,175 selected
+chr21 geometry paths match XG names/lengths/walks, and all 581,735 sampled selected occurrences
+match positions/orientation. Node-ID/sequence hashes agree, no GBZ translation is present, and
+the omitted 25,251 graph edges are unused by counting. A repeated/reverse-step oracle passed
+37 assertions. Lazy positions finished at 733.92 s / 13.349 GiB; denser DA resampling was stopped
+at 922.63 s while still building, not misreported as a completed alternative.
+
+The chr2 guide header gives 19,538,776,098 forward real steps. The memo distinguishes the
+72.90 GiB conditional 32-bit prefix-payload upper bound, an illustrative roughly 100 GiB
+graph-access model, and still-unmeasured native-count/model/read memory.
+
+**Evidence and next task:**
+`/mnt/ssd/lalli/pancollapse_graph_input_design_v1_20260926T154801Z/`
+contains commands, hashes, raw GNU-time receipts, source/binary pins and
+`results/measurement_summary.{json,md}`. Scientific exclusions are explicitly listed in the
+[comparison contract](docs/research/graph-input-scientific-comparison-20260926.md).
+Worktree: `design/gbz-gbwt-count-inputs-20260926`, based on `f511306`.
+After architecture approval: implement the fact interface and both input loaders; run all
+projection fixtures and matched three-mode native counts on the frozen named subset; update
+usage and the input/output contract. Cross-mode native-count equivalence is not yet claimed.
+
+### Earlier intake checkpoint (superseded by the measured memo above)
+
+**Intake gate: joint chr20–22 equivalence fixture; no policy-input blocker.** Exact chr21
+corrected/projected annotations do not exist, so chr21 count-bundle construction stops; raw
+projection is not substituted. The prior 2,804,175-row audit is an exact-ID intersection, not
+biological transcript coverage: it comprises 1,006,635 transcripts plus 1,797,540
+`panSCbody1` body-segment paths linked by `exact/annotation/body_parent_aliases.tsv`.
+The joint fixture instead uses
+`/mnt/ssd/lalli/hprc_v2_vg_rna/joint_chr20_chr21_chr22/genic_flankpad_prerequisites_v1_20260830T192333-0500/`
+with its final XG, PG, and pre-strip GBWT, plus the production GAMP/bundle/whitelist from
+`/mnt/ssd/lalli/pancollapse_filtered_native_count_v1_20260924T105938Z/commands/run_count.sh`.
+No annotation-policy change is authorized or needed for this fixture.
+
+**Authorized scope.** Produce a design memo with chr21 capability/performance measurements for
+GBZ and graph-only XG+GBWT inputs, compared with the default XG route. The memo must distinguish
+what requires graph positions from path/membership facts; enumerate metadata names, identity and
+translation requirements, edge and targeted-position access, GBWT locate options, and measured
+wall/RSS with a clearly labelled chr2 projection. Build fixture GBZ/path-free XG with stock
+`quay.io/vgteam/vg:v1.74.1` for every VG CLI step.
+
+**Boundary and gate.** This authorizes measurement and design only. Do not implement a production
+input route or create a persistent panCollapse index. Chr21 bundle construction is stopped.
+Validate every ledger name, node ID, and length against the joint XG; if required paths disagree,
+rebuilding it from XG embedded paths with `vg gbwt -E` is authorized. Extra unselected paths alone
+do not require a rebuild. Record exact
+commands and input hashes. A full GAMP or an explicitly named read-contiguous GAMP subset may be
+used. The first deliverable stops for review at **Gate
+Architecture Approved**. The default XG contract remains operative; no GBZ substitution has been
+accepted. D094 is the current checkpoint, not a product decision.
+
+**Accepted scientific identity scope.** Result tables, MEX, RAD, and scientific counters must be
+identical. Timing, memory, host, timestamps, input mode, paths, and hashes are explicit excluded
+operational-provenance fields and remain truthful; input mode must not appear in scientific files.
+Compression determinism passed in the repeated baseline-XG gate on
+`joint/inputs/filtered_first100k.gamp` (100,000 read groups; 216,700 records): scientific
+inventory, Parquet, MEX, RAD, summary projection, and manifest projection were identical;
+all gzip headers had `mtime=0`, flags 0, and no filename. `xg_1`/`xg_2` were 459.06/448.25 s
+and 56,688,948/56,689,116 KiB peak RSS. Receipt:
+`/mnt/ssd/lalli/pancollapse_graph_input_design_v1_20260926T154801Z/joint/results/comparison_xg_1_vs_xg_2.json`.
+Joint fixture probes may continue; this does not approve a production backend or architecture.
+
+**Worktree.** `design/gbz-gbwt-count-inputs-20260926`, based on `f511306`.
+
+**Intake completed; joint probes ongoing.** [Source/input intake](docs/research/gbz-gbwt-count-inputs-intake-20260926.md)
+records verified files, mode capabilities, and source locations. The chr21 annotation route is
+superseded by the joint equivalence fixture; chr21 remains useful only for graph-scale
+microbenchmarks. No production graph-input route has been implemented; architecture approval remains pending.
+
+**Existing evidence and next task.** The retained chr21 GBZ fixture is
+`/mnt/ssd/lalli/hprc_v2_vg_rna/notes/evidence/chr21_gbz_indexing_fixture_20260920/README.md`:
+`chr21.xg` build was 54:28.44/68.52 GiB and GBZ build 3:30.59/46.35 GiB, but its five-read mpmap
+smoke test does not measure native-count capability, throughput, accuracy, or output identity.
+The current production-count command and XG/bundle inputs are preserved at
+`/mnt/ssd/lalli/pancollapse_filtered_native_count_v1_20260924T105938Z/commands/run_count.sh`.
+Next: the parent prepares the bounded memo and measurements; do not launch a benchmark from this
+documentation checkpoint.
+
 ## CURRENT: rDNA host genes as rRNA; count 2.7x faster at fixed CPU (2026-09-25)
 
 **rDNA hosts (D092).** On the fastp-filtered real reads, 46.6% of `cr7-v1` UMIs sat in lncRNA

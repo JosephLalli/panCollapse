@@ -11,6 +11,17 @@ GAMP-to-RAD/BAM evidence interface.
 
 ## Current work
 
+**CURRENT: measured graph-input design ready for architecture review.** The
+[design memo](docs/research/gbz-gbwt-count-inputs-design-20260926.md) proposes GBZ and graph-only
+XG+GBWT inputs using FastLocate and selected-path position prefixes. Repeated XG counting on
+the supplied joint chr20–22 100,000-read-group fixture has identical scientific outputs.
+Chr21 graph-access probes, complete selected-path walk checks, lookup comparisons and a chr2
+resource model are recorded separately from native-count results. The default XG implementation
+is unchanged; the new inputs are not implemented yet. Start from [PROGRESS.md](PROGRESS.md)
+and [D094](docs/decisions.md). Production implementation awaits **Gate Architecture Approved**.
+
+## Historical current-work records
+
 **The full real input has a throughput cliff, and the current frontier is decoder cost after it.**
 The full-input native count is complete: 25,755,749 reads and 124,261,698 alignments in a
 210,645 s read phase (**817.86 s/100k reads**, peak RSS 137.48 GiB), validated with the completion
