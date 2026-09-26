@@ -1,14 +1,30 @@
 # Progress
 
-## CURRENT: Measured graph-input design ready for approval (2026-09-26)
+## CURRENT: GBZ/GBWT feature implemented; scientific acceptance passed (2026-09-26)
 
-**Current deliverable:** [design memo](docs/research/gbz-gbwt-count-inputs-design-20260926.md).
-Recommendation: a projection-fact interface, standard FastLocate constructed from the loaded
-GBWT, and eager in-memory prefixes restricted to selected paths, with checked 32/64-bit width.
-No external r-index flag initially: FastLocate files do not bind themselves to a source GBWT.
-No production source or default XG behavior has changed. **Gate Architecture Approved is pending.**
+**Gate Architecture Approved passed.** The accepted [design](docs/research/gbz-gbwt-count-inputs-design-20260926.md)
+is implemented in `src/graph_input.{hpp,cpp}` and the common convert/count projection path.
+`--gbz` and `--xg ... --gbwt ...` use in-memory FastLocate occurrence queries and selected
+32/64-bit prefixes; the embedded-path XG route remains the default. Repeated visits are
+preserved. No external `.ri` flag or custom persistent index is introduced. Annotation and
+counting policies are unchanged.
 
-**Measured evidence:** repeated native XG counts on `filtered_first100k.gamp` (100,000 complete
+The final XG build passes 179/179 tests; GBZ and XG+GBWT each pass 167/167 graph-dependent tests.
+Both alternatives match 382 scientific fixture products. The sparse-ID presence check was
+corrected after acceptance exposed that GBWT `contains()` checks numeric bounds only.
+The named real-subset XG repeats pass scientific identity, and the new default-XG output also
+matches the archived pre-feature baseline. Fresh XG runs took 2032.81/1500.07 seconds with
+56,711,904/56,695,940 KiB peak RSS. GBZ (824.92 s / 39,134,904 KiB) and XG+GBWT
+(788.47 s / 38,369,492 KiB) both pass scientific byte identity against XG: all 11 scientific
+files, six gzip headers, scientific counters and manifest projection. This is the named
+100,000-read subset, not the full GAMP. The archived-binary control also passes scientific
+identity, at 914.99 s / 56,761,504 KiB. Both old and new XG runs exceed the earlier archive's
+wall times, and the new runs are slower than the fresh control. Shared-host conditions were
+uncontrolled; runtime nonregression and causal speedups are not established.
+See the [implementation record](docs/research/gbz-gbwt-input-implementation-20260926.md) and
+`/mnt/ssd/lalli/pancollapse_graph_input_implementation_v1_20260926/` for live receipts.
+
+**Earlier design evidence:** repeated native XG counts on `filtered_first100k.gamp` (100,000 complete
 read groups, 216,700 records) have identical Parquet, MEX, RAD and scientific counters. Wall:
 459.06 / 448.25 s; RSS: 54.063 / 54.063 GiB. Compressed MEX bytes and headers are deterministic.
 Every one of 2,461,354 joint ledger paths matches the supplied GBWT by exact name, length and
@@ -34,9 +50,10 @@ contains commands, hashes, raw GNU-time receipts, source/binary pins and
 `results/measurement_summary.{json,md}`. Scientific exclusions are explicitly listed in the
 [comparison contract](docs/research/graph-input-scientific-comparison-20260926.md).
 Worktree: `design/gbz-gbwt-count-inputs-20260926`, based on `f511306`.
-After architecture approval: implement the fact interface and both input loaders; run all
-projection fixtures and matched three-mode native counts on the frozen named subset; update
-usage and the input/output contract. Cross-mode native-count equivalence is not yet claimed.
+The feature and named-subset acceptance are complete. Whole-process measurements, exact
+commands, source/binary/library pins and comparison receipts are retained in the implementation
+evidence root. Full-GAMP and chr2 native-count performance are not claimed. No external r-index
+input flag is added, and no new optimization phase was started.
 
 ### Earlier intake checkpoint (superseded by the measured memo above)
 

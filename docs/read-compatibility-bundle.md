@@ -20,7 +20,9 @@ panCollapse count \
   --out-dir direct-count
 ```
 
-Replay it under current corrected annotation metadata and profiles:
+The producer also accepts `--gbz graph.gbz` or `--xg graph_only.xg --gbwt paths.gbwt`
+in place of the embedded-path XG. Replay it under current corrected annotation metadata and
+profiles:
 
 ```sh
 panCollapse count \
@@ -32,7 +34,7 @@ panCollapse count \
   --out-dir replay-count
 ```
 
-Replay bypasses XG deserialization, graph-path scoring, exact-transcript dynamic programming, and
+Replay bypasses graph/index deserialization, graph-path scoring, exact-transcript dynamic programming, and
 GAMP decoding. It still performs current annotation-policy binding, assignment, barcode
 correction, UMI collapse, matrix generation, optional MEX, and optional per-read diagnostics.
 
@@ -57,8 +59,10 @@ Allowed replay changes include gene assignment, gene metadata and tags, gene-cat
 competition/equivalence/nested-host policy, selected profile and profile overrides, barcode
 whitelist, diagnostics, MEX, and count-memory budget. Transcript/exon geometry, path/Parent to
 canonical-transcript structure, or the graph-to-tier compatibility algorithm may not change.
-The source GAMP and XG SHA-256 values remain in the manifest. Replay deliberately does not reopen
-XG; if the graph changes, regenerate the bundle rather than treating ledger validation as a graph
+The source GAMP and graph/index SHA-256 values remain in the manifest. Valid graph provenance
+roles are `xg`, `gbz`, or `xg` plus `gbwt`. Replay deliberately does not reopen those inputs
+and rejects `--gamp`, `--xg`, `--gbz`, and `--gbwt`; if the graph changes, regenerate the bundle
+rather than treating ledger validation as a graph
 topology comparison.
 
 ## Physical layout
@@ -105,7 +109,8 @@ benchmark on the current fixed fixture.
 
 The repository's fast graph-backed fixture proves:
 
-- direct GAMP/XG count equals compatibility replay for count/molecule/barcode/feature Parquet,
+- direct GAMP count with each supported graph input equals compatibility replay for
+  count/molecule/barcode/feature Parquet,
   MEX, diagnostics, logical identities, and every biological counter;
 - profile score-window override replay equals a fresh direct override run;
 - one-worker and forced four-worker compatibility bundles are byte-identical;

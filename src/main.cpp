@@ -4,7 +4,7 @@
 #include <openssl/evp.h>
 #include <vg/io/stream.hpp>
 #include <vg/vg.pb.h>
-#include <xg.hpp>
+#include "graph_input.hpp"
 
 #include "pathtally.hpp"
 #include "node_tally_cache.hpp"
@@ -108,6 +108,8 @@ struct Options {
     bool direct_count = false;
     std::filesystem::path gamp;
     std::filesystem::path xg;
+    std::filesystem::path gbz;
+    std::filesystem::path gbwt;
     std::filesystem::path t2g;
     std::filesystem::path path_identity_ledger;
     std::string legacy_adapter;
@@ -197,7 +199,7 @@ struct T2gData {
 };
 
 constexpr const char* kUsageText =
-    "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg "
+    "usage: panCollapse convert --gamp reads.gamp|- (--xg graph.xg [--gbwt paths.gbwt] | --gbz graph.gbz) "
     "(--path-identity-ledger path_identity_ledger.tsv | "
     "--legacy-adapter hst-v1 --t2g t2g.tsv) "
     "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
@@ -212,7 +214,7 @@ constexpr const char* kUsageText =
     "[--path-identity-ledger-sha256 HEX] "
     "[--strict-allowlisted-parents parents.txt] "
     "[--strict-allowlisted-parents-sha256 HEX]\n"
-    "       panCollapse count (--gamp reads.gamp --xg graph.xg "
+    "       panCollapse count (--gamp reads.gamp (--xg graph.xg [--gbwt paths.gbwt] | --gbz graph.gbz) "
     "[--compatibility-out compatibility] | "
     "--compatibility-in compatibility) "
     "(--count-bundle panSC-count-facts-v1 | --annotation corrected.gff3 "
@@ -444,6 +446,10 @@ Options parse_options(int argc, char** argv) {
             options.gamp = require_value("--gamp");
         } else if (arg == "--xg") {
             options.xg = require_value("--xg");
+        } else if (arg == "--gbz") {
+            options.gbz = require_value("--gbz");
+        } else if (arg == "--gbwt") {
+            options.gbwt = require_value("--gbwt");
         } else if (arg == "--t2g") {
             options.t2g = require_value("--t2g");
         } else if (arg == "--path-identity-ledger") {
@@ -588,13 +594,18 @@ Options parse_options(int argc, char** argv) {
     const bool compatibility_replay = !options.compatibility_in.empty();
     if (compatibility_replay) {
         if (!options.direct_count || !options.gamp.empty() || !options.xg.empty() ||
+            !options.gbz.empty() || !options.gbwt.empty() ||
             !options.compatibility_out.empty()) {
             throw std::runtime_error(
                 "--compatibility-in is an exclusive count input and cannot be combined "
-                "with --gamp, --xg, or --compatibility-out");
+                "with --gamp, --xg, --gbz, --gbwt, or --compatibility-out");
         }
-    } else if (options.gamp.empty() || options.xg.empty()) {
-        usage_error();
+    } else {
+        if (options.gamp.empty()) usage_error();
+        if ((!options.gbz.empty() && (!options.xg.empty() || !options.gbwt.empty())) ||
+            (options.gbz.empty() && options.xg.empty())) {
+            throw std::runtime_error("requires exactly one graph source: --xg FILE [--gbwt FILE] or --gbz FILE; --gbwt requires --xg");
+        }
     }
     if (options.raw_cb_length == 0 || options.raw_cb_length > 32 || options.raw_umi_length == 0 ||
         options.raw_umi_length > 32) {
@@ -3062,27 +3073,58 @@ int run_convert(int argc, char** argv) {
               << (identity_ledger.has_value() ? identity_ledger->rows_by_path.size() : 0)
               << " seconds=" << metadata_seconds << '\n';
 
-    const auto xg_deserialize_started = std::chrono::steady_clock::now();
-    xg::XG graph;
-    std::ifstream xg_in(options.xg, std::ios::binary);
-    if (!xg_in) {
-        throw std::runtime_error("cannot open XG");
+    pancollapse::GraphInput graph_input;
+    std::string xg_input_sha256, gbz_input_sha256, gbwt_input_sha256;
+    auto load_graph_file = [&](const std::filesystem::path& path, const char* role,
+                               auto load, std::string& digest) {
+        const auto started = std::chrono::steady_clock::now();
+        std::ifstream input(path, std::ios::binary);
+        if (!input) throw std::runtime_error(std::string("cannot open ") + role + ": " + path.string());
+        if (options.direct_count) {
+            Sha256InputStream hashed(input);
+            load(hashed);
+            digest = hashed.complete_and_finish();
+        } else {
+            load(input);
+        }
+        std::cerr << "panCollapse: initialization: phase=" << role << "_deserialize seconds="
+                  << std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count()
+                  << '\n';
+    };
+    if (!options.gbz.empty()) {
+        load_graph_file(options.gbz, "gbz", [&](std::istream& in) { graph_input.load_gbz(in); }, gbz_input_sha256);
+    } else {
+        load_graph_file(options.xg, "xg", [&](std::istream& in) { graph_input.load_xg(in); }, xg_input_sha256);
+        if (!options.gbwt.empty()) {
+            load_graph_file(options.gbwt, "gbwt", [&](std::istream& in) { graph_input.load_gbwt(in); }, gbwt_input_sha256);
+        }
     }
-    std::unique_ptr<Sha256InputStream> xg_hash_stream;
-    std::istream* xg_source = &xg_in;
-    if (options.direct_count) {
-        xg_hash_stream = std::make_unique<Sha256InputStream>(xg_in);
-        xg_source = xg_hash_stream.get();
+    graph_input.initialize_gbwt(options.threads);
+    const auto& graph = graph_input.nodes();
+    if (graph_input.uses_gbwt()) {
+        const auto started = std::chrono::steady_clock::now();
+        std::vector<handlegraph::path_handle_t> selected_paths;
+        std::unordered_set<std::string> selected_names;
+        graph_input.for_each_path_handle([&](handlegraph::path_handle_t path) {
+            const auto name = graph_input.get_path_name(path);
+            const bool selected = production_identity
+                ? identity_ledger->rows_by_path.count(name) != 0
+                : (resolve_graph_transcript(t2g, name, options.count_mode != pathtally::CountMode::Score) != nullptr ||
+                   (options.count_mode != pathtally::CountMode::Score && resolve_body_graph_path(body_t2g, name) != nullptr));
+            if (selected) {
+                if (!selected_names.insert(name).second) {
+                    throw std::runtime_error("ambiguous GBWT metadata path name: " + name);
+                }
+                selected_paths.push_back(path);
+            }
+        });
+        const bool need_positions = production_identity && options.count_mode != pathtally::CountMode::Score &&
+                                    (options.direct_count || !options.bam_out.empty());
+        graph_input.prepare_paths(selected_paths, need_positions, options.threads);
+        std::cerr << "panCollapse: initialization: phase=selected_path_positions paths=" << selected_paths.size()
+                  << " positions=" << need_positions << " seconds="
+                  << std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() << '\n';
     }
-    graph.deserialize(*xg_source);
-    std::string xg_input_sha256;
-    if (xg_hash_stream) {
-        xg_input_sha256 = xg_hash_stream->complete_and_finish();
-    }
-    const double xg_deserialize_seconds = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - xg_deserialize_started).count();
-    std::cerr << "panCollapse: initialization: phase=xg_deserialize seconds="
-              << xg_deserialize_seconds << '\n';
 
     const auto ledger_path_handles_started = std::chrono::steady_clock::now();
     std::unordered_map<std::string, uint64_t> ledger_path_handles_by_name;
@@ -3093,8 +3135,8 @@ int run_convert(int argc, char** argv) {
         // path-name index, so the by-name form paid two of them per row across a ledger with
         // millions of rows. Enumeration visits every path once and costs a hash lookup per
         // path instead.
-        graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
-            std::string path_name = graph.get_path_name(path);
+        graph_input.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+            std::string path_name = graph_input.get_path_name(path);
             if (identity_ledger->rows_by_path.count(path_name) == 0) {
                 return;
             }
@@ -3108,15 +3150,15 @@ int run_convert(int argc, char** argv) {
             const auto found = ledger_path_handles_by_name.find(path_name);
             if (found == ledger_path_handles_by_name.end()) {
                 throw std::runtime_error("path identity ledger vg_path_name " + path_name +
-                                         " is absent from the XG");
+                                         " is absent from the graph paths");
             }
-            const uint64_t graph_length = graph.get_path_length(
+            const uint64_t graph_length = graph_input.get_path_length(
                 handlegraph::as_path_handle(found->second));
             if (graph_length != entry.second.vg_path_length) {
                 throw std::runtime_error("path identity ledger vg_path_length for " + path_name +
                                          " is " +
                                          std::to_string(entry.second.vg_path_length) +
-                                         " but the XG path length is " +
+                                         " but the graph path length is " +
                                          std::to_string(graph_length));
             }
         }
@@ -3365,8 +3407,8 @@ int run_convert(int argc, char** argv) {
         }
     }
     if (options.count_mode == pathtally::CountMode::Score) {
-        graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
-            std::string name = graph.get_path_name(path);
+        graph_input.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+            std::string name = graph_input.get_path_name(path);
             if (resolve_graph_transcript(t2g, name, false) != nullptr) {
                 hst_path_name.emplace(handlegraph::as_integer(path), std::move(name));
             }
@@ -3375,17 +3417,16 @@ int run_convert(int argc, char** argv) {
             const auto& entries = node_hst_cache.get_or_build(node_id, [&]() {
                 if (!graph.has_node(node_id)) {
                     throw std::runtime_error(
-                        "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
+                        "GAMP/graph node-id-space mismatch: node " + std::to_string(node_id) +
                         " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
                 std::vector<std::pair<const std::string*, bool>> built;
-                const handlegraph::handle_t handle = graph.get_handle(node_id, false);
-                graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
+                graph_input.for_each_node_occurrence(node_id, [&](const pancollapse::GraphPathStep& step) {
                     const auto it =
-                        hst_path_name.find(handlegraph::as_integer(graph.get_path_handle_of_step(step)));
+                        hst_path_name.find(handlegraph::as_integer(step.path));
                     if (it != hst_path_name.end()) {
                         built.emplace_back(&it->second,
-                                           graph.get_is_reverse(graph.get_handle_of_step(step)));
+                                           graph.get_is_reverse(step.handle));
                     }
                     return true;
                 });
@@ -3473,8 +3514,8 @@ int run_convert(int argc, char** argv) {
                 transcript_body_paths[target_id].push_back(path);
             }
         } else {
-            graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
-                const std::string name = graph.get_path_name(path);
+            graph_input.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+                const std::string name = graph_input.get_path_name(path);
                 // Exact exon rows win first. Then exact body rows win over the legacy exon
                 // bare-name fallback, so an explicitly named transcript-body path cannot be
                 // mistaken for an exon.
@@ -3629,11 +3670,11 @@ int run_convert(int argc, char** argv) {
                             prepared.row = exon;
                             prepared.path_handle =
                                 std::as_const(ledger_path_handles_by_name).at(exon->vg_path_name);
-                            graph.for_each_step_in_path(
+                            graph_input.for_each_path_step(
                                 handlegraph::as_path_handle(prepared.path_handle),
-                                [&](const handlegraph::step_handle_t& step) {
+                                [&](const pancollapse::GraphPathStep& step) {
                                     const handlegraph::handle_t handle =
-                                        graph.get_handle_of_step(step);
+                                        step.handle;
                                     prepared.steps.emplace_back(graph.get_id(handle),
                                                                 graph.get_is_reverse(handle));
                                 });
@@ -3687,15 +3728,15 @@ int run_convert(int argc, char** argv) {
                             prepared.row = body;
                             prepared.path_handle =
                                 std::as_const(ledger_path_handles_by_name).at(body->vg_path_name);
-                            graph.for_each_step_in_path(
+                            graph_input.for_each_path_step(
                                 handlegraph::as_path_handle(prepared.path_handle),
-                                [&](const handlegraph::step_handle_t& step) {
+                                [&](const pancollapse::GraphPathStep& step) {
                                     const handlegraph::handle_t handle =
-                                        graph.get_handle_of_step(step);
+                                        step.handle;
                                     prepared.occurrences[graph.get_id(handle)].emplace_back(
                                         graph.get_is_reverse(handle),
-                                        graph.get_position_of_step(step));
-                                });
+                                        step.base_position());
+                                }, true);
                             prepared_bodies.push_back(std::move(prepared));
                             ++result.prepared_body_paths;
                         }
@@ -3924,7 +3965,7 @@ int run_convert(int argc, char** argv) {
                     .target_id;
             }
             return std::as_const(exon_name_transcript).at(
-                graph.get_path_name(exon_path));
+                graph_input.get_path_name(exon_path));
         };
 
         // Shared geometry worker. Legacy D060 records exon spans against a pooled gene body. D063
@@ -3946,9 +3987,9 @@ int run_convert(int argc, char** argv) {
                             "internal transcript-body geometry mixed canonical targets");
                     }
                     std::vector<int64_t> node_ids;
-                    graph.for_each_step_in_path(
-                        exon_path, [&](const handlegraph::step_handle_t& step) {
-                            node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
+                    graph_input.for_each_path_step(
+                        exon_path, [&](const pancollapse::GraphPathStep& step) {
+                            node_ids.push_back(graph.get_id(step.handle));
                     });
                     for (size_t i = 0; i + 1 < node_ids.size(); ++i) {
                         if (node_ids[i] != node_ids[i + 1]) {
@@ -3987,9 +4028,9 @@ int run_convert(int argc, char** argv) {
                     }
                     has_usable_body_path = true;
                     std::vector<int64_t> path_node_ids;
-                    graph.for_each_step_in_path(
-                        body_path, [&](const handlegraph::step_handle_t& step) {
-                            path_node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
+                    graph_input.for_each_path_step(
+                        body_path, [&](const pancollapse::GraphPathStep& step) {
+                            path_node_ids.push_back(graph.get_id(step.handle));
                         });
                     pathtally::add_body_path(body_geometry, path_node_ids);
                     if (same_path_endpoint_edges.size() == exon_edges.size()) {
@@ -4046,8 +4087,8 @@ int run_convert(int argc, char** argv) {
             // Legacy D060 deliberately retains its historical numeric span/edge behavior.
             std::unordered_set<int64_t> body_nodes;
             for (const handlegraph::path_handle_t& body_path : body_paths) {
-                graph.for_each_step_in_path(body_path, [&](const handlegraph::step_handle_t& step) {
-                    body_nodes.insert(graph.get_id(graph.get_handle_of_step(step)));
+                graph_input.for_each_path_step(body_path, [&](const pancollapse::GraphPathStep& step) {
+                    body_nodes.insert(graph.get_id(step.handle));
                 });
             }
             std::vector<int64_t> body_sorted(body_nodes.begin(), body_nodes.end());
@@ -4056,8 +4097,8 @@ int run_convert(int argc, char** argv) {
             result.spans.reserve(exon_paths.size());
             for (const handlegraph::path_handle_t& exon_path : exon_paths) {
                 std::vector<int64_t> node_ids;
-                graph.for_each_step_in_path(exon_path, [&](const handlegraph::step_handle_t& step) {
-                    node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
+                graph_input.for_each_path_step(exon_path, [&](const pancollapse::GraphPathStep& step) {
+                    node_ids.push_back(graph.get_id(step.handle));
                 });
                 const uint32_t target_id = exon_target_id(exon_path);
 
@@ -4212,7 +4253,7 @@ int run_convert(int argc, char** argv) {
             return node_ledger_cache.get_or_build(node_id, [&]() {
                 if (!graph.has_node(node_id)) {
                     throw std::runtime_error(
-                        "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
+                        "GAMP/graph node-id-space mismatch: node " + std::to_string(node_id) +
                         " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
                 NodeLedger nl;
@@ -4226,15 +4267,14 @@ int run_convert(int argc, char** argv) {
                     gene_orient_here.emplace();
                     body_genes_here.emplace();
                 }
-                const handlegraph::handle_t handle = graph.get_handle(node_id, false);
-                graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
+                graph_input.for_each_node_occurrence(node_id, [&](const pancollapse::GraphPathStep& step) {
                     const uint64_t path_handle =
-                        handlegraph::as_integer(graph.get_path_handle_of_step(step));
+                        handlegraph::as_integer(step.path);
                     const auto it = ledger_path_info.find(path_handle);
                     if (it == ledger_path_info.end()) {
                         return true;
                     }
-                    const bool path_is_reverse = graph.get_is_reverse(graph.get_handle_of_step(step));
+                    const bool path_is_reverse = graph.get_is_reverse(step.handle);
                     // Every reference path crossing the node (exon transcript or gene body),
                     // un-collapsed, is a scoreable reference for tally_read_group_into.
                     nl.ref_paths.push_back(
@@ -4262,7 +4302,7 @@ int run_convert(int argc, char** argv) {
                     if (exact_ex50) {
                         NodeLedger::ExactStep exact_step{
                             path_handle, path_is_reverse,
-                            graph.get_position_of_step(step)};
+                            step.base_position()};
                         if (it->second.is_exon) {
                             nl.exact_exon_steps.push_back(exact_step);
                         } else {
@@ -4276,7 +4316,7 @@ int run_convert(int argc, char** argv) {
                         }
                     }
                     return true;
-                });
+                }, exact_ex50);
                 if (!body_t2g.transcript_specific) {
                     nl.legacy.emplace();
                     for (const auto& [gene_idx, is_reverse] : *gene_orient_here) {
@@ -6804,13 +6844,13 @@ int run_convert(int argc, char** argv) {
         }
     }
     if (compatibility_writer) {
-        compatibility_writer->set_inputs(
-            {{"gamp", gamp_input_sha256,
-              options.gamp == std::filesystem::path("-")
-                  ? 0
-                  : std::filesystem::file_size(options.gamp)},
-             {"xg", xg_input_sha256, std::filesystem::file_size(options.xg)}},
-            input_records, input_read_groups);
+        std::vector<pancollapse::direct_count::CompatibilityInputIdentity> inputs{
+            {"gamp", gamp_input_sha256, options.gamp == std::filesystem::path("-")
+                ? 0 : std::filesystem::file_size(options.gamp)}};
+        if (!options.xg.empty()) inputs.push_back({"xg", xg_input_sha256, std::filesystem::file_size(options.xg)});
+        if (!options.gbz.empty()) inputs.push_back({"gbz", gbz_input_sha256, std::filesystem::file_size(options.gbz)});
+        if (!options.gbwt.empty()) inputs.push_back({"gbwt", gbwt_input_sha256, std::filesystem::file_size(options.gbwt)});
+        compatibility_writer->set_inputs(std::move(inputs), input_records, input_read_groups);
         compatibility_receipt = compatibility_writer->finalize();
         count_processing_phases.compatibility_finalize_seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - read_processing_finished).count();
@@ -7049,6 +7089,8 @@ int run_convert(int argc, char** argv) {
         };
         add_input("gamp", options.gamp, gamp_input_sha256);
         add_input("xg", options.xg, xg_input_sha256);
+        add_input("gbz", options.gbz, gbz_input_sha256);
+        add_input("gbwt", options.gbwt, gbwt_input_sha256);
         add_input("barcode_whitelist", options.barcode_whitelist);
         if (count_bundle) {
             add_input("count_bundle_manifest", count_bundle->manifest_path);

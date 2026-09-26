@@ -25,7 +25,7 @@ MEX currently uses zlib `gzopen(..., "wb6")` in `src/direct_count_output.cpp:258
 explicit custom header. Inspect the actual gzip headers and compare compressed bytes on
 repeated runs; record MTIME and filename flags. A decompressed comparison is diagnostic
 only unless the report explicitly states and obtains acceptance for that weaker criterion.
-No compressed-output determinism measurement has yet been performed for this experiment.
+The repeated-XG result below establishes deterministic compressed bytes for the named fixture.
 
 ## Explicit operational exclusions
 
@@ -63,9 +63,12 @@ For `manifest.json`, the exclusions in the current schema are precisely:
 - `/timings/initialization_seconds`, `/timings/processing_seconds`,
   `/timings/read_processing_seconds`, `/timings/compatibility_finalize_seconds`,
   `/timings/count_finalize_seconds`, `/timings/diagnostics_merge_export_seconds`.
-- `/inputs/xg/{path,sha256,size_bytes}` for cross-graph comparisons only. New GBZ/GBWT
-  provenance roles must be specified explicitly in the approved design before comparison;
-  do not ignore the whole inputs object. GAMP, whitelist, and bundle identities must match.
+- `/inputs/{xg,gbz,gbwt}/{path,sha256,size_bytes}` for cross-graph comparisons only (D094).
+  Require precisely one valid graph role combination: `xg`, `gbz`, or `xg` plus `gbwt`.
+  Reject unknown fields inside these roles; remove the emptied graph roles for the scientific
+  projection. GAMP, whitelist, bundle and every other input identity must match. Command-line
+  normalization removes only these graph flag/value pairs and normalizes `--out-dir`; all
+  scientific arguments and the executable remain compared.
 - `/outputs/summary/{logical_sha256,output_sha256,size_bytes}`, because these bind the raw
   summary containing the excluded operational counters. Its scientific projection is compared
   independently; summary path and row count remain checked.
@@ -79,7 +82,7 @@ truthful and separate from scientific comparisons.
 
 Current results contain operational data in manifest and summary, so whole-directory `cmp`
 is not the criterion. Result files themselves remain directly byte-compared. No production
-output separation is implemented during this design-only phase.
+output separation is introduced by the graph-input feature.
 
 ## Baseline XG repeat: PASS (2026-09-26)
 
@@ -92,3 +95,27 @@ MEX gzip files had identical compressed bytes and headers (`mtime=0`, flags 0, n
 Receipt: `/mnt/ssd/lalli/pancollapse_graph_input_design_v1_20260926T154801Z/joint/results/comparison_xg_1_vs_xg_2.json`.
 This establishes same-mode XG repeatability for this subset only; it does not implement or
 approve a new graph-input backend.
+
+## Projection-fixture comparisons during implementation
+
+`tests/vg/compare_projection_outputs.py` compares every RAD, Parquet, MEX, tx2gene,
+evidence table and summary produced under the fixture roots, with equal scientific-file
+inventories. Native-count summaries use only the exclusions above; converter summaries
+compare directly. The converter's optional BAM already embeds its command line in `@PG CL`.
+For those fixture BAMs only, compare the complete ordered SAM records and all headers except
+that single provenance field. Preserve the original BAMs and their hashes. This does not
+weaken the byte comparison of native-count products; native `count` has no BAM output.
+
+`tests/vg/compare_graph_scientific.py --allow-executable-change` is reserved for the default-XG
+regression comparison to the archived baseline executable. It records both executable hashes
+and permits only argv[0] to differ beyond the ordinary output-path exclusion. Same-build
+repeats and cross-graph acceptance do not use that option.
+
+## Implementation acceptance: PASS (2026-09-26)
+
+The frozen implementation executable passes a fresh repeated-XG comparison and both GBZ and
+XG+GBWT comparisons on the same named subset. Each compares all 11 scientific files, all six
+compressed MEX headers, scientific summary counters and the manifest projection. Default XG
+also matches the archived pre-feature scientific output using the executable-change exception.
+Receipts are under `/mnt/ssd/lalli/pancollapse_graph_input_implementation_v1_20260926/results/`;
+the [implementation record](gbz-gbwt-input-implementation-20260926.md) gives measurements and limits.

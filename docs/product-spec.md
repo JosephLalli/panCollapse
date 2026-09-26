@@ -25,12 +25,12 @@ enabled by default because it is per-read-scale I/O.
 read-compatibility intermediate. It is policy-neutral evidence before
 `CountFactCatalog::candidate`, not final `AssignmentFacts`, an assignment result, or a count
 output. `count --compatibility-in <dir>` replays that evidence with the current count-facts
-bundle and whitelist. One invocation accepts exactly one source: GAMP plus its matching XG, or
+bundle and whitelist. One invocation accepts exactly one source: GAMP plus a matching graph source (XG, GBZ, or XG+GBWT; D094), or
 the compatibility intermediate. This avoids duplicating alignments while retaining per-read
 molecule status, interned fact-set identity, exact E/P/B and structural S/U
 provenance. It supports lossless metadata, tagging, whitelist, and count-policy re-evaluation
 while the ledger transcript/exon surface and the compatibility algorithm are unchanged. Source
-GAMP/XG digests are frozen in its manifest; replay intentionally does not reopen XG, so any graph
+GAMP/graph-input digests are frozen in its manifest; replay intentionally does not reopen XG, so any graph
 change requires GAMP-derived regeneration.
 
 The project exists to preserve pangenome-aware alignment evidence while either presenting common
@@ -85,8 +85,8 @@ remain different.
 The final V1 CLI must accept:
 
 1. **Name-grouped GAMP** containing one or more multipath alignments per cDNA read.
-2. **Existing `.xg` graph** for the same graph/node-id space that produced the GAMP,
-   exposing the `vg rna` HST paths used to read transcript compatibility.
+2. **Existing graph and transcript paths** for the same graph/node-id space that produced
+   the GAMP: embedded-path XG by default, GBZ, or XG with a separate GBWT (D094).
 3. **Path identity ledger** (`--path-identity-ledger`, schema `panSC-path-identity-v1`)
    projecting exact graph paths through unique annotation Parents to canonical transcripts and
    genes, and driving `tx2gene.tsv`.

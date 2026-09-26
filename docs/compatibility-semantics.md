@@ -25,8 +25,9 @@ provenance. Invalid and featureless reads
 remain rows. The fact-set dictionary makes repeated evidence fast to resolve; read rows preserve
 the complete denominator for matrices and QC. It deliberately excludes alignment payload, so it
 is not BAM. Replay may alter metadata, tagging, whitelist, or count policy. The manifest freezes
-the source GAMP and XG digests; replay validates the current ledger's transcript/exon structural
-surface but deliberately does not reopen XG. Regenerate from GAMP when the graph,
+the source GAMP and graph/index digests (`xg`, `gbz`, or `xg` plus `gbwt`); replay validates the
+current ledger's transcript/exon structural surface but deliberately does not reopen graph
+inputs. Regenerate from GAMP when the graph,
 transcript/exon structure, or compatibility logic changes.
 
 ## Winner selection and collapse

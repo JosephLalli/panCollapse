@@ -82,9 +82,21 @@ if(NOT PANCOLLAPSE_PYSAM_RC EQUAL 0)
     "Install pysam for that interpreter, or pass "
     "-DPython3_EXECUTABLE=/path/to/python-with-pysam (the same interpreter umi_tools uses).")
 endif()
-set(PT_SMOKE_DIR "${CMAKE_CURRENT_BINARY_DIR}/pathtally_smoke_work")
+set(PANCOLLAPSE_TEST_GRAPH_MODE "xg" CACHE STRING "Projection fixture backend: xg, gbz, xg-gbwt")
+set_property(CACHE PANCOLLAPSE_TEST_GRAPH_MODE PROPERTY STRINGS xg gbz xg-gbwt)
+if(NOT PANCOLLAPSE_TEST_GRAPH_MODE MATCHES "^(xg|gbz|xg-gbwt)$")
+  message(FATAL_ERROR "Invalid PANCOLLAPSE_TEST_GRAPH_MODE")
+endif()
+set(PANCOLLAPSE_TEST_VG "${PANCOLLAPSE_VG_ROOT}/bin/vg" CACHE FILEPATH "VG fixture executable")
+set(PT_FIXTURE_ROOT "${CMAKE_CURRENT_BINARY_DIR}/${PANCOLLAPSE_TEST_GRAPH_MODE}")
+file(MAKE_DIRECTORY "${PT_FIXTURE_ROOT}")
+set(PT_PROGRAM "${CMAKE_CURRENT_BINARY_DIR}/panCollapse-fixture-${PANCOLLAPSE_TEST_GRAPH_MODE}")
+file(GENERATE OUTPUT "${PT_PROGRAM}" CONTENT
+  "#!/bin/sh\nexec '${Python3_EXECUTABLE}' '${CMAKE_CURRENT_SOURCE_DIR}/graph_input_fixture.py' '${PANCOLLAPSE_TEST_GRAPH_MODE}' '${PANCOLLAPSE_TEST_VG}' '$<TARGET_FILE:panCollapse>' \"$@\"\n"
+  FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+set(PT_SMOKE_DIR "${PT_FIXTURE_ROOT}/pathtally_smoke_work")
 set(PT_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pathtally_smoke")
-set(PT_VG "${PANCOLLAPSE_VG_ROOT}/bin/vg")
+set(PT_VG "${PANCOLLAPSE_TEST_VG}")
 
 add_test(NAME pathtally_smoke_setup
   COMMAND ${CMAKE_COMMAND} -E make_directory "${PT_SMOKE_DIR}")
@@ -107,14 +119,14 @@ set_tests_properties(pathtally_smoke_paths PROPERTIES LABELS "vg;pathtally"
   FIXTURES_REQUIRED pathtally_smoke_dir FIXTURES_SETUP pathtally_smoke_inputs)
 
 add_test(NAME pathtally_smoke_convert
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/out")
 set_tests_properties(pathtally_smoke_convert PROPERTIES LABELS "vg;pathtally"
   FIXTURES_REQUIRED pathtally_smoke_inputs FIXTURES_SETUP pathtally_smoke_out)
 
 add_test(NAME pathtally_legacy_requires_explicit_adapter
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/implicit_legacy_out")
 set_tests_properties(pathtally_legacy_requires_explicit_adapter PROPERTIES
@@ -134,7 +146,7 @@ set_tests_properties(pathtally_smoke_oracle PROPERTIES LABELS "vg;pathtally"
 # oracle verifies that collapse happens only after that tie selection, yielding both
 # CANON_A and CANON_B (never a doubled CANON_A score that drops CANON_B).
 add_test(NAME pathtally_alias_convert
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g_alias.tsv" --out-dir "${PT_SMOKE_DIR}/alias_out")
 set_tests_properties(pathtally_alias_convert PROPERTIES LABELS "vg;pathtally;t2g-alias"
@@ -157,14 +169,14 @@ set_tests_properties(pathtally_alias_tx2gene PROPERTIES LABELS "vg;pathtally;t2g
 # graph path cannot name conflicting canonical transcripts, and one canonical transcript
 # cannot project to multiple genes.
 add_test(NAME pathtally_alias_path_conflict
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g_path_conflict.tsv" --out-dir "${PT_SMOKE_DIR}/alias_path_conflict")
 set_tests_properties(pathtally_alias_path_conflict PROPERTIES LABELS "vg;pathtally;t2g-alias"
   FIXTURES_REQUIRED pathtally_smoke_inputs WILL_FAIL TRUE)
 
 add_test(NAME pathtally_alias_gene_conflict
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g_gene_conflict.tsv" --out-dir "${PT_SMOKE_DIR}/alias_gene_conflict")
 set_tests_properties(pathtally_alias_gene_conflict PROPERTIES LABELS "vg;pathtally;t2g-alias"
@@ -174,7 +186,7 @@ set_tests_properties(pathtally_alias_gene_conflict PROPERTIES LABELS "vg;pathtal
 # byte-identical to the no-BAM smoke run, the BAM must be valid, and every record's tags and
 # GX gene set must match the independent oracle.
 add_test(NAME pathtally_bam_convert
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/out_bam"
     --bam-out "${PT_SMOKE_DIR}/out_bam/reads.bam")
@@ -205,7 +217,7 @@ set_tests_properties(pathtally_bam_rad_identical PROPERTIES LABELS "vg;pathtally
 # Score mode takes the legacy node_hst_cache path (separate from exact Ex50's node_ledger_cache).
 # Hold output options stable, force chunk merging, and snapshot default/1/8 worker results before
 # byte-comparing every persisted artifact that score mode emits.
-set(PT_SCORE_THREADS_DIR "${CMAKE_CURRENT_BINARY_DIR}/pathtally_score_thread_determinism_work")
+set(PT_SCORE_THREADS_DIR "${PT_FIXTURE_ROOT}/pathtally_score_thread_determinism_work")
 add_test(NAME pathtally_score_thread_determinism_setup
   COMMAND ${CMAKE_COMMAND} -E make_directory "${PT_SCORE_THREADS_DIR}")
 set_tests_properties(pathtally_score_thread_determinism_setup PROPERTIES
@@ -215,7 +227,7 @@ set_tests_properties(pathtally_score_thread_determinism_setup PROPERTIES
 
 add_test(NAME pathtally_score_thread_determinism
   COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/score_thread_determinism.sh"
-    "$<TARGET_FILE:panCollapse>" "${PT_SMOKE_DIR}/reads.gamp" "${PT_SMOKE_DIR}/graph.xg"
+    "${PT_PROGRAM}" "${PT_SMOKE_DIR}/reads.gamp" "${PT_SMOKE_DIR}/graph.xg"
     "${PT_FIX}/t2g.tsv" "${PT_SCORE_THREADS_DIR}")
 set_tests_properties(pathtally_score_thread_determinism PROPERTIES
   LABELS "vg;pathtally;score;threads;multichunk;bam"
@@ -233,7 +245,7 @@ set_tests_properties(pathtally_bam_parity PROPERTIES LABELS "vg;pathtally;bam"
 # gene per cell. bam_count_verify recomputes the counts from the BAM tags independently, so
 # it confirms umi_tools reads the panCollapse tags correctly (expected GENE1=2, GENE2=1).
 add_test(NAME pathtally_bam_count_convert
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads_af.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/bam_count"
     --bam-out "${PT_SMOKE_DIR}/bam_count/reads.bam")
@@ -273,7 +285,7 @@ set_tests_properties(pathtally_bam_posindep_verify PROPERTIES LABELS "vg;pathtal
 # --strand keeps only matching FEATURE records and counts the drops in strand_filtered_groups;
 # every valid group still has one BAM record, with filtered/no-compatible groups barcode-only.
 add_test(NAME pathtally_strand_forward
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${PT_SMOKE_DIR}/reads.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' \
     --strand forward --out-dir '${PT_SMOKE_DIR}/strand_fwd' --bam-out '${PT_SMOKE_DIR}/strand_fwd/reads.bam' \
     && grep -qP '^emitted_groups\\t2$' '${PT_SMOKE_DIR}/strand_fwd/summary.tsv' \
@@ -286,7 +298,7 @@ set_tests_properties(pathtally_strand_forward PROPERTIES LABELS "vg;pathtally;st
   FIXTURES_REQUIRED pathtally_smoke_inputs)
 
 add_test(NAME pathtally_strand_reverse
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${PT_SMOKE_DIR}/reads.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' \
     --strand reverse --out-dir '${PT_SMOKE_DIR}/strand_rev' --bam-out '${PT_SMOKE_DIR}/strand_rev/reads.bam' \
     && grep -qP '^emitted_groups\\t1$' '${PT_SMOKE_DIR}/strand_rev/summary.tsv' \
@@ -300,7 +312,7 @@ set_tests_properties(pathtally_strand_reverse PROPERTIES LABELS "vg;pathtally;st
 # Multi-chunk path: force one chunk per record and confirm the oracle reads all
 # chunks and still matches exactly.
 add_test(NAME pathtally_smoke_convert_multichunk
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/out_mc")
 set_tests_properties(pathtally_smoke_convert_multichunk PROPERTIES LABELS "vg;pathtally"
@@ -322,7 +334,7 @@ set_tests_properties(pathtally_af_gamp PROPERTIES LABELS "vg;pathtally;interop"
   FIXTURES_REQUIRED pathtally_smoke_dir FIXTURES_SETUP pathtally_af_inputs)
 
 add_test(NAME pathtally_af_convert
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads_af.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/af_out")
 set_tests_properties(pathtally_af_convert PROPERTIES LABELS "vg;pathtally;interop"
@@ -372,7 +384,7 @@ set_tests_properties(pathtally_fid_qualadj PROPERTIES LABELS "vg;pathtally;fidel
 
 # Streaming stdin must produce a byte-identical RAD to the file-input smoke run.
 add_test(NAME pathtally_smoke_stdin
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert --gamp - \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert --gamp - \
     --xg '${PT_SMOKE_DIR}/graph.xg' --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' \
     --out-dir '${PT_SMOKE_DIR}/out_stdin' < '${PT_SMOKE_DIR}/reads.gamp' \
     && cmp '${PT_SMOKE_DIR}/out_stdin/map.rad' '${PT_SMOKE_DIR}/out/map.rad'")
@@ -387,7 +399,7 @@ set_tests_properties(pathtally_badmol_gamp PROPERTIES LABELS "vg;pathtally;molec
   FIXTURES_REQUIRED pathtally_smoke_dir FIXTURES_SETUP pathtally_badmol_inputs)
 
 add_test(NAME pathtally_badmol_skip
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${PT_SMOKE_DIR}/reads_badmol.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' \
     --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' --out-dir '${PT_SMOKE_DIR}/badmol_out' \
     && grep -qP '^raw_molecule_malformed_groups\\t1$' '${PT_SMOKE_DIR}/badmol_out/summary.tsv' \
@@ -397,7 +409,7 @@ set_tests_properties(pathtally_badmol_skip PROPERTIES LABELS "vg;pathtally;molec
   FIXTURES_REQUIRED "pathtally_smoke_inputs;pathtally_badmol_inputs")
 
 add_test(NAME pathtally_badmol_fail
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads_badmol.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/badmol_fail_out"
     --molecule-identity-failures fail)
@@ -412,7 +424,7 @@ set_tests_properties(pathtally_recur_gamp PROPERTIES LABELS "vg;pathtally;groupi
   FIXTURES_REQUIRED pathtally_smoke_dir FIXTURES_SETUP pathtally_recur_inputs)
 
 add_test(NAME pathtally_recur_fail
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads_recur.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/recur_out")
 set_tests_properties(pathtally_recur_fail PROPERTIES LABELS "vg;pathtally;grouping"
@@ -421,7 +433,7 @@ set_tests_properties(pathtally_recur_fail PROPERTIES LABELS "vg;pathtally;groupi
 
 # A failed run must not leave a valid-looking map.rad (N10: atomic temp-rename).
 add_test(NAME pathtally_recur_no_partial
-  COMMAND /bin/sh -c "! '$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "! '${PT_PROGRAM}' convert \
     --gamp '${PT_SMOKE_DIR}/reads_recur.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' \
     --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' --out-dir '${PT_SMOKE_DIR}/recur_no_partial_out' \
     && test ! -f '${PT_SMOKE_DIR}/recur_no_partial_out/map.rad'")
@@ -430,7 +442,7 @@ set_tests_properties(pathtally_recur_no_partial PROPERTIES LABELS "vg;pathtally;
 
 # Recurrence detection must remain fail-closed after records are dispatched to workers.
 add_test(NAME pathtally_recur_threaded_no_partial
-  COMMAND /bin/sh -c "! '$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "! '${PT_PROGRAM}' convert \
     --gamp '${PT_SMOKE_DIR}/reads_recur.gamp' --xg '${PT_SMOKE_DIR}/graph.xg' \
     --legacy-adapter hst-v1 --t2g '${PT_FIX}/t2g.tsv' --threads 8 \
     --out-dir '${PT_SMOKE_DIR}/recur_threaded_no_partial_out' \
@@ -446,7 +458,7 @@ set_tests_properties(pathtally_badnode_gamp PROPERTIES LABELS "vg;pathtally;node
   FIXTURES_REQUIRED pathtally_smoke_dir FIXTURES_SETUP pathtally_badnode_inputs)
 
 add_test(NAME pathtally_badnode_fail
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${PT_SMOKE_DIR}/reads_badnode.gamp" --xg "${PT_SMOKE_DIR}/graph.xg"
     --legacy-adapter hst-v1 --t2g "${PT_FIX}/t2g.tsv" --out-dir "${PT_SMOKE_DIR}/badnode_out")
 set_tests_properties(pathtally_badnode_fail PROPERTIES LABELS "vg;pathtally;node-space"
@@ -459,7 +471,7 @@ set_tests_properties(pathtally_badnode_fail PROPERTIES LABELS "vg;pathtally;node
 # fixture gene GENE1 has exon nodes 1,3 (HST NM_1.1_H1 = 1+,3+) and intron node 2 (on no HST);
 # exonread hits nodes 1,3, intronread hits node 2 only. The SAME annotated graph gives a spliced
 # count with the HST t2g and a GeneFull count with the gene t2g.
-set(GF_DIR "${CMAKE_CURRENT_BINARY_DIR}/genefull_work")
+set(GF_DIR "${PT_FIXTURE_ROOT}/genefull_work")
 set(GF_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/genefull_smoke")
 
 add_test(NAME genefull_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${GF_DIR}")
@@ -482,7 +494,7 @@ set_tests_properties(genefull_annotate PROPERTIES LABELS "vg;pathtally;genefull"
 # 1 no-compat), but its raw CB/UMI/CY/UY remains in the optional BAM as one unmapped
 # XB:Z:barcode_only record so downstream correction can use the all-read barcode prior.
 add_test(NAME genefull_spliced_drops_intron
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g.tsv' \
     --out-dir '${GF_DIR}/spliced' --bam-out '${GF_DIR}/spliced/reads.bam' \
     && grep -qP '^emitted_groups\\t1$' '${GF_DIR}/spliced/summary.tsv' \
@@ -502,7 +514,7 @@ set_tests_properties(genefull_spliced_drops_intron PROPERTIES LABELS "vg;pathtal
 # GeneFull count: the SAME annotated graph + the generated gene t2g. The intronic read is now
 # called to its gene (2 emitted, 0 no-compat), carried in the BAM as GENE1. No mode flag.
 add_test(NAME genefull_full_calls_intron
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' --legacy-adapter hst-v1 --t2g '${GF_DIR}/genefull.t2g.tsv' \
     --out-dir '${GF_DIR}/full' --bam-out '${GF_DIR}/full/reads.bam' \
     && grep -qP '^emitted_groups\\t2$' '${GF_DIR}/full/summary.tsv' \
@@ -522,7 +534,7 @@ set_tests_properties(genefull_full_calls_intron PROPERTIES LABELS "vg;pathtally;
 # the latter. Both are single-gene, so both reach the RAD here (2 emitted, 0 no-compat). (Rule
 # semantics: pathtally_ledger_test.)
 add_test(NAME genefull_ledger_gene
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
     --count-mode gene --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
     --out-dir '${GF_DIR}/ledger_gene' --bam-out '${GF_DIR}/ledger_gene/reads.bam' \
@@ -536,7 +548,7 @@ set_tests_properties(genefull_ledger_gene PROPERTIES LABELS "vg;pathtally;genefu
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
 add_test(NAME genefull_ledger_genefull
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
     --out-dir '${GF_DIR}/ledger_full' \
@@ -548,7 +560,7 @@ set_tests_properties(genefull_ledger_genefull PROPERTIES LABELS "vg;pathtally;ge
 # result as the path-keyed t2g -- panCollapse strips each embedded path's _R<n>/_H<n> copy suffix and
 # falls back to the bare id. Regression guard for the v0.4.1 bare-t2g fallback.
 add_test(NAME genefull_ledger_bare_t2g
-  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/bare_t2g_regression.sh" "$<TARGET_FILE:panCollapse>" "${GF_FIX}" "${GF_DIR}")
+  COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/bare_t2g_regression.sh" "${PT_PROGRAM}" "${GF_FIX}" "${GF_DIR}")
 set_tests_properties(genefull_ledger_bare_t2g PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
@@ -556,7 +568,7 @@ set_tests_properties(genefull_ledger_bare_t2g PROPERTIES LABELS "vg;pathtally;ge
 # transcript collapse to one canonical target; their path scores are max-collapsed, not
 # summed, before transcript classification.
 add_test(NAME genefull_ledger_alias_t2g
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_alias.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
     --out-dir '${GF_DIR}/ledger_alias' --bam-out '${GF_DIR}/ledger_alias/reads.bam' \
@@ -571,7 +583,7 @@ set_tests_properties(genefull_ledger_alias_t2g PROPERTIES LABELS "vg;pathtally;g
 # canonical target happens to equal the suffix-stripped NM_1.1_H1 graph path must NOT enable the
 # legacy bare-t2g fallback. With no listed exon path there are no transcript spans/calls here.
 add_test(NAME genefull_ledger_alias_exact_only
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_alias_exact_only.tsv' \
     --body-t2g '${GF_DIR}/genefull.t2g.tsv' --out-dir '${GF_DIR}/ledger_alias_exact_only' \
@@ -592,7 +604,7 @@ set_tests_properties(genefull_alias_max_gamp PROPERTIES LABELS "vg;pathtally;gen
   FIXTURES_REQUIRED genefull_dir FIXTURES_SETUP genefull_alias_max_reads)
 
 add_test(NAME genefull_ledger_alias_max_not_sum
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/alias_max.gamp' --xg '${GF_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_alias.tsv' --body-t2g '${GF_DIR}/genefull.t2g.tsv' \
     --out-dir '${GF_DIR}/ledger_alias_max' --bam-out '${GF_DIR}/ledger_alias_max/reads.bam' \
@@ -614,7 +626,7 @@ set_tests_properties(genefull_transcript_body_t2g PROPERTIES
   FIXTURES_REQUIRED genefull_annotated FIXTURES_SETUP genefull_transcript_body_t2g_ready)
 
 add_test(NAME genefull_ledger_transcript_body_calls
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_alias.tsv' \
     --body-t2g '${GF_DIR}/transcript_body.t2g.tsv' --bam-multigene all \
@@ -630,7 +642,7 @@ set_tests_properties(genefull_ledger_transcript_body_calls PROPERTIES
 # Production identity contract: exact headered ledger input, exact XG path/length binding,
 # path -> Parent -> canonical MAX, literal suffix identities, and lossless tied-winner BAM tags.
 add_test(NAME genefull_identity_score
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
     --path-identity-ledger '${GF_FIX}/path_identity_ledger.tsv' --bam-multigene all \
     --out-dir '${GF_DIR}/identity_score' --bam-out '${GF_DIR}/identity_score/reads.bam' \
@@ -645,7 +657,7 @@ set_tests_properties(genefull_identity_score PROPERTIES
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
 add_test(NAME genefull_identity_count
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/reads.gamp' --xg '${GF_DIR}/genefull.xg' \
     --path-identity-ledger '${GF_FIX}/path_identity_ledger.tsv' --count-mode genefull \
     --bam-multigene all --out-dir '${GF_DIR}/identity_count' \
@@ -662,7 +674,7 @@ set_tests_properties(genefull_identity_count PROPERTIES
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads")
 
 add_test(NAME genefull_identity_count_requires_complete_body_links
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
     --path-identity-ledger "${GF_FIX}/path_identity_ledger_incomplete_body.tsv"
     --count-mode genefull --bam-multigene all
@@ -673,7 +685,7 @@ set_tests_properties(genefull_identity_count_requires_complete_body_links PROPER
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads" WILL_FAIL TRUE)
 
 add_test(NAME genefull_identity_missing_xg_path
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
     --path-identity-ledger "${GF_FIX}/path_identity_ledger_missing_graph.tsv"
     --out-dir "${GF_DIR}/identity_missing_path")
@@ -682,7 +694,7 @@ set_tests_properties(genefull_identity_missing_xg_path PROPERTIES
   WILL_FAIL TRUE)
 
 add_test(NAME genefull_identity_xg_length_mismatch
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
     --path-identity-ledger "${GF_FIX}/path_identity_ledger_bad_length.tsv"
     --out-dir "${GF_DIR}/identity_bad_length")
@@ -693,7 +705,7 @@ set_tests_properties(genefull_identity_xg_length_mismatch PROPERTIES
 # The whole-body read gives each duplicate exon path score 30 and each duplicate transcript-body
 # path score 40. MAX collapse calls U; summing the exon copies would incorrectly call S.
 add_test(NAME genefull_ledger_transcript_body_max_not_sum
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/alias_max.gamp' --xg '${GF_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_alias.tsv' \
     --body-t2g '${GF_DIR}/transcript_body.t2g.tsv' --bam-multigene all \
@@ -709,7 +721,7 @@ set_tests_properties(genefull_ledger_transcript_body_max_not_sum PROPERTIES
 # raw body copies scores 30, so MAX keeps only TX_FULL:S; summing the copies would manufacture
 # 60 and incorrectly replace it with TX_BODY:U.
 add_test(NAME genefull_ledger_transcript_body_raw_body_max
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${GF_DIR}/alias_max.gamp' --xg '${GF_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${GF_FIX}/t2g_transcript_body_max.tsv' \
     --body-t2g '${GF_FIX}/body_t2g_transcript_body_max.tsv' --bam-multigene all \
@@ -725,7 +737,7 @@ set_tests_properties(genefull_ledger_transcript_body_raw_body_max PROPERTIES
   FIXTURES_REQUIRED "genefull_annotated;genefull_alias_max_reads")
 
 add_test(NAME genefull_transcript_body_gene_conflict
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
     --count-mode genefull --legacy-adapter hst-v1 --t2g "${GF_FIX}/t2g_alias.tsv"
     --body-t2g "${GF_FIX}/body_t2g_gene_conflict.tsv"
@@ -735,7 +747,7 @@ set_tests_properties(genefull_transcript_body_gene_conflict PROPERTIES
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads" WILL_FAIL TRUE)
 
 add_test(NAME genefull_transcript_body_missing_transcript
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
     --count-mode genefull --legacy-adapter hst-v1 --t2g "${GF_FIX}/t2g_alias.tsv"
     --body-t2g "${GF_FIX}/body_t2g_missing_transcript.tsv"
@@ -745,7 +757,7 @@ set_tests_properties(genefull_transcript_body_missing_transcript PROPERTIES
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads" WILL_FAIL TRUE)
 
 add_test(NAME genefull_transcript_body_mixed_rows
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
     --count-mode genefull --legacy-adapter hst-v1 --t2g "${GF_FIX}/t2g_alias.tsv"
     --body-t2g "${GF_FIX}/body_t2g_mixed.tsv"
@@ -755,7 +767,7 @@ set_tests_properties(genefull_transcript_body_mixed_rows PROPERTIES
   FIXTURES_REQUIRED "genefull_annotated;genefull_reads" WILL_FAIL TRUE)
 
 add_test(NAME genefull_transcript_body_path_collision
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
     --count-mode genefull --legacy-adapter hst-v1 --t2g "${GF_FIX}/t2g_alias.tsv"
     --body-t2g "${GF_FIX}/body_t2g_path_collision.tsv"
@@ -768,7 +780,7 @@ set_tests_properties(genefull_transcript_body_path_collision PROPERTIES
 # hst-v1 t2g/body-t2g inputs cannot supply that contract and must fail instead of emitting an
 # approximate GL ledger.
 add_test(NAME genefull_legacy_ex50pas_rejected
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${GF_DIR}/reads.gamp" --xg "${GF_DIR}/genefull.xg"
     --count-mode genefull_ex50pas --legacy-adapter hst-v1
     --t2g "${GF_FIX}/t2g.tsv" --body-t2g "${GF_DIR}/genefull.t2g.tsv"
@@ -783,7 +795,7 @@ set_tests_properties(genefull_legacy_ex50pas_rejected PROPERTIES
 # splice-discordant-is-P, reverse orientation, and branched MultipathAlignments whose alternatives
 # sit exactly five and six score points below top. The verifier checks the inclusive five-point
 # boundary, the six-point exclusion, all six parallel BAM arrays, and every XP/XU ledger resolution.
-set(EX50_DIR "${CMAKE_CURRENT_BINARY_DIR}/ex50_tier_work")
+set(EX50_DIR "${PT_FIXTURE_ROOT}/ex50_tier_work")
 set(EX50_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ex50_tier_smoke")
 
 add_test(NAME genefull_ex50pas_setup
@@ -886,7 +898,7 @@ set_tests_properties(direct_count_bundle_tagged_fixture PROPERTIES
   FIXTURES_SETUP direct_count_bundle_tagged)
 
 add_test(NAME direct_count_threads_1
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -906,7 +918,7 @@ set_tests_properties(direct_count_threads_1 PROPERTIES
 add_test(NAME direct_count_input_modes
   COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_input_mode_verify.py"
-    $<TARGET_FILE:panCollapse> "${EX50_DIR}" "${EX50_FIX}" "${DIRECT_COUNT_BUNDLE}"
+    ${PT_PROGRAM} "${EX50_DIR}" "${EX50_FIX}" "${DIRECT_COUNT_BUNDLE}"
     "${DIRECT_COUNT_ONE}" "${EX50_DIR}/direct_count_input_modes")
 set_tests_properties(direct_count_input_modes PROPERTIES
   LABELS "vg;count;direct-count;threads;input;parquet"
@@ -917,7 +929,7 @@ set_tests_properties(direct_count_input_modes PROPERTIES
 add_test(NAME direct_count_annotation_cli
   COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_annotation_verify.py"
-    $<TARGET_FILE:panCollapse> "${EX50_FIX}" "${EX50_DIR}" "${DIRECT_COUNT_ONE}")
+    ${PT_PROGRAM} "${EX50_FIX}" "${EX50_DIR}" "${DIRECT_COUNT_ONE}")
 set_tests_properties(direct_count_annotation_cli PROPERTIES
   LABELS "vg;count;direct-count;annotation;parquet"
   FIXTURES_REQUIRED direct_count_one
@@ -926,7 +938,7 @@ set_tests_properties(direct_count_annotation_cli PROPERTIES
 add_test(NAME direct_count_cache_cli
   COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_cache_verify.py"
-    $<TARGET_FILE:panCollapse> "${PT_VG}" "${EX50_FIX}" "${EX50_DIR}"
+    ${PT_PROGRAM} "${PT_VG}" "${EX50_FIX}" "${EX50_DIR}"
     "${DIRECT_COUNT_BUNDLE}")
 set_tests_properties(direct_count_cache_cli PROPERTIES
   LABELS "vg;count;direct-count;cache;annotation;parquet;threads"
@@ -934,7 +946,7 @@ set_tests_properties(direct_count_cache_cli PROPERTIES
   TIMEOUT 180)
 
 add_test(NAME direct_count_threads_4
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -949,7 +961,7 @@ set_tests_properties(direct_count_threads_4 PROPERTIES
 # Each worker spools read-assignment diagnostics privately; the spools merge by ordinal after
 # counting. These flags write no RAD or compatibility output, so no ordered sink is active.
 add_test(NAME direct_count_threads_4_spool
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -966,7 +978,7 @@ set_tests_properties(direct_count_threads_4_spool PROPERTIES
 # without opening GAMP or XG. The fixture is intentionally nine reads so it is
 # fast enough to run during every filter-method iteration.
 add_test(NAME direct_count_compatibility_source
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -981,7 +993,7 @@ set_tests_properties(direct_count_compatibility_source PROPERTIES
   FIXTURES_SETUP direct_count_compatibility_source_output)
 
 add_test(NAME direct_count_compatibility_source_one
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -995,7 +1007,7 @@ set_tests_properties(direct_count_compatibility_source_one PROPERTIES
   FIXTURES_SETUP direct_count_compatibility_one_source_output)
 
 add_test(NAME direct_count_compatibility_tagged_source
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE_TAGGED}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1009,7 +1021,7 @@ set_tests_properties(direct_count_compatibility_tagged_source PROPERTIES
   FIXTURES_SETUP direct_count_compatibility_tagged_source_output)
 
 add_test(NAME direct_count_compatibility_tagged_replay
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --compatibility-in "${DIRECT_COUNT_COMPATIBILITY}"
     --count-bundle "${DIRECT_COUNT_BUNDLE_TAGGED}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1023,7 +1035,7 @@ set_tests_properties(direct_count_compatibility_tagged_replay PROPERTIES
   FIXTURES_SETUP direct_count_compatibility_tagged_replay_output)
 
 add_test(NAME direct_count_compatibility_replay
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --compatibility-in "${DIRECT_COUNT_COMPATIBILITY}"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1036,7 +1048,7 @@ set_tests_properties(direct_count_compatibility_replay PROPERTIES
   FIXTURES_SETUP direct_count_compatibility_replay_output)
 
 add_test(NAME direct_count_compatibility_override
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --compatibility-in "${DIRECT_COUNT_COMPATIBILITY}"
     --count-bundle "${DIRECT_COUNT_BUNDLE}/MANIFEST.json"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1061,7 +1073,7 @@ set_tests_properties(direct_count_compatibility_denominator_gamp PROPERTIES
   FIXTURES_SETUP direct_count_compatibility_denominator_input)
 
 add_test(NAME direct_count_compatibility_denominator_source
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_GAMP}"
     --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
@@ -1077,7 +1089,7 @@ set_tests_properties(direct_count_compatibility_denominator_source PROPERTIES
   FIXTURES_SETUP direct_count_compatibility_denominator_source_output)
 
 add_test(NAME direct_count_compatibility_denominator_replay
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --compatibility-in "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR}"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1112,20 +1124,20 @@ set_tests_properties(direct_count_compatibility_verify PROPERTIES
 
 add_test(NAME direct_count_compatibility_mixed_source_rejected
   COMMAND /bin/sh -c
-    "'$<TARGET_FILE:panCollapse>' count --compatibility-in '${DIRECT_COUNT_COMPATIBILITY}' --gamp '${EX50_DIR}/reads.gamp' --xg '${EX50_DIR}/graph.xg' --count-bundle '${DIRECT_COUNT_BUNDLE}' --barcode-whitelist '${EX50_FIX}/count_whitelist.txt' --cr7 --out-dir '${EX50_DIR}/direct_count_compatibility_forbidden_mixed' > '${EX50_DIR}/direct_count_compatibility_mixed.stderr' 2>&1; status=$?; test $status -ne 0 && grep -q 'exclusive count input' '${EX50_DIR}/direct_count_compatibility_mixed.stderr'")
+    "'${PT_PROGRAM}' count --compatibility-in '${DIRECT_COUNT_COMPATIBILITY}' --gamp '${EX50_DIR}/reads.gamp' --xg '${EX50_DIR}/graph.xg' --count-bundle '${DIRECT_COUNT_BUNDLE}' --barcode-whitelist '${EX50_FIX}/count_whitelist.txt' --cr7 --out-dir '${EX50_DIR}/direct_count_compatibility_forbidden_mixed' > '${EX50_DIR}/direct_count_compatibility_mixed.stderr' 2>&1; status=$?; test $status -ne 0 && grep -q 'exclusive count input' '${EX50_DIR}/direct_count_compatibility_mixed.stderr'")
 set_tests_properties(direct_count_compatibility_mixed_source_rejected PROPERTIES
   LABELS "vg;count;direct-count;compatibility;cli"
   FIXTURES_REQUIRED direct_count_compatibility_source_output)
 
 add_test(NAME direct_count_compatibility_nested_output_rejected
   COMMAND /bin/sh -c
-    "'$<TARGET_FILE:panCollapse>' count --compatibility-in '${DIRECT_COUNT_COMPATIBILITY}' --count-bundle '${DIRECT_COUNT_BUNDLE}' --barcode-whitelist '${EX50_FIX}/count_whitelist.txt' --cr7 --out-dir '${DIRECT_COUNT_COMPATIBILITY}/nested-output' > '${EX50_DIR}/direct_count_compatibility_nested.stderr' 2>&1; status=$?; test $status -ne 0 && grep -q 'must be disjoint paths' '${EX50_DIR}/direct_count_compatibility_nested.stderr'")
+    "'${PT_PROGRAM}' count --compatibility-in '${DIRECT_COUNT_COMPATIBILITY}' --count-bundle '${DIRECT_COUNT_BUNDLE}' --barcode-whitelist '${EX50_FIX}/count_whitelist.txt' --cr7 --out-dir '${DIRECT_COUNT_COMPATIBILITY}/nested-output' > '${EX50_DIR}/direct_count_compatibility_nested.stderr' 2>&1; status=$?; test $status -ne 0 && grep -q 'must be disjoint paths' '${EX50_DIR}/direct_count_compatibility_nested.stderr'")
 set_tests_properties(direct_count_compatibility_nested_output_rejected PROPERTIES
   LABELS "vg;count;direct-count;compatibility;cli"
   FIXTURES_REQUIRED direct_count_compatibility_source_output)
 
 add_test(NAME direct_count_cr7_only
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1138,7 +1150,7 @@ set_tests_properties(direct_count_cr7_only PROPERTIES
   FIXTURES_SETUP direct_count_cr7)
 
 add_test(NAME direct_count_pansc_only
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1160,7 +1172,7 @@ set_tests_properties(direct_count_verify PROPERTIES
     "direct_count_one;direct_count_four;direct_count_cr7;direct_count_pansc;direct_count_four_spool")
 
 add_test(NAME direct_count_duplicate_profile_rejected
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1170,7 +1182,7 @@ set_tests_properties(direct_count_duplicate_profile_rejected PROPERTIES
   FIXTURES_REQUIRED direct_count_bundle WILL_FAIL TRUE)
 
 add_test(NAME direct_count_override_scope_rejected
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1181,7 +1193,7 @@ set_tests_properties(direct_count_override_scope_rejected PROPERTIES
   FIXTURES_REQUIRED direct_count_bundle WILL_FAIL TRUE)
 
 add_test(NAME direct_count_override_sensitivity
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}/MANIFEST.json"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1202,7 +1214,7 @@ set_tests_properties(direct_count_override_verify PROPERTIES
   FIXTURES_REQUIRED direct_count_override_output)
 
 add_test(NAME direct_count_t2g_mismatch_rejected
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1219,7 +1231,7 @@ set_tests_properties(direct_count_empty_gamp_setup PROPERTIES
   FIXTURES_REQUIRED direct_count_clean FIXTURES_SETUP direct_count_empty_input)
 
 add_test(NAME direct_count_empty_gamp
-  COMMAND $<TARGET_FILE:panCollapse> count
+  COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/empty.gamp" --xg "${EX50_DIR}/graph.xg"
     --count-bundle "${DIRECT_COUNT_BUNDLE}"
     --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
@@ -1237,7 +1249,7 @@ set_tests_properties(direct_count_empty_verify PROPERTIES
   FIXTURES_REQUIRED direct_count_empty_output)
 
 add_test(NAME genefull_ex50pas_rad_baseline
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
     --count-mode genefull --out-dir "${EX50_DIR}/baseline")
@@ -1247,7 +1259,7 @@ set_tests_properties(genefull_ex50pas_rad_baseline PROPERTIES
   FIXTURES_SETUP genefull_ex50pas_baseline)
 
 add_test(NAME genefull_ex50pas_exact
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
     --count-mode genefull_ex50pas --bam-multigene all
@@ -1273,10 +1285,10 @@ set_tests_properties(direct_count_rad_matches_convert PROPERTIES
 # The driver clears its work root before rebuilding inputs, compares every persisted artifact from
 # --threads 1 and 8 byte-for-byte in both production and legacy geometry, and proves parallel
 # failures retain lexical Parent ordering without committing a partial output directory.
-set(PT_PARALLEL_EXACT_INIT_DIR "${CMAKE_CURRENT_BINARY_DIR}/parallel_exact_init_work")
+set(PT_PARALLEL_EXACT_INIT_DIR "${PT_FIXTURE_ROOT}/parallel_exact_init_work")
 add_test(NAME genefull_ex50pas_parallel_init_determinism
   COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/parallel_exact_init_determinism.sh"
-    "$<TARGET_FILE:panCollapse>" "${PT_VG}" "${Python3_EXECUTABLE}"
+    "${PT_PROGRAM}" "${PT_VG}" "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/make_parallel_exact_init_fixture.py" "${CMAKE_COMMAND}"
     "${PT_PARALLEL_EXACT_INIT_DIR}" "${PANCOLLAPSE_SAMTOOLS}")
 set_tests_properties(genefull_ex50pas_parallel_init_determinism PROPERTIES
@@ -1286,7 +1298,7 @@ set_tests_properties(genefull_ex50pas_parallel_init_determinism PROPERTIES
 # E/P/B rank selection. BODY_PARENT_2 is lower-ranked than EXON_PARENT_1 for `concord`; retaining
 # only the body Parent must therefore reselect B/F rather than drop the already-projected E/F call.
 add_test(NAME genefull_ex50pas_strict_allowlisted_compact
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
     --path-identity-ledger-sha256 c2b91c03743bc22f40a9cc1b55545e0332d7e02d47aa5bcd6a3f2dbe6c1efb32
@@ -1313,7 +1325,7 @@ set_tests_properties(genefull_ex50pas_strict_allowlisted_compact_verify PROPERTI
 # Disabled means no score pruning at all (the pre-D068 exact-evidence surface), not a zero-width
 # window. The top-minus-six within-DAG and cross-record alternatives must therefore reappear.
 add_test(NAME genefull_ex50pas_score_window_disabled
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
     --count-mode genefull_ex50pas --bam-multigene all --no-ex50-score-window
@@ -1325,7 +1337,7 @@ set_tests_properties(genefull_ex50pas_score_window_disabled PROPERTIES
   FIXTURES_SETUP genefull_ex50pas_score_window_disabled_out)
 
 add_test(NAME genefull_ex50pas_score_window_optout_requires_exact_bam
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
     --no-ex50-score-window --out-dir "${EX50_DIR}/invalid_score_window_optout")
@@ -1334,7 +1346,7 @@ set_tests_properties(genefull_ex50pas_score_window_optout_requires_exact_bam PRO
   FIXTURES_REQUIRED genefull_ex50pas_inputs WILL_FAIL TRUE)
 
 add_test(NAME genefull_ex50pas_debug
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
     --count-mode genefull_ex50pas --bam-multigene all
@@ -1346,7 +1358,7 @@ set_tests_properties(genefull_ex50pas_debug PROPERTIES
   FIXTURES_SETUP genefull_ex50pas_debug_out)
 
 add_test(NAME genefull_ex50pas_requires_bam
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
     --count-mode genefull_ex50pas --bam-multigene all
@@ -1356,7 +1368,7 @@ set_tests_properties(genefull_ex50pas_requires_bam PROPERTIES
   FIXTURES_REQUIRED genefull_ex50pas_inputs WILL_FAIL TRUE)
 
 add_test(NAME genefull_ex50pas_requires_all
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
     --count-mode genefull_ex50pas
@@ -1413,7 +1425,7 @@ set_tests_properties(genefull_ex50pas_debug_rad_unchanged PROPERTIES
 # Threaded conversion must retain a deterministic persisted order. Use the exact Ex50 fixture
 # because it emits RAD, BAM, summary, tx2gene, and the evidence sidecar in one small pass. One
 # byte per chunk forces ordered RAD chunk merging without making the fixture appreciably larger.
-set(EX50_THREADS_DIR "${CMAKE_CURRENT_BINARY_DIR}/ex50_thread_determinism_work")
+set(EX50_THREADS_DIR "${PT_FIXTURE_ROOT}/ex50_thread_determinism_work")
 add_test(NAME genefull_ex50pas_thread_determinism_setup
   COMMAND ${CMAKE_COMMAND} -E make_directory "${EX50_THREADS_DIR}")
 set_tests_properties(genefull_ex50pas_thread_determinism_setup PROPERTIES
@@ -1423,7 +1435,7 @@ set_tests_properties(genefull_ex50pas_thread_determinism_setup PROPERTIES
 
 add_test(NAME genefull_ex50pas_thread_determinism
   COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/thread_determinism.sh"
-    "$<TARGET_FILE:panCollapse>" "${EX50_DIR}/reads.gamp" "${EX50_DIR}/graph.xg"
+    "${PT_PROGRAM}" "${EX50_DIR}/reads.gamp" "${EX50_DIR}/graph.xg"
     "${EX50_FIX}/path_identity_ledger.tsv" "${EX50_THREADS_DIR}")
 set_tests_properties(genefull_ex50pas_thread_determinism PROPERTIES
   LABELS "vg;pathtally;genefull;ledger;ex50;threads;multichunk;bam;debug"
@@ -1443,7 +1455,7 @@ set_tests_properties(genefull_ex50pas_default_threads_matches_one PROPERTIES
 
 # Validate the public thread-count contract independently of data processing.
 add_test(NAME genefull_ex50pas_threads_zero_rejected
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
     --count-mode genefull_ex50pas --bam-multigene all --threads 0
@@ -1453,7 +1465,7 @@ set_tests_properties(genefull_ex50pas_threads_zero_rejected PROPERTIES
   WILL_FAIL TRUE FIXTURES_REQUIRED genefull_ex50pas_inputs)
 
 add_test(NAME genefull_ex50pas_threads_noninteger_rejected
-  COMMAND $<TARGET_FILE:panCollapse> convert
+  COMMAND ${PT_PROGRAM} convert
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
     --path-identity-ledger "${EX50_FIX}/path_identity_ledger.tsv"
     --count-mode genefull_ex50pas --bam-multigene all --threads nope
@@ -1464,7 +1476,7 @@ set_tests_properties(genefull_ex50pas_threads_noninteger_rejected PROPERTIES
 
 # A cyclic transcript-body path may not abort the arm: its Parent keeps exon-layer evidence while
 # a clean Parent on the same graph retains byte-equivalent exact Ex50 evidence.
-set(CYCLIC_DIR "${CMAKE_CURRENT_BINARY_DIR}/cyclic_body_work")
+set(CYCLIC_DIR "${PT_FIXTURE_ROOT}/cyclic_body_work")
 set(CYCLIC_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cyclic_body_smoke")
 add_test(NAME cyclic_body_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${CYCLIC_DIR}")
 set_tests_properties(cyclic_body_setup PROPERTIES LABELS "vg;pathtally;ledger;ex50;cyclic"
@@ -1474,26 +1486,26 @@ add_test(NAME cyclic_body_inputs
 set_tests_properties(cyclic_body_inputs PROPERTIES LABELS "vg;pathtally;ledger;ex50;cyclic"
   FIXTURES_REQUIRED cyclic_body_dir FIXTURES_SETUP cyclic_body_inputs_ready)
 add_test(NAME cyclic_body_degrades_and_preserves_clean
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/cyclic' --bam-out '${CYCLIC_DIR}/cyclic/reads.bam' --debug-evidence-out '${CYCLIC_DIR}/cyclic/debug.tsv' 2> '${CYCLIC_DIR}/cyclic.stderr' && '$<TARGET_FILE:panCollapse>' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_clean.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/clean' --bam-out '${CYCLIC_DIR}/clean/reads.bam' && grep -qP '^body_paths_degraded\\t1$' '${CYCLIC_DIR}/cyclic/summary.tsv' && grep -qP '^body_path_degrade_reason\\trepeated_exonic_node$' '${CYCLIC_DIR}/cyclic/summary.tsv' && grep -q 'debug: degraded body path CYCLIC_BODY' '${CYCLIC_DIR}/cyclic.stderr' && '${Python3_EXECUTABLE}' '${CMAKE_CURRENT_SOURCE_DIR}/cyclic_body_verify.py' '${CYCLIC_DIR}/cyclic/reads.bam' '${CYCLIC_DIR}/clean/reads.bam'")
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/cyclic' --bam-out '${CYCLIC_DIR}/cyclic/reads.bam' --debug-evidence-out '${CYCLIC_DIR}/cyclic/debug.tsv' 2> '${CYCLIC_DIR}/cyclic.stderr' && '${PT_PROGRAM}' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_clean.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/clean' --bam-out '${CYCLIC_DIR}/clean/reads.bam' && grep -qP '^body_paths_degraded\\t1$' '${CYCLIC_DIR}/cyclic/summary.tsv' && grep -qP '^body_path_degrade_reason\\trepeated_exonic_node$' '${CYCLIC_DIR}/cyclic/summary.tsv' && grep -q 'debug: degraded body path CYCLIC_BODY' '${CYCLIC_DIR}/cyclic.stderr' && '${Python3_EXECUTABLE}' '${CMAKE_CURRENT_SOURCE_DIR}/cyclic_body_verify.py' '${CYCLIC_DIR}/cyclic/reads.bam' '${CYCLIC_DIR}/clean/reads.bam'")
 set_tests_properties(cyclic_body_degrades_and_preserves_clean PROPERTIES
   LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
   FIXTURES_REQUIRED cyclic_body_inputs_ready)
 
 add_test(NAME cyclic_body_gene_change_fails_closed
-  COMMAND /bin/sh -c "if '$<TARGET_FILE:panCollapse>' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_gene_mismatch.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/gene_change' --bam-out '${CYCLIC_DIR}/gene_change/reads.bam' 2> '${CYCLIC_DIR}/gene_change.stderr'; then exit 1; fi && grep -Fx 'panCollapse: refusing body-path degradation because linked Parent CYCLIC_EXON_PARENT changes counted gene from SHARED_GENE to OTHER_GENE' '${CYCLIC_DIR}/gene_change.stderr'")
+  COMMAND /bin/sh -c "if '${PT_PROGRAM}' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_gene_mismatch.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/gene_change' --bam-out '${CYCLIC_DIR}/gene_change/reads.bam' 2> '${CYCLIC_DIR}/gene_change.stderr'; then exit 1; fi && grep -Fx 'panCollapse: refusing body-path degradation because linked Parent CYCLIC_EXON_PARENT changes counted gene from SHARED_GENE to OTHER_GENE' '${CYCLIC_DIR}/gene_change.stderr'")
 set_tests_properties(cyclic_body_gene_change_fails_closed PROPERTIES
   LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
   FIXTURES_REQUIRED cyclic_body_inputs_ready)
 
 add_test(NAME cyclic_body_resolvable_gene_change_fails_closed
-  COMMAND /bin/sh -c "if '$<TARGET_FILE:panCollapse>' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_clean_gene_mismatch.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/resolvable_gene_change' --bam-out '${CYCLIC_DIR}/resolvable_gene_change/reads.bam' 2> '${CYCLIC_DIR}/resolvable_gene_change.stderr'; then exit 1; fi && grep -Fx 'panCollapse: path identity ledger body Parent CLEAN_BODY_PARENT changes counted gene from SHARED_GENE to OTHER_GENE' '${CYCLIC_DIR}/resolvable_gene_change.stderr'")
+  COMMAND /bin/sh -c "if '${PT_PROGRAM}' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_clean_gene_mismatch.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/resolvable_gene_change' --bam-out '${CYCLIC_DIR}/resolvable_gene_change/reads.bam' 2> '${CYCLIC_DIR}/resolvable_gene_change.stderr'; then exit 1; fi && grep -Fx 'panCollapse: path identity ledger body Parent CLEAN_BODY_PARENT changes counted gene from SHARED_GENE to OTHER_GENE' '${CYCLIC_DIR}/resolvable_gene_change.stderr'")
 set_tests_properties(cyclic_body_resolvable_gene_change_fails_closed PROPERTIES
   LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
   FIXTURES_REQUIRED cyclic_body_inputs_ready)
 
 # A repeated body node is valid when exon orientation fixes one occurrence. The accepted model
 # must carry that exact occurrence through its base geometry and into the emitted direction.
-set(RESOLVED_BODY_DIR "${CMAKE_CURRENT_BINARY_DIR}/repeated_body_resolved_work")
+set(RESOLVED_BODY_DIR "${PT_FIXTURE_ROOT}/repeated_body_resolved_work")
 set(RESOLVED_BODY_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/repeated_body_resolved")
 add_test(NAME repeated_body_resolved_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOLVED_BODY_DIR}")
 set_tests_properties(repeated_body_resolved_setup PROPERTIES
@@ -1504,7 +1516,7 @@ set_tests_properties(repeated_body_resolved_inputs PROPERTIES
   LABELS "vg;pathtally;ledger;ex50;cyclic"
   FIXTURES_REQUIRED repeated_body_resolved_dir FIXTURES_SETUP repeated_body_resolved_inputs_ready)
 add_test(NAME repeated_body_resolved_occurrence_and_orientation
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert --gamp '${RESOLVED_BODY_DIR}/reads.gamp' --xg '${RESOLVED_BODY_DIR}/graph.xg' --path-identity-ledger '${RESOLVED_BODY_FIX}/path_identity_ledger.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${RESOLVED_BODY_DIR}/out' --bam-out '${RESOLVED_BODY_DIR}/out/reads.bam' && grep -qP '^body_paths_degraded\\t0$' '${RESOLVED_BODY_DIR}/out/summary.tsv' && grep -qP '^body_path_degrade_reason\\tnone$' '${RESOLVED_BODY_DIR}/out/summary.tsv' && '${Python3_EXECUTABLE}' '${CMAKE_CURRENT_SOURCE_DIR}/repeated_body_resolved_verify.py' '${RESOLVED_BODY_DIR}/out/reads.bam'")
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert --gamp '${RESOLVED_BODY_DIR}/reads.gamp' --xg '${RESOLVED_BODY_DIR}/graph.xg' --path-identity-ledger '${RESOLVED_BODY_FIX}/path_identity_ledger.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${RESOLVED_BODY_DIR}/out' --bam-out '${RESOLVED_BODY_DIR}/out/reads.bam' && grep -qP '^body_paths_degraded\\t0$' '${RESOLVED_BODY_DIR}/out/summary.tsv' && grep -qP '^body_path_degrade_reason\\tnone$' '${RESOLVED_BODY_DIR}/out/summary.tsv' && '${Python3_EXECUTABLE}' '${CMAKE_CURRENT_SOURCE_DIR}/repeated_body_resolved_verify.py' '${RESOLVED_BODY_DIR}/out/reads.bam'")
 set_tests_properties(repeated_body_resolved_occurrence_and_orientation PROPERTIES
   LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
   FIXTURES_REQUIRED repeated_body_resolved_inputs_ready)
@@ -1522,7 +1534,7 @@ set_tests_properties(repeated_body_resolved_occurrence_and_orientation PROPERTIE
 # top via NM_1.2's own exon path (spliced), while NM_1.1's precomputed span still brackets it and
 # NM_1.1's own exon path does not explain it (unspliced) -- the SAME gene ends up with a spliced AND
 # an unspliced transcript, which count_cr derives as ambiguous.
-set(ISO_DIR "${CMAKE_CURRENT_BINARY_DIR}/genefull_isoform_work")
+set(ISO_DIR "${PT_FIXTURE_ROOT}/genefull_isoform_work")
 set(ISO_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/genefull_isoform_smoke")
 
 add_test(NAME genefull_isoform_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${ISO_DIR}")
@@ -1547,7 +1559,7 @@ set_tests_properties(genefull_isoform_annotate PROPERTIES LABELS "vg;pathtally;g
 # node-membership called both S; a naive gate that only tightened S would have demoted NM_1.2 to U,
 # wrongly making the gene ambiguous and dropping this legitimately spliced read from Gene.)
 add_test(NAME genefull_ledger_isoform_control
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${ISO_DIR}/reads.gamp' --xg '${ISO_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${ISO_FIX}/t2g.tsv' --body-t2g '${ISO_DIR}/genefull.t2g.tsv' \
     --out-dir '${ISO_DIR}/ledger' --bam-out '${ISO_DIR}/ledger/reads.bam' \
@@ -1563,7 +1575,7 @@ set_tests_properties(genefull_ledger_isoform_control PROPERTIES LABELS "vg;patht
 # exclude GENE1 here as ambiguous while genefull keeps it. ambigread crosses no splice edge of its
 # own (a single-node touch), so D061 concordance is unconstrained here and this case is unaffected.
 add_test(NAME genefull_ledger_cross_isoform_ambiguous
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${ISO_DIR}/reads.gamp' --xg '${ISO_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${ISO_FIX}/t2g.tsv' --body-t2g '${ISO_DIR}/genefull.t2g.tsv' \
     --out-dir '${ISO_DIR}/ledger' --bam-out '${ISO_DIR}/ledger/reads.bam' \
@@ -1585,7 +1597,7 @@ set_tests_properties(genefull_ledger_cross_isoform_ambiguous PROPERTIES LABELS "
 # would incorrectly assign the edge to NM_1.2. The pure ledger test separately guards nonmonotonic,
 # reversed, and repeated-node geometry without changing fixture ids.
 add_test(NAME genefull_ledger_transcript_body_splice_ownership
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${ISO_DIR}/reads.gamp' --xg '${ISO_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${ISO_FIX}/t2g_transcript_geometry.tsv' \
     --body-t2g '${ISO_FIX}/body_t2g_transcript_geometry.tsv' --bam-multigene all \
@@ -1607,7 +1619,7 @@ set_tests_properties(genefull_ledger_transcript_body_splice_ownership PROPERTIES
 # intron/body node 2) and GENE2 (body = node 2 exactly, wholly inside GENE1's intron) -- so a read
 # on the shared node 2 (multigeneread) is genuinely compatible with both gene bodies under a ledger
 # mode; exonread (nodes 1,3) stays GENE1-only, a control proving single-gene reads are untouched.
-set(MG_DIR "${CMAKE_CURRENT_BINARY_DIR}/multigene_bam_work")
+set(MG_DIR "${PT_FIXTURE_ROOT}/multigene_bam_work")
 set(MG_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/multigene_bam_smoke")
 
 add_test(NAME multigene_bam_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${MG_DIR}")
@@ -1628,7 +1640,7 @@ set_tests_properties(multigene_bam_annotate PROPERTIES LABELS "vg;pathtally;gene
 # --bam-multigene omit (default): multigeneread is still absent from both RAD and BAM FEATURE
 # evidence, but is retained as a barcode-only record for the all-read correction prior.
 add_test(NAME multigene_bam_omit_drops_both
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
     --out-dir '${MG_DIR}/omit' --bam-out '${MG_DIR}/omit/reads.bam' --bam-multigene omit \
@@ -1652,11 +1664,11 @@ set_tests_properties(multigene_bam_omit_drops_both PROPERTIES LABELS "vg;pathtal
 # either way. Self-contained (runs its own omit comparison run rather than depending on another
 # test's output directory, so it has no ordering dependency beyond the shared annotated fixture).
 add_test(NAME multigene_bam_all_rescues_bam_only
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
     --out-dir '${MG_DIR}/all_cmp_omit' --bam-multigene omit \
-    && '$<TARGET_FILE:panCollapse>' convert \
+    && '${PT_PROGRAM}' convert \
        --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
        --count-mode genefull --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' --body-t2g '${MG_DIR}/genefull.t2g.tsv' \
        --out-dir '${MG_DIR}/all' --bam-out '${MG_DIR}/all/reads.bam' --bam-multigene all \
@@ -1678,7 +1690,7 @@ add_test(NAME multigene_bam_transcript_body_all
   COMMAND /bin/sh -c "awk -F'\\t' 'BEGIN { OFS=\"\\t\" } \
       { tx = (\$2 == \"GENE1\" ? \"NM_1.1\" : \"NM_2.1\"); print \$1, \$2, tx }' \
       '${MG_DIR}/genefull.t2g.tsv' > '${MG_DIR}/transcript_body.t2g.tsv' \
-    && '$<TARGET_FILE:panCollapse>' convert \
+    && '${PT_PROGRAM}' convert \
       --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' \
       --count-mode genefull --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' \
       --body-t2g '${MG_DIR}/transcript_body.t2g.tsv' --bam-multigene all \
@@ -1700,10 +1712,10 @@ set_tests_properties(multigene_bam_transcript_body_all PROPERTIES
 # BAM records identical to omit; only the recorded @PG command line differs, which this test does
 # not compare). Confirms D058 does not touch the D048 default path.
 add_test(NAME multigene_bam_all_noop_in_score_mode
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' \
     --out-dir '${MG_DIR}/score_omit' --bam-out '${MG_DIR}/score_omit/reads.bam' --bam-multigene omit \
-    && '$<TARGET_FILE:panCollapse>' convert \
+    && '${PT_PROGRAM}' convert \
        --gamp '${MG_DIR}/reads.gamp' --xg '${MG_DIR}/genefull.xg' --legacy-adapter hst-v1 --t2g '${MG_FIX}/t2g.tsv' \
        --out-dir '${MG_DIR}/score_all' --bam-out '${MG_DIR}/score_all/reads.bam' --bam-multigene all \
     && cmp '${MG_DIR}/score_omit/map.rad' '${MG_DIR}/score_all/map.rad' \
@@ -1728,7 +1740,7 @@ set_tests_properties(multigene_bam_all_noop_in_score_mode PROPERTIES LABELS "vg;
 # unspliced, is dropped entirely rather than merely demoted (matching the real TUBB1 finding: the
 # non-owning transcript gets no Gene credit at all). NM_4.1 owns the edge and stays spliced. Net: one
 # emitted transcript (NM_4.1 = S), a single-gene call, not a two-gene multigene drop.
-set(SC_DIR "${CMAKE_CURRENT_BINARY_DIR}/splice_concordance_work")
+set(SC_DIR "${PT_FIXTURE_ROOT}/splice_concordance_work")
 set(SC_FIX "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/splice_concordance_smoke")
 
 add_test(NAME splice_concordance_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${SC_DIR}")
@@ -1751,7 +1763,7 @@ set_tests_properties(splice_concordance_annotate PROPERTIES LABELS "vg;pathtally
 # absent -- not merely demoted to U. Single gene, single transcript, no multigene drop: this is the
 # "assert A is NOT S" case from the splice-concordance spec.
 add_test(NAME genefull_ledger_splice_concordance_cross_gene
-  COMMAND /bin/sh -c "'$<TARGET_FILE:panCollapse>' convert \
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert \
     --gamp '${SC_DIR}/reads.gamp' --xg '${SC_DIR}/genefull.xg' \
     --count-mode genefull --legacy-adapter hst-v1 --t2g '${SC_FIX}/t2g.tsv' --body-t2g '${SC_DIR}/genefull.t2g.tsv' \
     --out-dir '${SC_DIR}/ledger' --bam-out '${SC_DIR}/ledger/reads.bam' \
@@ -1764,3 +1776,15 @@ add_test(NAME genefull_ledger_splice_concordance_cross_gene
     && '${PANCOLLAPSE_SAMTOOLS}' view '${SC_DIR}/ledger/reads.bam' | grep crossgeneread | grep -q 'XT:Z:GENE4'")
 set_tests_properties(genefull_ledger_splice_concordance_cross_gene PROPERTIES LABELS "vg;pathtally;genefull;ledger"
   FIXTURES_REQUIRED "splice_concordance_annotated;splice_concordance_reads")
+
+add_test(NAME graph_input_setup COMMAND /bin/sh -c
+  "mkdir -p '${PT_FIXTURE_ROOT}/graph_input' && '${PT_VG}' convert -g '${CMAKE_CURRENT_SOURCE_DIR}/fixtures/graph_input/graph.gfa' -x > '${PT_FIXTURE_ROOT}/graph_input/graph.xg'")
+set_tests_properties(graph_input_setup PROPERTIES LABELS "vg;graph-input;projection" FIXTURES_SETUP graph_input_ready)
+add_executable(graph_input_test graph_input_test.cpp)
+target_link_libraries(graph_input_test PRIVATE panCollapse_graph_input panCollapse::warnings)
+add_test(NAME graph_input_test COMMAND graph_input_test "${PT_FIXTURE_ROOT}/graph_input/graph.xg")
+set_tests_properties(graph_input_test PROPERTIES LABELS "vg;graph-input;projection" FIXTURES_REQUIRED graph_input_ready TIMEOUT 120)
+add_test(NAME graph_input_failures
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/graph_input_failures.py"
+    $<TARGET_FILE:panCollapse> "${PT_VG}" "${PT_FIXTURE_ROOT}/graph_input_failures")
+set_tests_properties(graph_input_failures PROPERTIES LABELS "vg;graph-input;projection" TIMEOUT 120)

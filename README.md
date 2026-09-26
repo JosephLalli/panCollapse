@@ -11,14 +11,16 @@ GAMP-to-RAD/BAM evidence interface.
 
 ## Current work
 
-**CURRENT: measured graph-input design ready for architecture review.** The
-[design memo](docs/research/gbz-gbwt-count-inputs-design-20260926.md) proposes GBZ and graph-only
-XG+GBWT inputs using FastLocate and selected-path position prefixes. Repeated XG counting on
-the supplied joint chr20–22 100,000-read-group fixture has identical scientific outputs.
-Chr21 graph-access probes, complete selected-path walk checks, lookup comparisons and a chr2
-resource model are recorded separately from native-count results. The default XG implementation
-is unchanged; the new inputs are not implemented yet. Start from [PROGRESS.md](PROGRESS.md)
-and [D094](docs/decisions.md). Production implementation awaits **Gate Architecture Approved**.
+**CURRENT: GBZ and graph-only XG+GBWT inputs are implemented.** Both `convert` and `count`
+accept the new graph flags through the same projection code. XG remains the default. All
+projection fixtures pass in all three modes, and 382 scientific fixture products match per
+alternative. All three modes produce identical scientific outputs on the named 100,000-read
+real subset, including compressed MEX, RAD, Parquet and counters; repeated XG runs are also
+identical. See the measurements and limits in the
+[implementation record](docs/research/gbz-gbwt-input-implementation-20260926.md),
+[PROGRESS.md](PROGRESS.md), and [D094](docs/decisions.md). The
+[measured design](docs/research/gbz-gbwt-count-inputs-design-20260926.md) records chr21 graph
+footprints and the explicitly conditional chr2 resource estimate.
 
 ## Historical current-work records
 
@@ -231,8 +233,8 @@ embedded in the graph — no GTF or annotation projection at run time.
 
 ## Requirements
 
-- A VG installation/checkout to build and link against (the tool consumes `vg mpmap` GAMP and
-  a matching `.xg`). Build it, or point at an existing checkout.
+- An existing VG installation/checkout with compatible XG, GBWT, GBWTGraph, VGio and
+  handlegraph libraries. panCollapse does not fetch or rebuild VG.
 - C++20 (GCC 15), CMake, and Ninja.
 - Pinned Arrow/Parquet C++ headers and shared libraries for native count output
   (`PANCOLLAPSE_ARROW_ROOT` when CMake package discovery cannot find them).
@@ -254,13 +256,26 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The converter is `build/src/panCollapse`.
+The executable is `build/src/panCollapse`.
+
+The projection tests can use each backend without changing their scientific oracles:
+
+```sh
+cmake -S . -B build -DPANCOLLAPSE_TEST_GRAPH_MODE=gbz   # or xg, xg-gbwt
+ctest --test-dir build -L vg --output-on-failure
+```
+
+`PANCOLLAPSE_TEST_VG` selects the VG executable used to build tiny fixtures. Set it to a
+wrapper around the required stock VG container when reproducing this feature's acceptance.
+Each mode has its own fixture directory. `tests/vg/compare_projection_outputs.py` compares
+those directories, and `tests/vg/compare_graph_scientific.py` compares native-count datasets
+under the documented scientific/provenance contract.
 
 ### Configure variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `PANCOLLAPSE_VG_ROOT` | Yes | Path to a VG checkout/build with `include/xg.hpp` and `lib/pkgconfig`. |
+| `PANCOLLAPSE_VG_ROOT` | Yes | Compatible VG checkout/build with `include/xg.hpp`, GBWT/GBWTGraph headers and static libraries, and `lib/pkgconfig`. |
 | `PANCOLLAPSE_ARROW_ROOT` | Native count | Pinned Arrow/Parquet C++ prefix containing `include/`, `libarrow`, and `libparquet`; required when their CMake package files are not discoverable. |
 | `CMAKE_PREFIX_PATH` | Recommended | Set to the same VG path so CMake finds `libhandlegraph`, `VGio`, and `Protobuf`. |
 | `CMAKE_BUILD_RPATH` | Recommended | Set to `$VG/lib` so the built binary finds VG's shared libraries at run time. |
@@ -270,7 +285,7 @@ The converter is `build/src/panCollapse`.
 ## Usage
 
 ```
-panCollapse convert --gamp reads.gamp|- --xg graph.xg --out-dir out
+panCollapse convert --gamp reads.gamp|- GRAPH_INPUT --out-dir out
                     (--path-identity-ledger path_identity_ledger.tsv |
                      --legacy-adapter hst-v1 --t2g t2g.tsv)
                     [--raw-cb-length 16] [--raw-umi-length 12]
@@ -282,7 +297,7 @@ panCollapse convert --gamp reads.gamp|- --xg graph.xg --out-dir out
                     [--threads N]
                     [--no-ex50-score-window]
 
-panCollapse count (--gamp reads.gamp --xg graph.xg \
+panCollapse count (--gamp reads.gamp GRAPH_INPUT \
                    [--compatibility-out compatibility] | \
                    --compatibility-in compatibility) \
                   (--count-bundle bundle | \
@@ -294,6 +309,7 @@ panCollapse count (--gamp reads.gamp --xg graph.xg \
                   [--10x-mex] [--rad-out] \
                   [--read-assignments-out diagnostics/read_assignments.parquet]
 
+GRAPH_INPUT := --xg transcripts.xg | --gbz transcripts.gbz | --xg graph_only.xg --gbwt transcripts.gbwt
 PROFILE_SELECTOR := --cr7 | --pansc-strict-v1 | --profile ID
 ```
 
@@ -344,15 +360,24 @@ output schemas are in [`docs/input-output-contract.md`](docs/input-output-contra
   preparation, before mapping). `CY` is the raw barcode-quality string encoded as ASCII hex
   so whitespace or `_` cannot corrupt the QNAME grammar. Legacy names without `_cy...` remain
   accepted but cannot emit `CY`. Pass `-` to read the GAMP stream from stdin.
-- `--xg` — the `.xg` for the same graph that produced the GAMP, carrying the `vg rna` HST paths
-  (`<transcript_id>_H<n>` / `_R<n>`).
+- `--xg` — the `.xg` for the same graph that produced the GAMP. Without `--gbwt`, its
+  embedded transcript paths remain the default input.
+- `--gbz` — a GBZ containing graph sequence and transcript paths. Exclusive with `--xg`
+  and `--gbwt`. GBZs carrying a node-to-segment translation are rejected. All aligned nodes
+  must be retained in the GBZ; unselected guide paths can retain nodes outside transcripts.
+- `--gbwt` — transcript paths used alongside `--xg`; the XG may have no paths. GBWT node
+  IDs must belong to that XG. Metadata names must exactly match the ledger's `vg_path_name`,
+  with matching path lengths. Both GBWT routes require bidirectional indexes and complete
+  path-name metadata. FastLocate is built once in memory; no `.ri` input or persistent
+  panCollapse index is required. Exact counting stores base coordinates only for selected
+  ledger paths; membership-only projection omits those arrays.
 - `--compatibility-in` — a previously published
-  `pancollapse-read-compatibility-v1` directory. It is exclusive with GAMP/XG and
+  `pancollapse-read-compatibility-v1` directory. It is exclusive with GAMP and all graph inputs, and
   with `--compatibility-out`; replay still requires the corrected count-facts
   bundle, barcode whitelist, and profile selectors.
 - `--path-identity-ledger` — production input using schema `panSC-path-identity-v1`. It maps each
   exact `vg_path_name` through `unique_parent` to `canonical_transcript` and `gene_id`, carries
-  exon/body layer identity and graph provenance, and is checked against exact XG path names and
+  exon/body layer identity and graph provenance, and is checked against exact graph path names and
   lengths before any GAMP is read.
 - `--legacy-adapter hst-v1 --t2g` — explicit compatibility input:
   `graph_path<TAB>gene[<TAB>canonical_transcript]`. With two columns,

@@ -157,6 +157,10 @@ future coordinate-index alternative, not a V1 replacement for `.xg`, unless late
 to expose equivalent `PathPositionHandleGraph` behavior and pass the same projection
 fixtures.
 
+**Later extension (D094, 2026-09-26).** The required graph-fact equivalence and projection
+fixtures now pass for optional GBZ and graph-only XG+GBWT inputs, with named real-read
+scientific byte identity. D094 approves these alternatives; embedded-path XG remains the default.
+
 **Decision:** Scope VG compatibility to the local checkout/build family at
 `/mnt/ssd/lalli/usr/local/src/vg` and `/mnt/ssd/lalli/usr/local/bin/vg`: version
 `v1.75.0-68-ge82694b69 "Spike"`, commit
@@ -1996,6 +2000,10 @@ Determine the smallest set of already-produced graph, path, coordinate, GBWT, lo
 related files that supports correct interpretation of GAMP and annotation coordinates.
 Do not add a panCollapse-specific persistent index.
 
+**D094 extension (2026-09-26):** the approved alternatives use GBZ or XG+GBWT, with standard
+FastLocate and selected path coordinates built in memory. No additional persistent index is
+introduced. The implementation and named scientific acceptance are complete.
+
 #### F002 — Complete GAMP traversal semantics
 
 Determine whether complete candidate enumeration follows ordinary `next` edges, scored
@@ -3704,12 +3712,16 @@ implementation work must not reopen them without a superseding decision.
 
 ### D094 — Checkpoint: evaluate GBZ and graph-only XG+GBWT count inputs
 
-**Status: MEASURED DESIGN READY; ARCHITECTURE APPROVAL PENDING** (2026-09-26). See the
-[design memo](research/gbz-gbwt-count-inputs-design-20260926.md) and measured closure below.
+**Status: IMPLEMENTED; NAMED SCIENTIFIC ACCEPTANCE PASSED** (2026-09-26). See the
+[design memo](research/gbz-gbwt-count-inputs-design-20260926.md) and implementation closure below.
 The following intake records preserve the sequence of user instructions; later replacement
-inputs supersede the original chr21 bundle and VG-binary directions. This is a phase
-checkpoint, not acceptance of a new runtime input contract or a product decision. Worktree:
+inputs supersede the original chr21 bundle and VG-binary directions. The later explicit
+architecture approval and implementation acceptance supersede the intake's design-only gate. Worktree:
 `design/gbz-gbwt-count-inputs-20260926`, based on `f511306`.
+
+**Contract extension.** This satisfies D023's deferred equivalence condition and supersedes
+the GBZ restriction retained in D088 for these optional graph-input routes. Existing XG,
+annotation and counting semantics remain in place; the no-custom-persistent-index rule stands.
 
 **Question.** Can existing GBZ or graph-only XG plus GBWT data supply every native `count` fact
 currently obtained through the default XG route, with byte-identical output and acceptable
@@ -3803,11 +3815,38 @@ dense-DA resampling experiment, matched query costs and a chr2 model based on it
 19,538,776,098 forward GBWT steps. Raw receipts and hashes:
 `/mnt/ssd/lalli/pancollapse_graph_input_design_v1_20260926T154801Z/`.
 
-**Recommendation awaiting approval, not an accepted runtime contract:** expose only the graph
-facts consumed by projection; build standard FastLocate in memory from the loaded GBWT;
-retain selected-path prefixes in memory, 32-bit where valid with 64-bit fallback. Omit an
-external r-index input initially because the serialized index has no source-GBWT identity
-check. Preserve exact ledger names, repeat/strand/position semantics, explicit capability
-errors and default XG behavior. No custom persistent lookup index is proposed. F001 and the
-existing projection-fixture equivalence bar remain in force. Native-count cross-mode byte
-identity and integrated wall/RSS are implementation acceptance work after architecture approval.
+**Architecture approval and implementation authorization (2026-09-26).** The user approved this
+memo design: expose only the graph facts consumed by projection; retain default XG and add GBZ
+and graph-only XG+GBWT loaders; build standard FastLocate in memory from the loaded GBWT; and
+retain selected-path prefixes in memory, 32-bit where valid with checked 64-bit fallback.
+Occurrence enumeration must use `FastLocate::decompressSA`, preserving each repeated occurrence;
+do not substitute per-state `locate` or DA-only enumeration. Omit an external r-index input
+initially because the serialized index has no source-GBWT identity check. Preserve exact ledger
+names, repeat/strand/position semantics, explicit capability errors and default XG behavior. No
+custom persistent lookup index is authorized. Count and annotation policy are unchanged.
+
+**Named implementation acceptance.** Run all projection fixtures and matched three-mode native
+`count` on `joint/inputs/filtered_first100k.gamp` (100,000 complete read groups; 216,700 GAMP
+records). Scientific inventory, Parquet, MEX, RAD, summary projection, manifest projection, and
+scientific counters must be byte-identical across XG, GBZ, and graph-only XG+GBWT; operational
+provenance remains excluded as specified above. Integrated wall/RSS are measured acceptance
+evidence, not prior capability-probe claims.
+
+**Implementation checkpoint (2026-09-26).** The approved input routes are implemented;
+[implementation/acceptance record](research/gbz-gbwt-input-implementation-20260926.md).
+The final XG suite passes 179/179 and each alternative passes 167/167 graph-dependent tests;
+382 scientific fixture products match per alternative. Runtime uses nonempty GBWT records,
+not numeric range membership, when validating nodes. Test-only unselected coverage paths retain
+isolated nodes GBZ would otherwise omit. No missing-node failure is relaxed. Fresh same-build
+native XG determinism passes, including all 11 scientific files, six compressed MEX headers,
+and scientific counters. The implementation's XG output also matches the archived pre-feature
+baseline. Both GBZ and XG+GBWT also pass every scientific comparison on the named 100,000-read
+subset. Whole-process GBZ wall/RSS are 824.92 s / 39,134,904 KiB; XG+GBWT are 788.47 s /
+38,369,492 KiB; fresh XG repeats are 2032.81/1500.07 s and 56,711,904/56,695,940 KiB.
+These shared-host observations do not establish isolated speedups or full-GAMP/chr2 native
+performance. The single archived-binary control passes scientific identity at 914.99 s /
+56,761,504 KiB, also slower than its earlier 459.06/448.25 s runs but faster than the fresh
+implementation XG runs. Runtime nonregression is therefore not established; the shared-host
+measurements do not isolate adapter overhead from changing run conditions. Scientific behavior
+and the named input-mode acceptance are established. Evidence:
+`/mnt/ssd/lalli/pancollapse_graph_input_implementation_v1_20260926/`.

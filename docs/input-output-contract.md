@@ -6,7 +6,7 @@ prescribing the code architecture. The GAMP-to-RAD algorithm is defined by D048 
 
 ## Native count interface (v0.10)
 
-`panCollapse count` requires GAMP, XG, a barcode whitelist, at least one frozen profile, and
+`panCollapse count` requires GAMP, a graph input, a barcode whitelist, at least one frozen profile, and
 exactly one count-fact authority. The command refuses external legacy identity/policy, BAM,
 debug, compact-BAM, and allowlist options, and the convert-only policy switches `--strand`,
 `--count-mode`, `--bam-multigene`, and `--no-ex50-score-window`. Its default output is an
@@ -53,7 +53,7 @@ receive it, which they do: `nested_host_gene` is present on 39,108 gene rows of 
 fixture annotation. An annotation that has not been through the nested-host pass carries no
 nested-host relation at all, silently. See D088, which records this route and its outstanding
 validation conditions. The `--compatibility-in` replay path does not support it: replay loads a
-bundle unconditionally, so `--annotation` is a GAMP/XG-only route and the combination is refused
+bundle unconditionally, so `--annotation` is a GAMP/graph-only route and the combination is refused
 as a usage error.
 
 To reach a corrected annotation from a stock reference GTF, see
@@ -73,13 +73,13 @@ it contains no alignment records or duplicated alignment payload. Read and fact 
 published in row-, UTF-8-byte-, and structural-list-value-bounded Parquet batches so a large
 compatibility dictionary never requires an oversized Arrow data or offset array.
 
-`--compatibility-in <dir>` replaces GAMP and XG and requires the current count-facts bundle and
-whitelist. Replay is a bundle-route feature; `--annotation` is not wired into it. Exactly one input mode is legal: GAMP/XG or compatibility input. The reader validates
+`--compatibility-in <dir>` replaces GAMP and all graph inputs and requires the current count-facts bundle and
+whitelist. Replay is a bundle-route feature; `--annotation` is not wired into it. Exactly one input mode is legal: GAMP with one graph source, or compatibility input. The reader validates
 all hashes, schema, denominator, and ledger structural/algorithm compatibility before using the
 interned facts for fast resolution and scanning the complete read rows for matrix/QC accounting.
 It permits metadata/tagging/whitelist/count-policy replay, but rejects any mismatch that could
-change the ledger transcript/exon surface or compatibility semantics. The source XG digest remains
-frozen in the manifest, but replay does not open an XG and therefore does not independently compare
+change the ledger transcript/exon surface or compatibility semantics. The source graph-input digests remain
+frozen in the manifest, but replay does not open a graph and therefore does not independently compare
 graph topology to a current graph. A graph change requires fresh compatibility production.
 
 The bundle's `MANIFEST.json` binds its `content` object to `content_id`, which is
@@ -196,12 +196,40 @@ measurement such as GNU time. Compatibility replay retains its existing timing f
 
 ### Graph with HST paths
 
-- An `.xg` (or equivalent) for the same graph/node-id space that produced the GAMP.
-- The graph must expose the haplotype-specific transcript (HST) paths that `vg rna`
-  embedded (`<transcript_id>_H<n>` / `_R<n>`), queried through `for_each_step_on_handle`.
-- After GAMP exists, `.gcsa`, `.gcsa.lcp`, `.dist`, `.snarls`, minimizers, GBZ, and GBWT
-  are not panCollapse inputs.
-- V1 does not build a panCollapse-specific persistent index.
+Both `convert` and GAMP-based `count` accept exactly one of:
+
+- `--xg transcripts.xg`: existing embedded-path XG behavior, unchanged by default.
+- `--gbz transcripts.gbz`: a GBZ supplying the node graph and transcript GBWT.
+- `--xg graph_only.xg --gbwt transcripts.gbwt`: XG supplies nodes and sequences; GBWT
+  supplies paths, even if the XG also contains paths.
+
+`--gbwt` alone and any combination of `--gbz` with `--xg` or `--gbwt` are errors. Replay
+rejects all graph options. The GAMP and graph must use the same node IDs and sequences;
+missing aligned nodes abort counting. Equal node counts alone do not establish identity.
+GBZs with node-to-segment translations are rejected; translation is not applied implicitly.
+A GBZ retains only nodes visited by its GBWT paths. Its paths must therefore also cover nodes
+that a GAMP may align to without transcript membership; unselected guide/retention paths can
+provide this coverage. An aligned node missing from GBZ remains a hard error.
+Counting uses path walks and GAMP adjacency, so it does not require edges absent from every path.
+
+For GBWT-backed inputs, the index must be bidirectional and carry complete path, sample and
+contig metadata. Names are composed using VG/GBWTGraph path-sense rules and must exactly
+match selected `vg_path_name` values; there is no automatic suffix stripping or reference-sense
+remapping. Ambiguous selected names, missing ledger paths and incorrect path lengths are fatal.
+Unselected extra GBWT paths do not contribute evidence. Every GBWT node must exist in the node
+graph; the tool cannot infer which sequence was originally assigned that ID during mapping.
+
+Standard FastLocate is constructed in memory from the loaded GBWT. Occurrence-level queries
+preserve repeated visits, strand and step offsets. Exact-overlap modes, including native count,
+add in-memory base-position prefixes for selected paths, using checked 32-bit storage with a
+64-bit fallback. Membership-only modes omit prefixes; a request for unavailable positions fails
+explicitly. These structures are discarded at exit. No external `.ri` flag or panCollapse-specific
+persistent index is introduced.
+
+Count manifests and compatibility provenance truthfully identify `xg`, `gbz`, or `xg` plus
+`gbwt`; graph identity never enters scientific tables or RAD. Scientific equivalence uses the
+[explicit comparison contract](research/graph-input-scientific-comparison-20260926.md).
+GCSA/LCP, distance, snarls and minimizer indexes remain unnecessary after mapping.
 
 ### Production path identity ledger
 

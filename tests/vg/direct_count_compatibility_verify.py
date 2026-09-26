@@ -111,7 +111,8 @@ def validate_compatibility(root: Path) -> None:
         "unsupported": 0,
         "valid": 9,
     }
-    assert [item["role"] for item in content["inputs"]] == ["gamp", "xg"]
+    assert [item["role"] for item in content["inputs"]] in (
+        ["gamp", "xg"], ["gamp", "gbz"], ["gamp", "gbwt", "xg"])
     tables = {row["path"]: row for row in content["tables"]}
     assert set(tables) == {
         "parquet/exact_facts.parquet",

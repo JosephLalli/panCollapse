@@ -746,6 +746,8 @@ void validate_inputs(std::vector<CompatibilityInputIdentity>& inputs) {
     });
     bool have_gamp = false;
     bool have_xg = false;
+    bool have_gbz = false;
+    bool have_gbwt = false;
     std::string previous;
     for (const CompatibilityInputIdentity& input : inputs) {
         if (input.role.empty() || !is_sha256(input.sha256)) {
@@ -757,9 +759,11 @@ void validate_inputs(std::vector<CompatibilityInputIdentity>& inputs) {
         previous = input.role;
         have_gamp = have_gamp || input.role == "gamp";
         have_xg = have_xg || input.role == "xg";
+        have_gbz = have_gbz || input.role == "gbz";
+        have_gbwt = have_gbwt || input.role == "gbwt";
     }
-    if (!have_gamp || !have_xg) {
-        fail("compatibility provenance requires gamp and xg input identities");
+    if (!have_gamp || (have_gbz ? (have_xg || have_gbwt) : !have_xg)) {
+        fail("compatibility provenance requires gamp and exactly one graph source: xg [with gbwt] or gbz");
     }
 }
 

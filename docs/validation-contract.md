@@ -57,8 +57,8 @@ D048 and `docs/conversion-algorithm.md`.
 - exact path names, Parents, and canonical transcripts include literal `_R1` strings unchanged;
   hashed `panSCup1_<64 lowercase hex>` exon Parents and `panSCbody1_<64 lowercase hex>` body
   Parents also survive byte-for-byte into BAM `XU`;
-  every ledger path exists in the XG at the recorded length, while missing paths and mismatched
-  lengths fail before GAMP processing;
+  every ledger path exists in the selected XG or GBWT path source at the recorded length,
+  while missing paths and mismatched lengths fail before GAMP processing;
 - tabs/newlines fail in every field; comma/semicolon fail where reserved by `XP`/`XU` grouping,
   while commas in general provenance such as `vg_haplotype_origins` remain legal;
 - several exact paths may share one Parent, and several Parents may share one canonical transcript;
@@ -150,12 +150,13 @@ are independently checkable against fixtures.
 - exact E/P/B and structural S/U facts retain path, Parent, and canonical
   transcript provenance, while repeated equivalent facts intern to one deterministic
   `fact_set_id`;
-- direct GAMP/XG count and GAMP-to-intermediate-to-`--compatibility-in` count agree for final
-  matrices, molecules, terminal counters, per-read QC, and applicable tagging/metadata outputs;
+- direct GAMP count with each supported graph input and GAMP-to-intermediate-to-`--compatibility-in`
+  count agree for final matrices, molecules, terminal counters, per-read QC, and applicable
+  tagging/metadata outputs;
 - replay with an allowed current profile/whitelist/metadata change demonstrably re-evaluates the
   result; final AssignmentFacts/count tables are never substituted as replay input;
 - corruption, missing/hash-invalid tables, schema/version mismatch, incompatible source or
-  structural/compatibility-algorithm identity, and supplying GAMP/XG together with
+  structural/compatibility-algorithm identity, and supplying GAMP or graph-input flags together with
   `--compatibility-in` fail before count output;
 - a bounded benchmark reports persisted size and runtime for direct count, compatibility
   production, and replay, with the v0.9 BAM baseline stated separately.
