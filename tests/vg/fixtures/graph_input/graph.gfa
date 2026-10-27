@@ -1,0 +1,14 @@
+H	VN:Z:1.0
+S	1	AAA
+S	2	CC
+S	30	GTTT
+S	4	A
+S	9	AT
+L	1	+	2	+	0M
+L	2	+	30	-	0M
+L	30	-	2	+	0M
+L	2	+	4	+	0M
+L	4	+	2	-	0M
+P	A	1+,2+,30-,2+,4+,2-	*
+P	B	2-,30+,2-	*
+P	unselected	1+,2+	*

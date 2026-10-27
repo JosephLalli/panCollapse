@@ -4,6 +4,177 @@ This document translates the product specification into interface obligations wi
 prescribing the code architecture. The GAMP-to-RAD algorithm is defined by D048 and
 `docs/conversion-algorithm.md`.
 
+## Native count interface (v0.10)
+
+`panCollapse count` requires GAMP, a graph input, a barcode whitelist, at least one frozen profile, and
+exactly one count-fact authority. The command refuses external legacy identity/policy, BAM,
+debug, compact-BAM, and allowlist options, and the convert-only policy switches `--strand`,
+`--count-mode`, `--bam-multigene`, and `--no-ex50-score-window`. Its default output is an
+atomic Parquet dataset and manifest; `count` has no BAM sink and no production Python
+dependency. `--10x-mex` and `--rad-out` add compatibility outputs.
+
+`--read-assignments-out <relative/path.parquet>` optionally adds ordered per-read diagnostic
+Parquet. The path must be normalized, relative to `--out-dir`, end in `.parquet`, and not
+collide with a reserved result path. It is opt-in because it is the only count sink with
+per-read-scale I/O.
+
+### Count-fact authority
+
+Exactly one of `--count-bundle` and `--annotation` is required; supplying both, or neither, is a
+usage error. Both routes build the same in-memory Parent, gene, and per-profile gene facts.
+
+`--count-bundle <dir>` reads a `panSC-count-facts-v1` bundle, authoritative for path identity,
+profile-specific gene policy, Parent categories, projected-nested policy, strong-support facts,
+and provenance receipts. Per D085 five of its nine roles are optional and none of them is opened
+by the runtime: `corrected_annotation`, `parent_category_receipt`, `projected_nested_policy`, and
+the two profile policy receipts are validated when present and otherwise absent. The four roles
+the runtime reads are `path_identity_ledger`, `profile_gene_policy`, `parent_category_ledger`,
+and `strong_support_ledger`. On this route
+`--path-identity-ledger` is rejected, because the bundle supplies the ledger.
+
+`--annotation <corrected.gff3>` reads the correction chain's classifier verdicts directly off a
+GFF3, and requires two companions:
+
+- `--annotation-reference <reference.gff3[.gz]>` — the reference annotation whose gene rows carry
+  the tags CAT drops when it projects a model. They are inherited back onto each projected model
+  through `source_gene`, matched with the Ensembl version suffix stripped. The inheritance is not
+  optional: omitting it under-tags the annotation silently rather than failing.
+- `--path-identity-ledger <ledger.tsv>` — required on this route and only on this route, since
+  there is no bundle to carry it.
+
+Either annotation file may be gzipped. Recognized categories are the twelve selected tags, and
+gene-type policy is the 10x 2024-A allowlist with `count_cr.py`'s demotion vocabulary; on this
+route both are compiled into the binary rather than read from bundle tables. Two facts the
+annotation does not state are consequently absent: `protected_primary_protein_nested_host` is
+always `false`, and `nested_host` is read only from a `nested_host_gene` attribute on a **gene**
+row. `scripts/tag_nested_reference_hosts.py` writes that attribute onto every row carrying a
+matching `source_gene`, which on a CAT projection is the transcript rows; whether gene rows also
+receive it, which they do: `nested_host_gene` is present on 39,108 gene rows of the chr20/21/22
+fixture annotation. An annotation that has not been through the nested-host pass carries no
+nested-host relation at all, silently. See D088, which records this route and its outstanding
+validation conditions. The `--compatibility-in` replay path does not support it: replay loads a
+bundle unconditionally, so `--annotation` is a GAMP/graph-only route and the combination is refused
+as a usage error.
+
+To reach a corrected annotation from a stock reference GTF, see
+[`scripts/README.md`](../scripts/README.md).
+
+
+`--compatibility-out <dir>` adds an atomically published compatibility dataset and manifest. Its
+deterministic, ordinal-ordered Parquet rows retain every input group, including invalid-molecule
+and featureless groups:
+read ordinal, molecule identity/status, and an interned `fact_set_id`; the fact-set table holds
+canonical exact E/P/B and structural S/U facts (the latter reconstruct current Gene fallback)
+with path, Parent, and canonical transcript provenance. The manifest pins schema/version,
+canonical logical hashes, output hashes, source digests, the independently accumulated
+input-group denominator and molecule-status totals, and structural/compatibility-algorithm
+identity. This is a non-BAM artifact:
+it contains no alignment records or duplicated alignment payload. Read and fact tables are
+published in row-, UTF-8-byte-, and structural-list-value-bounded Parquet batches so a large
+compatibility dictionary never requires an oversized Arrow data or offset array.
+
+`--compatibility-in <dir>` replaces GAMP and all graph inputs and requires the current count-facts bundle and
+whitelist. Replay is a bundle-route feature; `--annotation` is not wired into it. Exactly one input mode is legal: GAMP with one graph source, or compatibility input. The reader validates
+all hashes, schema, denominator, and ledger structural/algorithm compatibility before using the
+interned facts for fast resolution and scanning the complete read rows for matrix/QC accounting.
+It permits metadata/tagging/whitelist/count-policy replay, but rejects any mismatch that could
+change the ledger transcript/exon surface or compatibility semantics. The source graph-input digests remain
+frozen in the manifest, but replay does not open a graph and therefore does not independently compare
+graph topology to a current graph. A graph change requires fresh compatibility production.
+
+The bundle's `MANIFEST.json` binds its `content` object to `content_id`, which is
+`sha256:` followed by the hex SHA-256 of the canonical serialization of `content`: object
+keys sorted by code point, no whitespace, integers in decimal, floats in shortest
+round-trip form, and strings ASCII-escaped (`\uXXXX`, surrogate pairs above the BMP). This
+is byte-identical to Python's `json.dumps(content, sort_keys=True, separators=(",", ":"))`;
+the key order and whitespace of the file itself do not affect the identity. The loader parses
+standard JSON only: non-finite floats, integers outside the signed or unsigned 64-bit range,
+nesting deeper than 1024 levels, and duplicate object keys are rejected before the identity is
+compared.
+
+Profiles are selected independently: `--cr7` is the `cr7-v1` alias,
+`--pansc-strict-v1` is the identically named frozen custom profile alias, and repeatable
+`--profile ID` is the extensible form. At least one selector is required, duplicates are errors,
+and several profiles may execute in the same GAMP pass. Repeatable typed
+`--profile-override BASE:FIELD=VALUE` is accepted only with
+`--analysis-scope sensitivity-analysis`. The v0.10 override surface is limited to assignment
+policy: `strand`, `score-window`, `membership-class`, `novel-paralog-policy`,
+`excluded-categories`, `post-resolution-fallback-categories`, `tagged-last-resort`,
+`exact-strand-gene-fallback`, `nested-host-rule`, `nested-host-action`,
+`body-support-ratio`, `body-support-gene-types`,
+`strong-local-support-exemption`, `strong-support-clearable-categories`, and
+`protect-primary-protein-nested-hosts`.
+Barcode correction and UMI algorithms are not overridable. Any override creates a
+`derived-<base>-<hash-prefix>` ID whose full effective-profile SHA-256 is recorded in the
+manifest; it can never be reported as the frozen base profile.
+
+The default dataset contains the following non-nullable fields unless marked nullable:
+
+- `parquet/barcodes.parquet`: `barcode_index:uint32`, `barcode:string`,
+  `exact_read_prior:uint64`;
+- `parquet/features.parquet`: `feature_index:uint32`, `gene_id:string`,
+  `gene_name:string nullable`, `gene_type:string nullable`;
+- `parquet/counts.parquet`: `profile_id:string`, `barcode_index:uint32`,
+  `feature_index:uint32`, `umi_count:uint64`;
+- `parquet/molecules.parquet`: `profile_id:string`, `barcode_index:uint32`,
+  `feature_index:uint32`, `corrected_umi:string`, `supporting_read_count:uint64`,
+  `raw_umis_collapsed:uint64`.
+
+Barcode and feature tables are the lexical union of nonempty rows used by any requested profile;
+their compact integer dictionaries are referenced by count and molecule rows. Counts are sorted
+by profile, barcode, and feature; molecules add UMI as the final sort key. Writers use the stored
+Arrow schema, Parquet 2.6, fixed row-group sizing, and Zstandard level 3 without volatile
+timestamps. Because future Arrow versions may encode equivalent tables differently,
+`manifest.json` records library-independent logical hashes over canonical rows as well as the
+current output-file hashes. It also records which authority produced the facts:
+`fact_bundle_content_id` holds the identity of those facts, and `fact_authority` names the route
+that produced it, `count-bundle` or `annotation`. Both are required and validated non-empty
+before any output is written. On the bundle route the id is the bundle's published `content_id`.
+On the annotation route it is `sha256:` followed by a digest over the SHA-256 digests of the
+corrected annotation, the reference annotation, and the path-identity ledger, in that order, so a
+reader must consult `fact_authority` before treating the id as a bundle address. The `inputs` map
+records `count_bundle_manifest` on the bundle route, and `annotation`, `annotation_reference`, and
+`path_identity_ledger` on the annotation route. `summary.tsv` records stable global and per-profile counters. Barcode
+prior/correction totals are counted once globally because they precede profile evaluation; the
+corresponding per-profile counters remain available for joint-versus-separate audit. The
+entire staged directory is published atomically only after all requested outputs close and
+validate.
+
+For count and molecule tables, logical hashing decodes compact dictionary indexes back to barcode
+and gene strings. The manifest also records a count hash and molecule hash for each profile over
+those decoded values. Corresponding per-profile hashes are therefore directly comparable between
+a joint multi-profile pass and separate single-profile runs, even when their active dictionary
+unions—and therefore their stored numeric indexes—differ.
+
+`--10x-mex` adds one `<out-dir>/mex/<profile_id>/raw_feature_bc_matrix` directory per profile,
+containing `matrix.mtx.gz`, `features.tsv.gz`, and `barcodes.tsv.gz`. Matrix rows are features,
+columns are barcodes, entries are raw UMI counts, and the dictionary order agrees with the
+Parquet tables; cell calling remains downstream. `--rad-out` invokes the existing pre-count RAD
+writer once and does not render either profile's final matrix.
+
+The diagnostic sidecar records input ordinal, QNAME, profile, raw/corrected barcode, UMI,
+terminal class, selected gene/tier, and reason bits. QNAME is the read-name prefix before
+the last two underscore-separated fields (raw CB and UMI, after any quality suffix), including
+on `invalid_raw_molecule` rows; a name with fewer than two such fields, or an empty prefix,
+records the raw GAMP name instead. It is an audit product, not an input to
+counting or a default production artifact.
+
+Native GAMP counting writes worker-private diagnostic streams and merges them after count
+finalization. The final sidecar remains ordered by input ordinal and profile index. Merge
+fan-in is at most 32 streams, with intermediate merges for larger worker counts; every
+stream is checksum/trailer validated, and every expected read/profile pair must appear
+exactly once. Diagnostic output alone does not impose a worker ordering barrier. RAD and
+compatibility capture retain their existing ordering requirements.
+
+Native-count manifest `timings` separates `read_processing_seconds`,
+`count_finalize_seconds`, `diagnostics_merge_export_seconds`, and optional-work
+`compatibility_finalize_seconds`. The existing `processing_seconds` remains the aggregate
+of traversal and finalization. Read processing includes requested diagnostic-row generation
+and spooling; diagnostic merging/export is measured afterward. Measure core counting with
+`--read-assignments-out` omitted. Initialization remains separate; stderr additionally
+reports count-output publication time, and whole-command wall/RSS come from an external
+measurement such as GNU time. Compatibility replay retains its existing timing fields.
+
 ## Runtime inputs
 
 ### GAMP
@@ -13,8 +184,9 @@ prescribing the code architecture. The GAMP-to-RAD algorithm is defined by D048 
   previously completed name.
 - The GAMP name field carries the observed raw molecule identity as
   `<original_read_name>_<raw_CB>_<raw_UMI>_cy<hex(CY)>_uy<hex(UY)>`. Raw barcode, UMI, and optional
-  barcode quality are parsed from the right; panCollapse does not correct them. Legacy
-  names without the quality suffix remain accepted.
+  barcode quality are parsed from the right. Legacy names without the quality suffix remain
+  accepted. `convert` preserves those values; `count` corrects them only after building the
+  all-valid-read exact-whitelist prior.
 - Parsed raw barcode and UMI values must match the configured lengths (`--raw-cb-length`,
   `--raw-umi-length`; Phase 2 defaults 16 and 12).
 - Every alignment of the read (the primary record and each supplementary/secondary record)
@@ -24,12 +196,40 @@ prescribing the code architecture. The GAMP-to-RAD algorithm is defined by D048 
 
 ### Graph with HST paths
 
-- An `.xg` (or equivalent) for the same graph/node-id space that produced the GAMP.
-- The graph must expose the haplotype-specific transcript (HST) paths that `vg rna`
-  embedded (`<transcript_id>_H<n>` / `_R<n>`), queried through `for_each_step_on_handle`.
-- After GAMP exists, `.gcsa`, `.gcsa.lcp`, `.dist`, `.snarls`, minimizers, GBZ, and GBWT
-  are not panCollapse inputs.
-- V1 does not build a panCollapse-specific persistent index.
+Both `convert` and GAMP-based `count` accept exactly one of:
+
+- `--xg transcripts.xg`: existing embedded-path XG behavior, unchanged by default.
+- `--gbz transcripts.gbz`: a GBZ supplying the node graph and transcript GBWT.
+- `--xg graph_only.xg --gbwt transcripts.gbwt`: XG supplies nodes and sequences; GBWT
+  supplies paths, even if the XG also contains paths.
+
+`--gbwt` alone and any combination of `--gbz` with `--xg` or `--gbwt` are errors. Replay
+rejects all graph options. The GAMP and graph must use the same node IDs and sequences;
+missing aligned nodes abort counting. Equal node counts alone do not establish identity.
+GBZs with node-to-segment translations are rejected; translation is not applied implicitly.
+A GBZ retains only nodes visited by its GBWT paths. Its paths must therefore also cover nodes
+that a GAMP may align to without transcript membership; unselected guide/retention paths can
+provide this coverage. An aligned node missing from GBZ remains a hard error.
+Counting uses path walks and GAMP adjacency, so it does not require edges absent from every path.
+
+For GBWT-backed inputs, the index must be bidirectional and carry complete path, sample and
+contig metadata. Names are composed using VG/GBWTGraph path-sense rules and must exactly
+match selected `vg_path_name` values; there is no automatic suffix stripping or reference-sense
+remapping. Ambiguous selected names, missing ledger paths and incorrect path lengths are fatal.
+Unselected extra GBWT paths do not contribute evidence. Every GBWT node must exist in the node
+graph; the tool cannot infer which sequence was originally assigned that ID during mapping.
+
+Standard FastLocate is constructed in memory from the loaded GBWT. Occurrence-level queries
+preserve repeated visits, strand and step offsets. Exact-overlap modes, including native count,
+add in-memory base-position prefixes for selected paths, using checked 32-bit storage with a
+64-bit fallback. Membership-only modes omit prefixes; a request for unavailable positions fails
+explicitly. These structures are discarded at exit. No external `.ri` flag or panCollapse-specific
+persistent index is introduced.
+
+Count manifests and compatibility provenance truthfully identify `xg`, `gbz`, or `xg` plus
+`gbwt`; graph identity never enters scientific tables or RAD. Scientific equivalence uses the
+[explicit comparison contract](research/graph-input-scientific-comparison-20260926.md).
+GCSA/LCP, distance, snarls and minimizer indexes remain unnecessary after mapping.
 
 ### Production path identity ledger
 
@@ -106,11 +306,15 @@ ledger reaches count_cr, which performs transcript-to-gene pooling. See
 
 ### Barcode and UMI
 
-The raw cell barcode and raw UMI come from the GAMP name field. Values are written to RAD as
-observed; panCollapse does not correct, permit-list, repair, or mix them. Missing,
-malformed, or unsupported values (including length mismatch against the configured lengths)
-are skipped per read group and counted by default; `--molecule-identity-failures fail` makes
-them fatal.
+The raw cell barcode and raw UMI come from the GAMP name field. `convert` writes them to RAD or
+BAM as observed and performs no correction or deduplication. Native `count` instead updates the
+dataset-wide exact-whitelist prior from every valid read group, including featureless groups;
+applies the frozen Hamming-distance-one quality posterior and 0.975 acceptance threshold at EOF;
+then performs the frozen basic-UMI filters, non-transitive `1MM_CR`, and
+`MultiGeneUMI_CR` maximum-support/tie-discard rule. A read rejected before barcode correction or
+before its profile reaches the UMI stage cannot contribute an assigned-read or UMI-drop counter.
+Missing, malformed, or unsupported raw molecule fields (including configured-length mismatch)
+are skipped and counted by default; `--molecule-identity-failures fail` makes them fatal.
 
 ## Outputs
 

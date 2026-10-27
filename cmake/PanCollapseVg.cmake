@@ -65,6 +65,15 @@ set_target_properties(panCollapse_xg PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${PANCOLLAPSE_VG_ROOT}/include")
 add_library(panCollapse::xg ALIAS panCollapse_xg)
 
+foreach(component IN ITEMS gbwtgraph gbwt)
+  if(NOT EXISTS "${PANCOLLAPSE_VG_ROOT}/lib/lib${component}.a")
+    message(FATAL_ERROR "GBZ/GBWT support requires existing lib${component}.a in PANCOLLAPSE_VG_ROOT; panCollapse does not build VG")
+  endif()
+  add_library(panCollapse_${component} STATIC IMPORTED GLOBAL)
+  set_target_properties(panCollapse_${component} PROPERTIES
+    IMPORTED_LOCATION "${PANCOLLAPSE_VG_ROOT}/lib/lib${component}.a")
+endforeach()
+
 add_library(panCollapse_vg_boundary INTERFACE)
 target_include_directories(panCollapse_vg_boundary INTERFACE
   "${PANCOLLAPSE_VG_ROOT}/include")
@@ -72,6 +81,10 @@ target_link_libraries(panCollapse_vg_boundary INTERFACE
   VGio::VGio
   libhandlegraph::handlegraph_shared
   panCollapse::xg
+  panCollapse_gbwtgraph
+  panCollapse_gbwt
+  OpenSSL::Crypto
+  PkgConfig::ZSTD
   PkgConfig::SDSL
   PkgConfig::DIVSUFSORT
   PkgConfig::DIVSUFSORT64

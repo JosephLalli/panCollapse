@@ -1,14 +1,28 @@
 #include <handlegraph/path_position_handle_graph.hpp>
 #include <handlegraph/util.hpp>
 #include <htslib/sam.h>
+#include <openssl/evp.h>
 #include <vg/io/stream.hpp>
 #include <vg/vg.pb.h>
-#include <xg.hpp>
+#include "graph_input.hpp"
 
 #include "pathtally.hpp"
+#include "node_tally_cache.hpp"
+#include "ordered_gamp_reader.hpp"
+#include "ordered_output_reorder.hpp"
+#include "read_granular_input.hpp"
 #include "pathtally_ledger.hpp"
 #include "pathtally_qualadj.hpp"
 #include "path_identity_ledger.hpp"
+#include "direct_count.hpp"
+#include "direct_count_assignment.hpp"
+#include "direct_count_candidate_inputs.hpp"
+#include "direct_count_compatibility.hpp"
+#include "direct_count_diagnostics.hpp"
+#include "direct_count_facts.hpp"
+#include "direct_count_output.hpp"
+#include "direct_count_runtime.hpp"
+#include "score_dedup.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +32,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <ctime>
 #include <deque>
 #include <exception>
 #include <filesystem>
@@ -37,11 +52,15 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#ifdef __linux__
+#include <pthread.h>
+#endif
 #include <tuple>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 namespace {
 
@@ -86,8 +105,11 @@ enum class StrandFilter { Both, Forward, Reverse };
 enum class MoleculeParseStatus { Ok, Missing, Malformed, Unsupported };
 
 struct Options {
+    bool direct_count = false;
     std::filesystem::path gamp;
     std::filesystem::path xg;
+    std::filesystem::path gbz;
+    std::filesystem::path gbwt;
     std::filesystem::path t2g;
     std::filesystem::path path_identity_ledger;
     std::string legacy_adapter;
@@ -115,6 +137,22 @@ struct Options {
     // D068 is the v0.8 default. The explicit opt-out restores the pre-D068 exact-evidence
     // eligibility surface: every complete compatible traversal reaches downstream Ex50 ranking.
     bool exact_ex50_score_window_enabled = true;
+    std::filesystem::path count_bundle;
+    // The annotation route: scripts write the classifier verdicts onto the GFF3 as tags and
+    // the binary ingests that directly, so no precompiled bundle is required.
+    std::filesystem::path annotation;
+    std::filesystem::path annotation_reference;
+    std::filesystem::path barcode_whitelist;
+    std::vector<std::string> requested_profiles;
+    std::vector<pancollapse::direct_count::ProfileOverride> profile_overrides;
+    std::vector<pancollapse::direct_count::EffectiveProfile> count_profiles;
+    std::string analysis_scope;
+    uint64_t count_memory_budget = 128ULL << 30;
+    bool count_10x_mex = false;
+    bool count_rad_out = false;
+    std::filesystem::path read_assignments_out;
+    std::filesystem::path compatibility_out;
+    std::filesystem::path compatibility_in;
 };
 
 struct MoleculeId {
@@ -161,7 +199,7 @@ struct T2gData {
 };
 
 constexpr const char* kUsageText =
-    "usage: panCollapse convert --gamp reads.gamp|- --xg graph.xg "
+    "usage: panCollapse convert --gamp reads.gamp|- (--xg graph.xg [--gbwt paths.gbwt] | --gbz graph.gbz) "
     "(--path-identity-ledger path_identity_ledger.tsv | "
     "--legacy-adapter hst-v1 --t2g t2g.tsv) "
     "--out-dir out [--raw-cb-length N] [--raw-umi-length N] "
@@ -175,11 +213,162 @@ constexpr const char* kUsageText =
     "[--compact-exact-count-bam forward|reverse] "
     "[--path-identity-ledger-sha256 HEX] "
     "[--strict-allowlisted-parents parents.txt] "
-    "[--strict-allowlisted-parents-sha256 HEX]";
+    "[--strict-allowlisted-parents-sha256 HEX]\n"
+    "       panCollapse count (--gamp reads.gamp (--xg graph.xg [--gbwt paths.gbwt] | --gbz graph.gbz) "
+    "[--compatibility-out compatibility] | "
+    "--compatibility-in compatibility) "
+    "(--count-bundle panSC-count-facts-v1 | --annotation corrected.gff3 "
+    "--annotation-reference reference.gff3 --path-identity-ledger ledger.tsv) "
+    "--barcode-whitelist barcodes.txt "
+    "PROFILE_SELECTOR [PROFILE_SELECTOR ...] --out-dir counts "
+    "[--t2g transcripts.tsv] [--body-t2g bodies.tsv] "
+    "[--profile-override BASE:FIELD=VALUE ... "
+    "--analysis-scope sensitivity-analysis] [--threads N] "
+    "[--count-memory-budget 128GiB] [--10x-mex] [--rad-out] "
+    "[--read-assignments-out relative/path.parquet]\n"
+    "       PROFILE_SELECTOR is --cr7, --pansc-strict-v1, or --profile ID; "
+    "selectors may be combined";
 
 [[noreturn]] void usage_error() {
     throw std::runtime_error(kUsageText);
 }
+
+// Read-through SHA-256 used by `count` so manifest identity does not require a
+// second scan of GAMP or XG. This stream buffer has no read-ahead of its own;
+// bulk reads remain bulk reads in the wrapped file buffer.
+class Sha256InputStream : public std::istream {
+  private:
+    class Buffer : public std::streambuf {
+      public:
+        explicit Buffer(std::streambuf* source)
+            : source_(source), context_(EVP_MD_CTX_new(), EVP_MD_CTX_free) {
+            if (source_ == nullptr || !context_ ||
+                EVP_DigestInit_ex(context_.get(), EVP_sha256(), nullptr) != 1) {
+                throw std::runtime_error("cannot initialize input SHA-256 stream");
+            }
+            const pos_type position =
+                source_->pubseekoff(0, std::ios_base::cur, std::ios_base::in);
+            seekable_ = position != pos_type(off_type(-1));
+            if (seekable_ && position != pos_type(0)) {
+                throw std::runtime_error("input SHA-256 stream must start at byte zero");
+            }
+        }
+
+        bool seekable() const { return seekable_; }
+        std::uint64_t hashed_bytes() const { return hashed_bytes_; }
+
+        std::string finish() {
+            if (finished_) {
+                throw std::logic_error("input SHA-256 stream finalized twice");
+            }
+            std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+            unsigned int length = 0;
+            if (EVP_DigestFinal_ex(context_.get(), digest.data(), &length) != 1 ||
+                length != 32) {
+                throw std::runtime_error("cannot finalize input SHA-256 stream");
+            }
+            constexpr char digits[] = "0123456789abcdef";
+            std::string result(length * 2, '0');
+            for (size_t index = 0; index < length; ++index) {
+                result[index * 2] = digits[digest[index] >> 4U];
+                result[index * 2 + 1] = digits[digest[index] & 15U];
+            }
+            finished_ = true;
+            return result;
+        }
+
+      protected:
+        std::streamsize xsgetn(char* destination, std::streamsize count) override {
+            const pos_type position = seekable_
+                ? source_->pubseekoff(0, std::ios_base::cur, std::ios_base::in)
+                : pos_type(off_type(-1));
+            const std::streamsize read = source_->sgetn(destination, count);
+            update_range(position, destination, read);
+            return read;
+        }
+
+        int_type underflow() override { return source_->sgetc(); }
+
+        int_type uflow() override {
+            const pos_type position = seekable_
+                ? source_->pubseekoff(0, std::ios_base::cur, std::ios_base::in)
+                : pos_type(off_type(-1));
+            const int_type value = source_->sbumpc();
+            if (!traits_type::eq_int_type(value, traits_type::eof())) {
+                const char character = traits_type::to_char_type(value);
+                update_range(position, &character, 1);
+            }
+            return value;
+        }
+
+        std::streamsize showmanyc() override { return source_->in_avail(); }
+
+        pos_type seekoff(off_type offset, std::ios_base::seekdir direction,
+                         std::ios_base::openmode mode) override {
+            return source_->pubseekoff(offset, direction, mode);
+        }
+
+        pos_type seekpos(pos_type position, std::ios_base::openmode mode) override {
+            return source_->pubseekpos(position, mode);
+        }
+
+        int_type pbackfail(int_type character = traits_type::eof()) override {
+            if (traits_type::eq_int_type(character, traits_type::eof())) {
+                return source_->sungetc();
+            }
+            return source_->sputbackc(traits_type::to_char_type(character));
+        }
+
+      private:
+        void update_range(pos_type position, const char* bytes, std::streamsize count) {
+            if (count <= 0) {
+                return;
+            }
+            size_t offset = 0;
+            size_t amount = static_cast<size_t>(count);
+            if (seekable_) {
+                const std::uint64_t start = static_cast<std::uint64_t>(position);
+                const std::uint64_t end = start + amount;
+                if (end <= hashed_bytes_ || start > hashed_bytes_) {
+                    return;
+                }
+                offset = static_cast<size_t>(hashed_bytes_ - start);
+                amount -= offset;
+            }
+            if (EVP_DigestUpdate(context_.get(), bytes + offset, amount) != 1) {
+                throw std::runtime_error("cannot update input SHA-256 stream");
+            }
+            hashed_bytes_ += amount;
+        }
+
+        std::streambuf* source_;
+        std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context_;
+        std::uint64_t hashed_bytes_ = 0;
+        bool seekable_ = false;
+        bool finished_ = false;
+    };
+
+  public:
+    explicit Sha256InputStream(std::istream& source)
+        : std::istream(nullptr), buffer_(source.rdbuf()) {
+        rdbuf(&buffer_);
+    }
+
+    std::string complete_and_finish() {
+        clear();
+        if (buffer_.seekable()) {
+            seekg(static_cast<std::streamoff>(buffer_.hashed_bytes()), std::ios_base::beg);
+            if (!*this) {
+                throw std::runtime_error("cannot seek while completing input SHA-256");
+            }
+        }
+        ignore(std::numeric_limits<std::streamsize>::max());
+        return buffer_.finish();
+    }
+
+  private:
+    Buffer buffer_;
+};
 
 size_t parse_size_option(const std::string& option_name, const std::string& value) {
     if (value.empty()) {
@@ -199,12 +388,51 @@ size_t parse_size_option(const std::string& option_name, const std::string& valu
     return parsed;
 }
 
+uint64_t parse_byte_size_option(const std::string& option_name,
+                                const std::string& value) {
+    const std::array<std::pair<std::string_view, uint64_t>, 5> suffixes{{
+        {"TiB", 1ULL << 40}, {"GiB", 1ULL << 30}, {"MiB", 1ULL << 20},
+        {"KiB", 1ULL << 10}, {"B", 1ULL},
+    }};
+    std::string_view number = value;
+    uint64_t multiplier = 1;
+    for (const auto& [suffix, scale] : suffixes) {
+        if (number.size() >= suffix.size() && number.ends_with(suffix)) {
+            number.remove_suffix(suffix.size());
+            multiplier = scale;
+            break;
+        }
+    }
+    if (number.empty()) {
+        throw std::runtime_error(option_name + " must be an unsigned byte size");
+    }
+    uint64_t parsed = 0;
+    for (const char character : number) {
+        if (character < '0' || character > '9') {
+            throw std::runtime_error(
+                option_name + " must use an integer with optional KiB/MiB/GiB/TiB suffix");
+        }
+        const uint64_t digit = static_cast<uint64_t>(character - '0');
+        if (parsed > (std::numeric_limits<uint64_t>::max() - digit) / 10) {
+            throw std::runtime_error(option_name + " is outside the supported byte range");
+        }
+        parsed = parsed * 10 + digit;
+    }
+    if (parsed > std::numeric_limits<uint64_t>::max() / multiplier) {
+        throw std::runtime_error(option_name + " is outside the supported byte range");
+    }
+    return parsed * multiplier;
+}
+
 Options parse_options(int argc, char** argv) {
-    if (argc < 2 || std::string(argv[1]) != "convert") {
+    if (argc < 2 || (std::string(argv[1]) != "convert" &&
+                     std::string(argv[1]) != "count")) {
         usage_error();
     }
 
     Options options;
+    std::string convert_only_option;
+    options.direct_count = std::string(argv[1]) == "count";
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         auto require_value = [&](const std::string& name) -> std::string {
@@ -218,6 +446,10 @@ Options parse_options(int argc, char** argv) {
             options.gamp = require_value("--gamp");
         } else if (arg == "--xg") {
             options.xg = require_value("--xg");
+        } else if (arg == "--gbz") {
+            options.gbz = require_value("--gbz");
+        } else if (arg == "--gbwt") {
+            options.gbwt = require_value("--gbwt");
         } else if (arg == "--t2g") {
             options.t2g = require_value("--t2g");
         } else if (arg == "--path-identity-ledger") {
@@ -250,6 +482,7 @@ Options parse_options(int argc, char** argv) {
             }
         } else if (arg == "--strand") {
             const std::string value = require_value("--strand");
+            convert_only_option = "--strand";
             if (value == "both") {
                 options.strand = StrandFilter::Both;
             } else if (value == "forward") {
@@ -261,6 +494,7 @@ Options parse_options(int argc, char** argv) {
             }
         } else if (arg == "--count-mode") {
             const std::string value = require_value("--count-mode");
+            convert_only_option = "--count-mode";
             if (value == "score") {
                 options.count_mode = pathtally::CountMode::Score;
             } else if (value == "gene") {
@@ -280,6 +514,7 @@ Options parse_options(int argc, char** argv) {
             options.bam_out = require_value("--bam-out");
         } else if (arg == "--bam-multigene") {
             const std::string value = require_value("--bam-multigene");
+            convert_only_option = "--bam-multigene";
             if (value == "omit") {
                 options.bam_multigene = BamMultiGenePolicy::Omit;
             } else if (value == "first") {
@@ -295,6 +530,7 @@ Options parse_options(int argc, char** argv) {
             options.threads = parse_size_option("--threads", require_value("--threads"));
         } else if (arg == "--no-ex50-score-window") {
             options.exact_ex50_score_window_enabled = false;
+            convert_only_option = "--no-ex50-score-window";
         } else if (arg == "--compact-exact-count-bam") {
             const std::string value = require_value("--compact-exact-count-bam");
             if (value == "forward") {
@@ -314,13 +550,62 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--strict-allowlisted-parents-sha256") {
             options.strict_allowlisted_parents_sha256 =
                 require_value("--strict-allowlisted-parents-sha256");
+        } else if (arg == "--count-bundle" && options.direct_count) {
+            options.count_bundle = require_value("--count-bundle");
+        } else if (arg == "--annotation" && options.direct_count) {
+            options.annotation = require_value("--annotation");
+        } else if (arg == "--annotation-reference" && options.direct_count) {
+            options.annotation_reference = require_value("--annotation-reference");
+        } else if (arg == "--barcode-whitelist" && options.direct_count) {
+            options.barcode_whitelist = require_value("--barcode-whitelist");
+        } else if (arg == "--cr7" && options.direct_count) {
+            options.requested_profiles.emplace_back("cr7-v1");
+        } else if (arg == "--pansc-strict-v1" && options.direct_count) {
+            options.requested_profiles.emplace_back("pansc-strict-v1");
+        } else if (arg == "--profile" && options.direct_count) {
+            options.requested_profiles.push_back(require_value("--profile"));
+        } else if (arg == "--profile-override" && options.direct_count) {
+            options.profile_overrides.push_back(
+                pancollapse::direct_count::parse_profile_override(
+                    require_value("--profile-override")));
+        } else if (arg == "--analysis-scope" && options.direct_count) {
+            options.analysis_scope = require_value("--analysis-scope");
+        } else if (arg == "--count-memory-budget" && options.direct_count) {
+            options.count_memory_budget = parse_byte_size_option(
+                "--count-memory-budget", require_value("--count-memory-budget"));
+        } else if (arg == "--10x-mex" && options.direct_count) {
+            options.count_10x_mex = true;
+        } else if (arg == "--rad-out" && options.direct_count) {
+            options.count_rad_out = true;
+        } else if (arg == "--read-assignments-out" && options.direct_count) {
+            options.read_assignments_out = require_value("--read-assignments-out");
+        } else if (arg == "--compatibility-out" && options.direct_count) {
+            options.compatibility_out = require_value("--compatibility-out");
+        } else if (arg == "--compatibility-in" && options.direct_count) {
+            options.compatibility_in = require_value("--compatibility-in");
         } else {
             usage_error();
         }
     }
 
-    if (options.gamp.empty() || options.xg.empty() || options.out_dir.empty()) {
+    if (options.out_dir.empty()) {
         usage_error();
+    }
+    const bool compatibility_replay = !options.compatibility_in.empty();
+    if (compatibility_replay) {
+        if (!options.direct_count || !options.gamp.empty() || !options.xg.empty() ||
+            !options.gbz.empty() || !options.gbwt.empty() ||
+            !options.compatibility_out.empty()) {
+            throw std::runtime_error(
+                "--compatibility-in is an exclusive count input and cannot be combined "
+                "with --gamp, --xg, --gbz, --gbwt, or --compatibility-out");
+        }
+    } else {
+        if (options.gamp.empty()) usage_error();
+        if ((!options.gbz.empty() && (!options.xg.empty() || !options.gbwt.empty())) ||
+            (options.gbz.empty() && options.xg.empty())) {
+            throw std::runtime_error("requires exactly one graph source: --xg FILE [--gbwt FILE] or --gbz FILE; --gbwt requires --xg");
+        }
     }
     if (options.raw_cb_length == 0 || options.raw_cb_length > 32 || options.raw_umi_length == 0 ||
         options.raw_umi_length > 32) {
@@ -329,7 +614,172 @@ Options parse_options(int argc, char** argv) {
     if (options.threads == 0) {
         throw std::runtime_error("--threads must be at least 1");
     }
-    const bool production_ledger = !options.path_identity_ledger.empty();
+    if (options.direct_count) {
+        const bool annotation_route = !options.annotation.empty();
+        if (annotation_route == !options.count_bundle.empty()) {
+            throw std::runtime_error(
+                "panCollapse count requires exactly one of --count-bundle or --annotation");
+        }
+        if (options.barcode_whitelist.empty()) {
+            throw std::runtime_error("panCollapse count requires --barcode-whitelist");
+        }
+        if (annotation_route && (options.annotation_reference.empty() ||
+                                 options.path_identity_ledger.empty())) {
+            throw std::runtime_error(
+                "panCollapse count --annotation requires --annotation-reference and "
+                "--path-identity-ledger");
+        }
+        if ((!annotation_route && !options.path_identity_ledger.empty()) ||
+            !options.legacy_adapter.empty() ||
+            !options.bam_out.empty() || !options.debug_evidence_out.empty() ||
+            options.compact_exact_count_strand.has_value() ||
+            !options.strict_allowlisted_parents.empty() ||
+            !options.strict_allowlisted_parents_sha256.empty() ||
+            !options.path_identity_ledger_sha256.empty()) {
+            throw std::runtime_error(
+                "panCollapse count obtains identity/policy from --count-bundle or "
+                "--annotation and cannot use legacy, BAM, debug, compact-BAM, or external "
+                "allowlist options; --path-identity-ledger is accepted only with "
+                "--annotation");
+        }
+        if (compatibility_replay && annotation_route) {
+            throw std::runtime_error(
+                "--compatibility-in replays against a --count-bundle and cannot be combined "
+                "with --annotation");
+        }
+        if (compatibility_replay &&
+            (options.count_rad_out || !options.t2g.empty() || !options.body_t2g.empty())) {
+            throw std::runtime_error(
+                "--compatibility-in cannot regenerate RAD or consume t2g/body-t2g; "
+                "it replays stored compatibility facts into count outputs");
+        }
+        if (!convert_only_option.empty()) {
+            throw std::runtime_error(
+                "panCollapse count does not accept " + convert_only_option +
+                "; counting follows the frozen profile policy and --rad-out is unfiltered");
+        }
+        if (!options.read_assignments_out.empty()) {
+            const std::filesystem::path normalized =
+                options.read_assignments_out.lexically_normal();
+            if (options.read_assignments_out.is_absolute() ||
+                options.read_assignments_out != normalized ||
+                options.read_assignments_out.extension() != ".parquet") {
+                throw std::runtime_error(
+                    "--read-assignments-out must be a normalized relative .parquet path");
+            }
+            for (const auto& component : options.read_assignments_out) {
+                if (component == "." || component == "..") {
+                    throw std::runtime_error(
+                        "--read-assignments-out must stay within --out-dir");
+                }
+            }
+            const std::string first = options.read_assignments_out.begin()->string();
+            if (first == "parquet" || first == "mex" || first == "spill" ||
+                options.read_assignments_out == "manifest.json" ||
+                options.read_assignments_out == "summary.tsv" ||
+                options.read_assignments_out == "map.rad") {
+                throw std::runtime_error(
+                    "--read-assignments-out collides with a reserved result path");
+            }
+        }
+        if (options.requested_profiles.empty()) {
+            throw std::runtime_error("panCollapse count requires at least one profile");
+        }
+        // Canonicalize selectors before checking for repeats so an alias such as
+        // "cr7" cannot slip past as a second copy of cr7-v1.
+        for (std::string& requested : options.requested_profiles) {
+            requested = pancollapse::direct_count::profile(
+                            pancollapse::direct_count::parse_profile_id(requested))
+                            .id_string;
+        }
+        std::sort(options.requested_profiles.begin(), options.requested_profiles.end());
+        if (std::adjacent_find(options.requested_profiles.begin(),
+                               options.requested_profiles.end()) !=
+            options.requested_profiles.end()) {
+            throw std::runtime_error("panCollapse count profile IDs must not be repeated");
+        }
+        if (!options.profile_overrides.empty() &&
+            options.analysis_scope != "sensitivity-analysis") {
+            throw std::runtime_error(
+                "--profile-override requires --analysis-scope sensitivity-analysis");
+        }
+        if (!options.analysis_scope.empty() &&
+            options.analysis_scope != "sensitivity-analysis") {
+            throw std::runtime_error(
+                "the only v0.10 analysis scope is sensitivity-analysis");
+        }
+        for (const std::string& requested : options.requested_profiles) {
+            const auto id = pancollapse::direct_count::parse_profile_id(requested);
+            std::vector<pancollapse::direct_count::ProfileOverride> overrides;
+            std::copy_if(options.profile_overrides.begin(), options.profile_overrides.end(),
+                         std::back_inserter(overrides), [&](const auto& override) {
+                             return override.base == id;
+                         });
+            options.count_profiles.push_back(
+                pancollapse::direct_count::effective_profile(id, overrides));
+        }
+        for (const auto& override : options.profile_overrides) {
+            const bool selected = std::any_of(
+                options.count_profiles.begin(), options.count_profiles.end(),
+                [&](const auto& profile) {
+                    return profile.profile.id == override.base;
+                });
+            if (!selected) {
+                throw std::runtime_error(
+                    "profile override base was not selected by --profile or its alias");
+            }
+        }
+        if (options.count_memory_budget < (1ULL << 20)) {
+            throw std::runtime_error("--count-memory-budget must be at least 1MiB");
+        }
+        // Canonicalize the destination so "counts", "./counts", and "counts/" all
+        // derive the same parent, name, and staging sibling; the atomic publish
+        // compares normalized parent paths byte for byte.
+        options.out_dir = std::filesystem::absolute(options.out_dir).lexically_normal();
+        if (!options.out_dir.has_filename()) {
+            options.out_dir = options.out_dir.parent_path();
+        }
+        if (!options.compatibility_out.empty()) {
+            options.compatibility_out =
+                std::filesystem::absolute(options.compatibility_out).lexically_normal();
+            auto contains = [](const std::filesystem::path& parent,
+                               const std::filesystem::path& child) {
+                auto left = parent.begin();
+                auto right = child.begin();
+                for (; left != parent.end(); ++left, ++right) {
+                    if (right == child.end() || *left != *right) return false;
+                }
+                return true;
+            };
+            if (contains(options.out_dir, options.compatibility_out) ||
+                contains(options.compatibility_out, options.out_dir)) {
+                throw std::runtime_error(
+                    "--compatibility-out and --out-dir must be disjoint destinations");
+            }
+        }
+        if (!options.compatibility_in.empty()) {
+            options.compatibility_in =
+                std::filesystem::absolute(options.compatibility_in).lexically_normal();
+            auto contains = [](const std::filesystem::path& parent,
+                               const std::filesystem::path& child) {
+                auto left = parent.begin();
+                auto right = child.begin();
+                for (; left != parent.end(); ++left, ++right) {
+                    if (right == child.end() || *left != *right) return false;
+                }
+                return true;
+            };
+            if (contains(options.out_dir, options.compatibility_in) ||
+                contains(options.compatibility_in, options.out_dir)) {
+                throw std::runtime_error(
+                    "--compatibility-in and --out-dir must be disjoint paths");
+            }
+        }
+        options.count_mode = pathtally::CountMode::GeneFullEx50pAS;
+        options.bam_multigene = BamMultiGenePolicy::All;
+        options.exact_ex50_score_window_enabled = false;
+    }
+    const bool production_ledger = options.direct_count || !options.path_identity_ledger.empty();
     const bool legacy_adapter = !options.legacy_adapter.empty();
     if (production_ledger == legacy_adapter) {
         throw std::runtime_error(
@@ -341,17 +791,17 @@ Options parse_options(int argc, char** argv) {
                 "--count-mode genefull_ex50pas requires --path-identity-ledger; "
                 "legacy t2g/body-t2g evidence cannot represent exact base-overlap tiers");
         }
-        if (options.bam_out.empty()) {
+        if (!options.direct_count && options.bam_out.empty()) {
             throw std::runtime_error(
                 "--count-mode genefull_ex50pas is a BAM/count_cr mode and requires --bam-out");
         }
-        if (options.bam_multigene != BamMultiGenePolicy::All) {
+        if (!options.direct_count && options.bam_multigene != BamMultiGenePolicy::All) {
             throw std::runtime_error(
                 "--count-mode genefull_ex50pas requires --bam-multigene all so downstream "
                 "selection receives every exact evidence entry");
         }
     }
-    if (!options.exact_ex50_score_window_enabled &&
+    if (!options.direct_count && !options.exact_ex50_score_window_enabled &&
         (!production_ledger || options.count_mode == pathtally::CountMode::Score ||
          options.bam_out.empty())) {
         throw std::runtime_error(
@@ -407,6 +857,9 @@ Options parse_options(int argc, char** argv) {
         }
     }
     if (production_ledger) {
+        if (options.direct_count) {
+            return options;
+        }
         if (!options.t2g.empty() || !options.body_t2g.empty()) {
             throw std::runtime_error(
                 "--path-identity-ledger cannot be combined with --t2g or --body-t2g");
@@ -625,6 +1078,71 @@ BodyT2gData read_body_t2g(const std::filesystem::path& filename) {
     return data;
 }
 
+// The count bundle is the only live annotation input. Optional historical t2g
+// files are accepted as fail-fast compatibility assertions for callers that
+// already possess them; they are never consulted while resolving a read.
+void validate_count_t2g_assertions(
+    const std::filesystem::path& exon_t2g_path,
+    const std::filesystem::path& body_t2g_path,
+    const path_identity::PathIdentityLedger& ledger) {
+    if (!exon_t2g_path.empty()) {
+        const T2gData supplied = read_t2g(exon_t2g_path);
+        std::map<std::string, std::pair<std::string, std::string>> expected;
+        for (const auto& [path, row] : ledger.rows_by_path) {
+            const auto& identity = row.annotation;
+            if (identity.feature_layer == "exon") {
+                expected.emplace(
+                    path, std::pair{identity.canonical_transcript, identity.gene_id});
+            }
+        }
+        if (supplied.path_transcript.size() != expected.size()) {
+            throw std::runtime_error(
+                "--t2g does not contain exactly the count bundle's exon path universe");
+        }
+        for (const auto& [path, identity] : expected) {
+            const auto supplied_path = supplied.path_transcript.find(path);
+            if (supplied_path == supplied.path_transcript.end() ||
+                supplied_path->second != identity.first) {
+                throw std::runtime_error(
+                    "--t2g disagrees with the count bundle for exon path " + path);
+            }
+            const auto supplied_gene = supplied.transcript_gene.find(identity.first);
+            if (supplied_gene == supplied.transcript_gene.end() ||
+                supplied_gene->second != identity.second) {
+                throw std::runtime_error(
+                    "--t2g disagrees with the count bundle for canonical transcript " +
+                    identity.first);
+            }
+        }
+    }
+
+    if (!body_t2g_path.empty()) {
+        const BodyT2gData supplied = read_body_t2g(body_t2g_path);
+        std::map<std::string, std::pair<std::string, std::string>> expected;
+        for (const auto& [path, row] : ledger.rows_by_path) {
+            const auto& identity = row.annotation;
+            if (identity.feature_layer == "body") {
+                expected.emplace(
+                    path, std::pair{identity.gene_id, identity.canonical_transcript});
+            }
+        }
+        if (supplied.paths.size() != expected.size()) {
+            throw std::runtime_error(
+                "--body-t2g does not contain exactly the count bundle's body path universe");
+        }
+        for (const auto& [path, identity] : expected) {
+            const auto supplied_path = supplied.paths.find(path);
+            if (supplied_path == supplied.paths.end() ||
+                supplied_path->second.gene != identity.first ||
+                (supplied.transcript_specific &&
+                 supplied_path->second.transcript != identity.second)) {
+                throw std::runtime_error(
+                    "--body-t2g disagrees with the count bundle for body path " + path);
+            }
+        }
+    }
+}
+
 // Exact body-path rows are authoritative. Only the legacy two-column format retains the
 // suffix-stripped bare-path fallback; explicit transcript-body rows must name the actual raw
 // graph paths so a fragment/copy cannot be assigned accidentally.
@@ -672,7 +1190,8 @@ std::string molecule_status_counter(MoleculeParseStatus status) {
     throw std::runtime_error("unknown molecule parse status");
 }
 
-MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length, size_t umi_length) {
+MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
+                                      size_t umi_length) {
     // New RNA carry-along names end in _cy<hex(CY)>_uy<hex(UY)>. Hex keeps arbitrary printable
     // FASTQ quality characters out of the QNAME delimiter/whitespace grammar. Legacy names with
     // neither quality, and the transitional CY-only form, remain accepted.
@@ -688,6 +1207,7 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
         }
         const std::string encoded = molecule_name.substr(quality_sep + 1 + prefix.size());
         if (encoded.size() != expected_length * 2) {
+            molecule_name.resize(quality_sep);
             throw std::invalid_argument("hex-encoded raw " + label +
                                         " quality length does not match configured length");
         }
@@ -703,12 +1223,14 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
             const int hi = hex_value(encoded[i]);
             const int lo = hex_value(encoded[i + 1]);
             if (hi < 0 || lo < 0) {
+                molecule_name.resize(quality_sep);
                 throw std::invalid_argument("raw " + label +
                                             " quality contains non-hexadecimal text");
             }
             const char quality = static_cast<char>((hi << 4) | lo);
             const unsigned char printable = static_cast<unsigned char>(quality);
             if (printable < 33 || printable > 126) {
+                molecule_name.resize(quality_sep);
                 throw std::invalid_argument("decoded raw " + label +
                                             " quality is not printable FASTQ quality text");
             }
@@ -717,15 +1239,42 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
         molecule_name.resize(quality_sep);
         return true;
     };
+    // Failure results still carry the read-name prefix when the name has the
+    // <prefix>_<CB>_<UMI> shape, so diagnostics can report one QNAME grammar.
+    auto failure = [&](MoleculeParseStatus status, std::string message) {
+        MoleculeId partial;
+        // A failure in the first (UMI) quality pass leaves a well-formed barcode
+        // quality field attached; drop any trailing quality fields first.
+        std::string_view trimmed = molecule_name;
+        for (int pass = 0; pass < 2; ++pass) {
+            const size_t sep = trimmed.rfind('_');
+            if (sep == std::string_view::npos) {
+                break;
+            }
+            const std::string_view field = trimmed.substr(sep + 1);
+            if (!field.starts_with("cy") && !field.starts_with("uy")) {
+                break;
+            }
+            trimmed = trimmed.substr(0, sep);
+        }
+        const size_t last_sep = trimmed.rfind('_');
+        if (last_sep != std::string_view::npos && last_sep > 0) {
+            const size_t prior_sep = trimmed.rfind('_', last_sep - 1);
+            if (prior_sep != std::string_view::npos) {
+                partial.original_name = std::string(trimmed.substr(0, prior_sep));
+            }
+        }
+        return MoleculeParseResult{status, std::move(partial), std::move(message)};
+    };
     try {
         const bool has_uy = decode_quality_suffix("uy", umi_length, umi_quality, "UMI");
         const bool has_cy = decode_quality_suffix("cy", cb_length, barcode_quality, "barcode");
         if (has_uy && !has_cy) {
-            return {MoleculeParseStatus::Malformed, {},
-                    "raw UMI quality suffix requires the preceding barcode quality suffix"};
+            return failure(MoleculeParseStatus::Malformed,
+                           "raw UMI quality suffix requires the preceding barcode quality suffix");
         }
     } catch (const std::invalid_argument& error) {
-        return {MoleculeParseStatus::Malformed, {}, error.what()};
+        return failure(MoleculeParseStatus::Malformed, error.what());
     }
 
     const size_t umi_sep = molecule_name.rfind('_');
@@ -733,33 +1282,33 @@ MoleculeParseResult parse_molecule_id(const std::string& name, size_t cb_length,
         return {MoleculeParseStatus::Missing, {}, "GAMP name does not contain raw UMI"};
     }
     if (umi_sep == 0 || umi_sep + 1 == molecule_name.size()) {
-        return {MoleculeParseStatus::Missing, {}, "GAMP name has an empty raw CB or UMI field"};
+        return failure(MoleculeParseStatus::Missing, "GAMP name has an empty raw CB or UMI field");
     }
     const size_t cb_sep = molecule_name.rfind('_', umi_sep - 1);
     if (cb_sep == std::string::npos) {
-        return {MoleculeParseStatus::Missing, {}, "GAMP name does not contain raw CB"};
+        return failure(MoleculeParseStatus::Missing, "GAMP name does not contain raw CB");
     }
 
     MoleculeId id{molecule_name.substr(0, cb_sep),
                   molecule_name.substr(cb_sep + 1, umi_sep - cb_sep - 1),
                   molecule_name.substr(umi_sep + 1), barcode_quality, umi_quality};
     if (id.barcode.empty() || id.umi.empty()) {
-        return {MoleculeParseStatus::Missing, {}, "GAMP name has an empty raw CB or UMI field"};
+        return {MoleculeParseStatus::Missing, MoleculeId{id.original_name, {}, {}, {}, {}}, "GAMP name has an empty raw CB or UMI field"};
     }
     if (id.original_name.empty()) {
-        return {MoleculeParseStatus::Malformed, {}, "GAMP name has no original read-name prefix"};
+        return {MoleculeParseStatus::Malformed, MoleculeId{id.original_name, {}, {}, {}, {}}, "GAMP name has no original read-name prefix"};
     }
     if (id.barcode.size() != cb_length || id.umi.size() != umi_length) {
-        return {MoleculeParseStatus::Malformed, {}, "raw CB/UMI lengths do not match configured lengths"};
+        return {MoleculeParseStatus::Malformed, MoleculeId{id.original_name, {}, {}, {}, {}}, "raw CB/UMI lengths do not match configured lengths"};
     }
     for (const char base : id.barcode) {
         if (!is_supported_molecule_base(base)) {
-            return {MoleculeParseStatus::Unsupported, {}, "raw CB contains unsupported base"};
+            return {MoleculeParseStatus::Unsupported, MoleculeId{id.original_name, {}, {}, {}, {}}, "raw CB contains unsupported base"};
         }
     }
     for (const char base : id.umi) {
         if (!is_supported_molecule_base(base)) {
-            return {MoleculeParseStatus::Unsupported, {}, "raw UMI contains unsupported base"};
+            return {MoleculeParseStatus::Unsupported, MoleculeId{id.original_name, {}, {}, {}, {}}, "raw UMI contains unsupported base"};
         }
     }
     return {MoleculeParseStatus::Ok, id, {}};
@@ -1415,6 +1964,14 @@ std::string join_sorted(std::vector<const std::string*> values, char delimiter) 
     return joined;
 }
 
+std::string join_sorted(const std::vector<pathtally::RankedParent>& parents,
+                        char delimiter) {
+    std::vector<const std::string*> names;
+    names.reserve(parents.size());
+    for (const auto& parent : parents) names.push_back(parent.unique_parent);
+    return join_sorted(std::move(names), delimiter);
+}
+
 // D061 (splice-junction concordance): every consecutive aligned node pair a read group's own
 // alignments make -- within one subpath's mapping list, or across a subpath next/connection link to
 // another subpath -- is a candidate splice edge, checked by the caller against the global
@@ -1425,9 +1982,10 @@ std::string join_sorted(std::vector<const std::string*> values, char delimiter) 
 // with zero mappings (never expected in practice, but not guaranteed by the proto) contributes no
 // first/last node and is simply skipped.
 std::vector<std::pair<int64_t, int64_t>> collect_read_node_pairs(
-    const std::vector<vg::MultipathAlignment>& records) {
+    const std::vector<const vg::MultipathAlignment*>& records) {
     std::vector<std::pair<int64_t, int64_t>> pairs;
-    for (const vg::MultipathAlignment& record : records) {
+    for (const vg::MultipathAlignment* record_pointer : records) {
+        const vg::MultipathAlignment& record = *record_pointer;
         for (int s = 0; s < record.subpath_size(); ++s) {
             const vg::Subpath& subpath = record.subpath(s);
             const vg::Path& path = subpath.path();
@@ -1463,7 +2021,14 @@ struct Group {
     bool skip_for_molecule_identity = false;
     MoleculeParseStatus molecule_status = MoleculeParseStatus::Ok;
     std::string molecule_message;
-    std::vector<vg::MultipathAlignment> records;
+    // The read's aligned records. They point into `owned_records` for the serial and ordered
+    // batch readers, or into the counting worker's arena for read-granular input.
+    std::vector<const vg::MultipathAlignment*> records;
+    std::vector<vg::MultipathAlignment> owned_records;
+    // Read-granular input (D090) carries the read still serialized; the worker that counts
+    // it decodes these first, so no decoded read ever waits in a queue.
+    std::vector<std::unique_ptr<std::string>> raw_records;
+    size_t raw_bytes = 0;
     bool saw_subpath_record = false;
     bool saw_unaligned_record = false;
 };
@@ -1767,9 +2332,645 @@ private:
     std::array<Shard, ShardCount> shards_;
 };
 
+// Assignment signatures repeat heavily in production, but their result is independent of
+// barcode and UMI. Keep a bounded insertion-only cache: an exact key match is reusable across
+// workers, while a full shard simply evaluates new evidence without caching it. There is no
+// eviction order that could vary with scheduling. A miss is built with no lock held: the value is
+// a pure function of the key, so two workers that miss together build equal values and the first
+// insert wins. Building under the exclusive lock stalled every lookup on the shard behind dense
+// reads, and once the cache fills nearly every read misses.
+template<class Key, class Value, size_t ShardCount = 256>
+class BoundedShardedCache {
+public:
+    explicit BoundedShardedCache(size_t maximum_entries)
+        : entries_per_shard_(std::max<size_t>(1, (maximum_entries + ShardCount - 1) /
+                                                     ShardCount)) {
+        static_assert(ShardCount > 0);
+        if (maximum_entries == 0) {
+            throw std::invalid_argument("bounded cache capacity must be positive");
+        }
+    }
+
+    template<class Builder>
+    std::shared_ptr<const Value> get_or_build(const Key& key, Builder&& builder) {
+        Shard& shard = shards_[std::hash<Key>{}(key) % ShardCount];
+        {
+            std::shared_lock<std::shared_mutex> lock(shard.mutex);
+            const auto found = shard.values.find(key);
+            if (found != shard.values.end()) {
+                hits_.fetch_add(1, std::memory_order_relaxed);
+                return found->second;
+            }
+        }
+        auto value = std::make_shared<const Value>(builder());
+        std::unique_lock<std::shared_mutex> lock(shard.mutex);
+        const auto found = shard.values.find(key);
+        if (found != shard.values.end()) {
+            // Another worker inserted this key while ours was building. Report it as a hit so the
+            // counters stay those of single-flight construction: misses == entries + uncached.
+            hits_.fetch_add(1, std::memory_order_relaxed);
+            return found->second;
+        }
+        misses_.fetch_add(1, std::memory_order_relaxed);
+        if (shard.values.size() < entries_per_shard_) {
+            shard.values.emplace(key, value);
+            entries_.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            uncached_.fetch_add(1, std::memory_order_relaxed);
+        }
+        return value;
+    }
+
+    // Heap held by the cache: map nodes, buckets, keys, and whatever `value_bytes` reports for a
+    // value, excluding allocator overhead. Call only after the workers have stopped.
+    template<class ValueBytes>
+    size_t approximate_bytes(ValueBytes&& value_bytes) const {
+        size_t total = 0;
+        for (const Shard& shard : shards_) {
+            total += shard.values.bucket_count() * sizeof(void*);
+            for (const auto& [key, value] : shard.values) {
+                total += sizeof(typename decltype(shard.values)::value_type) + 2 * sizeof(void*);
+                total += string_heap_bytes(key);
+                // make_shared: one block holding the control block and the value.
+                total += 2 * sizeof(long) + value_bytes(*value);
+            }
+        }
+        return total;
+    }
+
+    static size_t string_heap_bytes(const std::string& value) {
+        return value.capacity() > 15 ? value.capacity() + 1 : 0;
+    }
+
+    size_t hits() const { return hits_.load(std::memory_order_relaxed); }
+    size_t misses() const { return misses_.load(std::memory_order_relaxed); }
+    size_t entries() const { return entries_.load(std::memory_order_relaxed); }
+    size_t uncached() const { return uncached_.load(std::memory_order_relaxed); }
+
+private:
+    struct Shard {
+        std::shared_mutex mutex;
+        std::unordered_map<Key, std::shared_ptr<const Value>> values;
+    };
+
+    size_t entries_per_shard_;
+    std::array<Shard, ShardCount> shards_;
+    std::atomic<size_t> hits_{0};
+    std::atomic<size_t> misses_{0};
+    std::atomic<size_t> entries_{0};
+    std::atomic<size_t> uncached_{0};
+};
+
+void append_signature_integer(std::string& output, std::uint64_t value) {
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        output.push_back(static_cast<char>((value >> shift) & 0xffU));
+    }
+}
+
+void append_signature_string(std::string& output, std::string_view value) {
+    append_signature_integer(output, value.size());
+    output.append(value);
+}
+
+std::string assignment_candidate_signature(
+    const pancollapse::direct_count::AssignmentCandidate& candidate) {
+    std::string output;
+    append_signature_string(output, candidate.gene);
+    append_signature_string(output, candidate.equivalence_gene);
+    append_signature_string(output, candidate.nested_host);
+    append_signature_integer(output, static_cast<std::uint64_t>(candidate.score));
+    append_signature_integer(output, static_cast<std::uint8_t>(candidate.tier));
+    append_signature_integer(output, static_cast<std::uint8_t>(candidate.strand));
+    append_signature_integer(output, static_cast<std::uint8_t>(candidate.competition));
+    append_signature_integer(output, candidate.body_sample_support);
+    // Sort pointers, not the strings themselves: this ran once per candidate and copied the
+    // whole sample-name vector to do it.
+    std::vector<const std::string*> body_support_units;
+    body_support_units.reserve(candidate.body_support_units.size());
+    for (const std::string& unit : candidate.body_support_units) {
+        body_support_units.push_back(&unit);
+    }
+    std::sort(body_support_units.begin(), body_support_units.end(),
+              [](const std::string* left, const std::string* right) {
+                  return *left < *right;
+              });
+    body_support_units.erase(
+        std::unique(body_support_units.begin(), body_support_units.end(),
+                    [](const std::string* left, const std::string* right) {
+                        return *left == *right;
+                    }),
+        body_support_units.end());
+    append_signature_integer(output, body_support_units.size());
+    for (const std::string* unit : body_support_units) {
+        append_signature_string(output, *unit);
+    }
+    append_signature_integer(output, candidate.identity_known ? 1 : 0);
+    append_signature_integer(output, candidate.novel_paralog ? 1 : 0);
+    append_signature_integer(output, candidate.strong_local_support ? 1 : 0);
+    append_signature_integer(
+        output, candidate.protected_primary_protein_nested_host ? 1 : 0);
+    append_signature_string(output, candidate.novel_origin_gene);
+    append_signature_integer(output, candidate.categories.size());
+    for (const std::string& category : candidate.categories) {
+        append_signature_string(output, category);
+    }
+    append_signature_integer(output, candidate.gene_types.size());
+    for (const std::string& gene_type : candidate.gene_types) {
+        append_signature_string(output, gene_type);
+    }
+    return output;
+}
+
+// The assignment cache is keyed by a digest of a signature over every candidate's evidence:
+// gene, equivalence gene, nested host, body support sample names, category names and
+// gene-type names, across both the exact and gene-fallback lists. On a production pangenome
+// that text runs to hundreds of kilobytes per read group, and materializing it cost three
+// copies per read: the per-candidate rows, their concatenation, and the outer per-profile
+// append. Stream it into the digest instead. Candidate rows are still built because they are
+// sorted, which is what makes the key independent of candidate order, but nothing larger than
+// one row is ever assembled.
+class SignatureDigest {
+  public:
+    SignatureDigest() : context_(EVP_MD_CTX_new(), EVP_MD_CTX_free) {
+        if (!context_ || EVP_DigestInit_ex(context_.get(), EVP_sha256(), nullptr) != 1) {
+            throw std::runtime_error("cannot initialize an assignment signature digest");
+        }
+    }
+
+    void byte(unsigned char value) { raw(reinterpret_cast<const char*>(&value), 1); }
+
+    void integer(std::uint64_t value) {
+        char encoded[8];
+        for (int index = 0; index < 8; ++index) {
+            encoded[index] = static_cast<char>((value >> (56 - 8 * index)) & 0xffU);
+        }
+        raw(encoded, sizeof(encoded));
+    }
+
+    void string(std::string_view value) {
+        integer(value.size());
+        raw(value.data(), value.size());
+    }
+
+    std::string finish() {
+        flush();
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        unsigned int length = 0;
+        if (EVP_DigestFinal_ex(context_.get(), digest, &length) != 1) {
+            throw std::runtime_error("cannot finalize an assignment signature digest");
+        }
+        return std::string(reinterpret_cast<const char*>(digest), length);
+    }
+
+  private:
+    void raw(const char* data, size_t size) {
+        if (size >= buffer_.size()) {
+            flush();
+            update(data, size);
+            return;
+        }
+        if (used_ + size > buffer_.size()) {
+            flush();
+        }
+        std::memcpy(buffer_.data() + used_, data, size);
+        used_ += size;
+    }
+
+    void flush() {
+        if (used_ == 0) return;
+        update(buffer_.data(), used_);
+        used_ = 0;
+    }
+
+    void update(const char* data, size_t size) {
+        if (EVP_DigestUpdate(context_.get(), data, size) != 1) {
+            throw std::runtime_error("cannot update an assignment signature digest");
+        }
+    }
+
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context_;
+    std::array<char, 8192> buffer_{};
+    size_t used_ = 0;
+};
+
+void digest_assignment_facts(SignatureDigest& digest,
+                             const pancollapse::direct_count::AssignmentFacts& facts,
+                             std::vector<std::string>& rows) {
+    digest.byte(facts.has_complete_provenance ? 1 : 0);
+    auto digest_candidates = [&](const auto& candidates) {
+        rows.clear();
+        rows.reserve(candidates.size());
+        for (const auto& candidate : candidates) {
+            rows.push_back(assignment_candidate_signature(candidate));
+        }
+        // Sorting is what makes the key independent of candidate order.
+        std::sort(rows.begin(), rows.end());
+        digest.integer(rows.size());
+        for (const std::string& row : rows) {
+            digest.string(row);
+        }
+    };
+    digest_candidates(facts.exact);
+    digest_candidates(facts.gene_fallback);
+}
+
+int run_compatibility_replay(int argc, char** argv, const Options& options) {
+    const auto invocation_started = std::chrono::steady_clock::now();
+    if (options.threads != 1) {
+        std::cerr << "panCollapse: compatibility replay: requested_workers="
+                  << options.threads
+                  << " (initialization uses them; the streaming read loop is"
+                     " currently serial)\n";
+    }
+    const auto count_bundle_load_started = std::chrono::steady_clock::now();
+    const auto count_bundle = pancollapse::direct_count::load_count_fact_bundle(
+        options.count_bundle);
+    const double count_bundle_load_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - count_bundle_load_started).count();
+    std::cerr << "panCollapse: initialization: phase=count_bundle_load"
+              << " files=" << count_bundle.files.size()
+              << " seconds=" << count_bundle_load_seconds << '\n';
+
+    const auto identity_ledger_read_started = std::chrono::steady_clock::now();
+    const path_identity::PathIdentityLedger identity_ledger = path_identity::read(
+        count_bundle.files.at("path_identity_ledger").path, true);
+    const double identity_ledger_read_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - identity_ledger_read_started).count();
+    std::cerr << "panCollapse: initialization: phase=identity_ledger_read"
+              << " rows=" << identity_ledger.rows_by_path.size()
+              << " seconds=" << identity_ledger_read_seconds << '\n';
+
+    const auto count_fact_catalog_started = std::chrono::steady_clock::now();
+    const pancollapse::direct_count::CountFactCatalog count_facts =
+        pancollapse::direct_count::CountFactCatalog::load(count_bundle,
+                                                          identity_ledger);
+    const double count_fact_catalog_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - count_fact_catalog_started).count();
+    std::cerr << "panCollapse: initialization: phase=count_fact_catalog"
+              << " genes=" << count_facts.genes().size()
+              << " seconds=" << count_fact_catalog_seconds << '\n';
+
+    const auto compatibility_open_started = std::chrono::steady_clock::now();
+    pancollapse::direct_count::CompatibilityBundleReader compatibility(
+        options.compatibility_in);
+    const double compatibility_open_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - compatibility_open_started).count();
+    std::cerr << "panCollapse: initialization: phase=compatibility_open"
+              << " fact_sets=" << compatibility.index().fact_sets.size()
+              << " seconds=" << compatibility_open_seconds << '\n';
+
+    const auto structural_surface_check_started = std::chrono::steady_clock::now();
+    if (compatibility.index().compatibility_algorithm_id !=
+        pancollapse::direct_count::kCompatibilityAlgorithmId) {
+        throw std::runtime_error(
+            "compatibility bundle uses a different graph-to-tier algorithm");
+    }
+    const std::string current_structural_surface =
+        pancollapse::direct_count::compatibility_structural_surface_id(
+            identity_ledger);
+    if (compatibility.index().structural_surface_id != current_structural_surface) {
+        throw std::runtime_error(
+            "compatibility bundle transcript/exon structural surface does not match "
+            "the current count bundle");
+    }
+    const double structural_surface_check_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - structural_surface_check_started).count();
+    std::cerr << "panCollapse: initialization: phase=structural_surface_check"
+              << " seconds=" << structural_surface_check_seconds << '\n';
+
+    using pancollapse::direct_count::AssignmentResult;
+    const auto fact_set_resolve_started = std::chrono::steady_clock::now();
+    const std::vector<pancollapse::direct_count::CompatibilityFactSet>& fact_sets =
+        compatibility.index().fact_sets;
+    std::vector<std::vector<AssignmentResult>> resolved(fact_sets.size());
+    // Resolving a fact set reads only const catalog and ledger state and writes one
+    // slot of its own, so blocks are independent. Ordered blocks keep the structural
+    // validation failure that is reported first a property of the input rather than of
+    // scheduling.
+    constexpr size_t kMaxFactSetBlockSize = 32;
+    constexpr size_t kFactSetBlocksPerWorker = 4;
+    const size_t desired_fact_set_blocks = fact_sets.empty()
+        ? 0
+        : std::min(fact_sets.size(),
+                   options.threads > std::numeric_limits<size_t>::max() /
+                                         kFactSetBlocksPerWorker
+                       ? fact_sets.size()
+                       : options.threads * kFactSetBlocksPerWorker);
+    const size_t fact_set_block_size = fact_sets.empty()
+        ? 1
+        : std::min(kMaxFactSetBlockSize,
+                   1 + (fact_sets.size() - 1) / desired_fact_set_blocks);
+    const size_t fact_set_worker_count = fact_sets.empty()
+        ? 1
+        : std::min(options.threads,
+                   1 + (fact_sets.size() - 1) / fact_set_block_size);
+    parallel_transform_ordered_blocks(
+        fact_sets.size(), options.threads, fact_set_block_size,
+        [&](size_t block, size_t begin, size_t end) {
+            static_cast<void>(block);
+            std::vector<std::vector<AssignmentResult>> block_resolved;
+            block_resolved.reserve(end - begin);
+            for (size_t fact_set_id = begin; fact_set_id < end; ++fact_set_id) {
+                const auto& facts = fact_sets[fact_set_id];
+                count_facts.validate_compatibility_structure(facts, identity_ledger);
+                std::vector<AssignmentResult> per_profile;
+                per_profile.reserve(options.count_profiles.size());
+                for (const auto& profile : options.count_profiles) {
+                    per_profile.push_back(
+                        pancollapse::direct_count::resolve_assignment(
+                            profile, count_facts.assignment_facts(profile, facts)));
+                }
+                block_resolved.push_back(std::move(per_profile));
+            }
+            return block_resolved;
+        },
+        [&](size_t block, size_t begin, size_t end,
+            std::vector<std::vector<AssignmentResult>> block_resolved) {
+            static_cast<void>(block);
+            static_cast<void>(end);
+            for (size_t offset = 0; offset < block_resolved.size(); ++offset) {
+                resolved[begin + offset] = std::move(block_resolved[offset]);
+            }
+        });
+    const double fact_set_resolve_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - fact_set_resolve_started).count();
+    std::cerr << "panCollapse: initialization: phase=fact_set_resolve"
+              << " fact_sets=" << resolved.size()
+              << " profiles=" << options.count_profiles.size()
+              << " workers=" << fact_set_worker_count
+              << " seconds=" << fact_set_resolve_seconds << '\n';
+
+    const auto output_staging_started = std::chrono::steady_clock::now();
+    if (std::filesystem::exists(options.out_dir)) {
+        throw std::runtime_error("panCollapse count output directory already exists: " +
+                                 options.out_dir.string());
+    }
+    std::filesystem::path output_parent = options.out_dir.parent_path();
+    if (output_parent.empty()) output_parent = ".";
+    std::filesystem::create_directories(output_parent);
+    const std::filesystem::path count_stage =
+        std::filesystem::absolute(output_parent) /
+        ("." + options.out_dir.filename().string() + ".staging-" +
+         std::to_string(static_cast<unsigned long long>(getpid())));
+    if (std::filesystem::exists(count_stage)) {
+        throw std::runtime_error("panCollapse count staging directory already exists: " +
+                                 count_stage.string());
+    }
+    std::filesystem::create_directories(count_stage);
+    struct Cleanup {
+        std::filesystem::path path;
+        bool active = true;
+        ~Cleanup() {
+            if (active) {
+                std::error_code ignored;
+                std::filesystem::remove_all(path, ignored);
+            }
+        }
+    } cleanup{count_stage};
+    const double output_staging_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - output_staging_started).count();
+    std::cerr << "panCollapse: initialization: phase=output_staging"
+              << " seconds=" << output_staging_seconds << '\n';
+
+    const auto runtime_construct_started = std::chrono::steady_clock::now();
+    std::vector<std::string> features;
+    features.reserve(count_facts.genes().size());
+    for (const auto& [gene, fact] : count_facts.genes()) {
+        static_cast<void>(fact);
+        features.push_back(gene);
+    }
+    pancollapse::direct_count::CountRuntimeOptions runtime_options;
+    runtime_options.memory_budget_bytes = options.count_memory_budget;
+    runtime_options.spill_directory = count_stage / "spill";
+    runtime_options.raw_barcode_length = options.raw_cb_length;
+    runtime_options.raw_umi_length = options.raw_umi_length;
+    pancollapse::direct_count::CountRuntime runtime(
+        options.count_profiles,
+        pancollapse::direct_count::read_barcode_whitelist(
+            options.barcode_whitelist, options.raw_cb_length),
+        std::move(features), std::move(runtime_options));
+    auto worker = runtime.make_worker();
+    const double runtime_construct_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - runtime_construct_started).count();
+    std::cerr << "panCollapse: initialization: phase=runtime_construct"
+              << " features=" << runtime.feature_catalog().size()
+              << " whitelist=" << runtime.whitelist().size()
+              << " seconds=" << runtime_construct_seconds << '\n';
+
+    const std::filesystem::path diagnostics_spool_path =
+        count_stage / ".read-assignments.spool.zst";
+    std::unique_ptr<pancollapse::direct_count::DirectCountDiagnosticsSpool>
+        diagnostics_spool;
+    if (!options.read_assignments_out.empty()) {
+        diagnostics_spool = std::make_unique<
+            pancollapse::direct_count::DirectCountDiagnosticsSpool>(
+                diagnostics_spool_path);
+    }
+    std::uint64_t raw_molecule_missing_groups = 0;
+    std::uint64_t raw_molecule_malformed_groups = 0;
+    std::uint64_t raw_molecule_unsupported_groups = 0;
+    std::uint64_t raw_molecule_skipped_groups = 0;
+    std::vector<std::array<std::uint64_t,
+                           pancollapse::direct_count::kAssignmentTerminalCount>>
+        profile_assignment_terminals(options.count_profiles.size());
+    const auto processing_started = std::chrono::steady_clock::now();
+    compatibility.for_each_read_batch(
+        [&](std::span<const pancollapse::direct_count::ReadCompatibilityRow> rows) {
+            for (const auto& read : rows) {
+                if (read.molecule_status !=
+                    pancollapse::direct_count::MoleculeStatus::valid) {
+                    ++raw_molecule_skipped_groups;
+                    switch (read.molecule_status) {
+                        case pancollapse::direct_count::MoleculeStatus::missing:
+                            ++raw_molecule_missing_groups;
+                            break;
+                        case pancollapse::direct_count::MoleculeStatus::malformed:
+                            ++raw_molecule_malformed_groups;
+                            break;
+                        case pancollapse::direct_count::MoleculeStatus::unsupported:
+                            ++raw_molecule_unsupported_groups;
+                            break;
+                        case pancollapse::direct_count::MoleculeStatus::valid:
+                            throw std::logic_error(
+                                "internal compatibility molecule status mismatch");
+                    }
+                    if (diagnostics_spool) {
+                        for (size_t profile_index = 0;
+                             profile_index < options.count_profiles.size();
+                             ++profile_index) {
+                            diagnostics_spool->append(
+                                {read.ordinal, read.original_name,
+                                 static_cast<std::uint32_t>(profile_index),
+                                 std::nullopt, std::nullopt, std::nullopt,
+                                 "invalid_raw_molecule", std::nullopt,
+                                 std::nullopt, 0});
+                        }
+                    }
+                    continue;
+                }
+                worker.observe_barcode(*read.raw_barcode);
+                const auto quality = read.barcode_quality
+                    ? std::optional<std::string_view>(*read.barcode_quality)
+                    : std::nullopt;
+                const auto& assignments = resolved.at(read.fact_set_id);
+                if (!assignments.empty()) {
+                    const bool barcode_eligible =
+                        assignments.front().barcode_correction_eligible;
+                    for (const auto& assignment : assignments) {
+                        if (assignment.barcode_correction_eligible !=
+                            barcode_eligible) {
+                            throw std::logic_error(
+                                "count profiles disagree on profile-invariant barcode "
+                                "correction eligibility");
+                        }
+                    }
+                }
+                const auto umi_status =
+                    pancollapse::direct_count::basic_umi_status(*read.umi);
+                for (size_t profile_index = 0;
+                     profile_index < assignments.size(); ++profile_index) {
+                    const auto& assignment = assignments[profile_index];
+                    ++profile_assignment_terminals[profile_index]
+                                                  [static_cast<size_t>(
+                                                      assignment.terminal)];
+                    if (assignment.barcode_correction_eligible) {
+                        worker.observe_assignment(
+                            static_cast<std::uint32_t>(profile_index),
+                            *read.raw_barcode, quality, *read.umi,
+                            assignment.genes, 1,
+                            assignment.reaches_umi_filter);
+                    }
+                    if (diagnostics_spool) {
+                        std::optional<std::string> selected_gene;
+                        if (!assignment.genes.empty()) {
+                            selected_gene.emplace();
+                            for (const std::string& gene : assignment.genes) {
+                                if (!selected_gene->empty()) *selected_gene += ';';
+                                *selected_gene += gene;
+                            }
+                        }
+                        const std::optional<std::string> selected_tier =
+                            assignment.genes.empty()
+                                ? std::nullopt
+                                : std::optional<std::string>(
+                                      pancollapse::direct_count::
+                                          evidence_tier_name(
+                                              assignment.winning_tier));
+                        auto terminal =
+                            pancollapse::direct_count::terminal_after_umi_filter(
+                                assignment, umi_status);
+                        diagnostics_spool->append(
+                            {read.ordinal, read.original_name,
+                             static_cast<std::uint32_t>(profile_index),
+                             *read.raw_barcode, read.barcode_quality, *read.umi,
+                             std::move(terminal.name), std::move(selected_gene),
+                             selected_tier, terminal.reasons,
+                             assignment.barcode_correction_eligible});
+                    }
+                }
+            }
+        });
+    worker.flush();
+    const pancollapse::direct_count::CountRuntimeResult count_result =
+        runtime.finalize();
+    std::optional<
+        pancollapse::direct_count::DirectCountDiagnosticsParquetResult>
+        diagnostics_result;
+    if (diagnostics_spool) {
+        diagnostics_spool->finish();
+        pancollapse::direct_count::DirectCountDiagnosticsParquetOptions
+            diagnostics_options;
+        diagnostics_options.output_path =
+            count_stage / options.read_assignments_out;
+        diagnostics_result =
+            pancollapse::direct_count::write_direct_count_diagnostics_parquet(
+                diagnostics_spool_path, runtime, diagnostics_options);
+        diagnostics_spool.reset();
+        std::filesystem::remove(diagnostics_spool_path);
+    }
+    const auto processing_finished = std::chrono::steady_clock::now();
+
+    pancollapse::direct_count::CountOutputOptions output_options;
+    output_options.output_directory = options.out_dir;
+    output_options.staging_directory = count_stage;
+    output_options.pancollapse_version = PANCOLLAPSE_VERSION;
+    for (int index = 0; index < argc; ++index) {
+        if (!output_options.command_line.empty()) output_options.command_line += ' ';
+        output_options.command_line += argv[index];
+    }
+    output_options.analysis_scope = options.analysis_scope.empty()
+                                        ? "frozen-profiles"
+                                        : options.analysis_scope;
+    output_options.fact_bundle_content_id = count_bundle.content_id;
+    output_options.fact_authority = "count-bundle";
+    const std::filesystem::path compatibility_manifest =
+        std::filesystem::absolute(options.compatibility_in / "manifest.json");
+    output_options.compatibility_bundle =
+        pancollapse::direct_count::CountCompatibilityIdentity{
+            "replayed", compatibility_manifest,
+            compatibility.index().content_id,
+            pancollapse::direct_count::sha256_file(compatibility_manifest),
+            std::filesystem::file_size(compatibility_manifest)};
+    auto add_input = [&](const std::string& role,
+                         const std::filesystem::path& path) {
+        output_options.inputs.push_back(
+            {role, std::filesystem::absolute(path),
+             pancollapse::direct_count::sha256_file(path),
+             std::filesystem::file_size(path)});
+    };
+    add_input("compatibility_bundle_manifest",
+              options.compatibility_in / "manifest.json");
+    add_input("barcode_whitelist", options.barcode_whitelist);
+    add_input("count_bundle_manifest", count_bundle.manifest_path);
+    output_options.threads = 1;
+    output_options.memory_budget_bytes = options.count_memory_budget;
+    output_options.assignment_cache_capacity = resolved.size();
+    output_options.assignment_cache_entries = resolved.size();
+    output_options.assignment_cache_misses = resolved.size();
+    output_options.input_records = compatibility.index().input_records;
+    output_options.input_read_groups = compatibility.index().read_rows;
+    output_options.raw_molecule_missing_groups = raw_molecule_missing_groups;
+    output_options.raw_molecule_malformed_groups = raw_molecule_malformed_groups;
+    output_options.raw_molecule_unsupported_groups =
+        raw_molecule_unsupported_groups;
+    output_options.raw_molecule_skipped_groups = raw_molecule_skipped_groups;
+    output_options.profile_assignment_terminals =
+        std::move(profile_assignment_terminals);
+    output_options.initialization_seconds = std::chrono::duration<double>(
+        processing_started - invocation_started).count();
+    output_options.processing_seconds = std::chrono::duration<double>(
+        processing_finished - processing_started).count();
+    output_options.write_10x_mex = options.count_10x_mex;
+    if (diagnostics_result) {
+        output_options.read_assignments =
+            pancollapse::direct_count::CountTableIdentity{
+                options.read_assignments_out.string(), diagnostics_result->rows,
+                std::filesystem::file_size(
+                    count_stage / options.read_assignments_out),
+                diagnostics_result->canonical_logical_sha256,
+                diagnostics_result->parquet_byte_sha256};
+    }
+    static_cast<void>(pancollapse::direct_count::write_count_outputs(
+        runtime, count_result, count_facts, output_options));
+    cleanup.active = false;
+    return 0;
+}
+
 int run_convert(int argc, char** argv) {
     const auto invocation_started = std::chrono::steady_clock::now();
-    const Options options = parse_options(argc, argv);
+    Options options = parse_options(argc, argv);
+    if (!options.compatibility_in.empty()) {
+        return run_compatibility_replay(argc, argv, options);
+    }
+    std::optional<pancollapse::direct_count::CountFactBundle> count_bundle;
+    if (options.direct_count && options.annotation.empty()) {
+        // Bundle compatibility and every bundled checksum are verified before XG
+        // deserialization or opening GAMP.
+        count_bundle = pancollapse::direct_count::load_count_fact_bundle(
+            options.count_bundle);
+        options.path_identity_ledger =
+            count_bundle->files.at("path_identity_ledger").path;
+    }
     const bool production_identity = !options.path_identity_ledger.empty();
     const auto metadata_started = std::chrono::steady_clock::now();
     const std::unordered_set<std::string> strict_allowlisted_parents =
@@ -1779,12 +2980,38 @@ int run_convert(int argc, char** argv) {
     // Production uses one strict, versioned identity ledger. The hst-v1 adapter below is the only
     // route to historical 2/3-column t2g behavior; CLI parsing makes the two routes exclusive.
     std::optional<path_identity::PathIdentityLedger> identity_ledger;
+    std::optional<pancollapse::direct_count::CountFactCatalog> count_facts;
     T2gData t2g;
     BodyT2gData body_t2g;
     if (production_identity) {
         identity_ledger = path_identity::read(
             options.path_identity_ledger,
             options.count_mode == pathtally::CountMode::GeneFullEx50pAS);
+        if (options.direct_count && !options.annotation.empty()) {
+            std::vector<pancollapse::direct_count::ProfileId> profile_ids;
+            profile_ids.reserve(options.count_profiles.size());
+            for (const auto& profile : options.count_profiles) {
+                profile_ids.push_back(profile.profile.id);
+            }
+            const auto annotation_started = std::chrono::steady_clock::now();
+            count_facts = pancollapse::direct_count::CountFactCatalog::from_annotation(
+                options.annotation, options.annotation_reference, *identity_ledger,
+                profile_ids);
+            std::cerr << "panCollapse: initialization: phase=annotation_count_facts"
+                      << " parents=" << count_facts->parents().size()
+                      << " genes=" << count_facts->genes().size()
+                      << " seconds="
+                      << std::chrono::duration<double>(
+                             std::chrono::steady_clock::now() - annotation_started).count()
+                      << '\n';
+            validate_count_t2g_assertions(options.t2g, options.body_t2g,
+                                          *identity_ledger);
+        } else if (options.direct_count) {
+            count_facts = pancollapse::direct_count::CountFactCatalog::load(
+                *count_bundle, *identity_ledger);
+            validate_count_t2g_assertions(options.t2g, options.body_t2g,
+                                          *identity_ledger);
+        }
         if (!strict_allowlisted_parents.empty()) {
             for (const std::string& parent : strict_allowlisted_parents) {
                 if (identity_ledger->identities_by_parent.count(parent) == 0) {
@@ -1846,39 +3073,102 @@ int run_convert(int argc, char** argv) {
               << (identity_ledger.has_value() ? identity_ledger->rows_by_path.size() : 0)
               << " seconds=" << metadata_seconds << '\n';
 
-    const auto xg_deserialize_started = std::chrono::steady_clock::now();
-    xg::XG graph;
-    std::ifstream xg_in(options.xg, std::ios::binary);
-    if (!xg_in) {
-        throw std::runtime_error("cannot open XG");
+    pancollapse::GraphInput graph_input;
+    std::string xg_input_sha256, gbz_input_sha256, gbwt_input_sha256;
+    auto load_graph_file = [&](const std::filesystem::path& path, const char* role,
+                               auto load, std::string& digest) {
+        const auto started = std::chrono::steady_clock::now();
+        std::ifstream input(path, std::ios::binary);
+        if (!input) throw std::runtime_error(std::string("cannot open ") + role + ": " + path.string());
+        if (options.direct_count) {
+            Sha256InputStream hashed(input);
+            load(hashed);
+            digest = hashed.complete_and_finish();
+        } else {
+            load(input);
+        }
+        std::cerr << "panCollapse: initialization: phase=" << role << "_deserialize seconds="
+                  << std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count()
+                  << '\n';
+    };
+    if (!options.gbz.empty()) {
+        load_graph_file(options.gbz, "gbz", [&](std::istream& in) { graph_input.load_gbz(in); }, gbz_input_sha256);
+    } else {
+        load_graph_file(options.xg, "xg", [&](std::istream& in) { graph_input.load_xg(in); }, xg_input_sha256);
+        if (!options.gbwt.empty()) {
+            load_graph_file(options.gbwt, "gbwt", [&](std::istream& in) { graph_input.load_gbwt(in); }, gbwt_input_sha256);
+        }
     }
-    graph.deserialize(xg_in);
-    const double xg_deserialize_seconds = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - xg_deserialize_started).count();
-    std::cerr << "panCollapse: initialization: phase=xg_deserialize seconds="
-              << xg_deserialize_seconds << '\n';
+    graph_input.initialize_gbwt(options.threads);
+    const auto& graph = graph_input.nodes();
+    if (graph_input.uses_gbwt()) {
+        const auto started = std::chrono::steady_clock::now();
+        std::vector<handlegraph::path_handle_t> selected_paths;
+        std::unordered_set<std::string> selected_names;
+        graph_input.for_each_path_handle([&](handlegraph::path_handle_t path) {
+            const auto name = graph_input.get_path_name(path);
+            const bool selected = production_identity
+                ? identity_ledger->rows_by_path.count(name) != 0
+                : (resolve_graph_transcript(t2g, name, options.count_mode != pathtally::CountMode::Score) != nullptr ||
+                   (options.count_mode != pathtally::CountMode::Score && resolve_body_graph_path(body_t2g, name) != nullptr));
+            if (selected) {
+                if (!selected_names.insert(name).second) {
+                    throw std::runtime_error("ambiguous GBWT metadata path name: " + name);
+                }
+                selected_paths.push_back(path);
+            }
+        });
+        const bool need_positions = production_identity && options.count_mode != pathtally::CountMode::Score &&
+                                    (options.direct_count || !options.bam_out.empty());
+        graph_input.prepare_paths(selected_paths, need_positions, options.threads);
+        std::cerr << "panCollapse: initialization: phase=selected_path_positions paths=" << selected_paths.size()
+                  << " positions=" << need_positions << " seconds="
+                  << std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() << '\n';
+    }
 
+    const auto ledger_path_handles_started = std::chrono::steady_clock::now();
     std::unordered_map<std::string, uint64_t> ledger_path_handles_by_name;
     if (production_identity) {
         ledger_path_handles_by_name.reserve(identity_ledger->rows_by_path.size());
+        // Resolve handles by enumerating the graph's paths once rather than asking for each
+        // ledger row by name. has_path and get_path_handle are each a locate on the XG's
+        // path-name index, so the by-name form paid two of them per row across a ledger with
+        // millions of rows. Enumeration visits every path once and costs a hash lookup per
+        // path instead.
+        graph_input.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+            std::string path_name = graph_input.get_path_name(path);
+            if (identity_ledger->rows_by_path.count(path_name) == 0) {
+                return;
+            }
+            ledger_path_handles_by_name.emplace(std::move(path_name),
+                                                handlegraph::as_integer(path));
+        });
+        // Validate in ledger order, which is sorted by path name, so the first failure
+        // reported stays a property of the input rather than of graph enumeration order.
         for (const auto& entry : identity_ledger->rows_by_path) {
             const std::string& path_name = entry.first;
-            if (!graph.has_path(path_name)) {
+            const auto found = ledger_path_handles_by_name.find(path_name);
+            if (found == ledger_path_handles_by_name.end()) {
                 throw std::runtime_error("path identity ledger vg_path_name " + path_name +
-                                         " is absent from the XG");
+                                         " is absent from the graph paths");
             }
-            const auto path_handle = graph.get_path_handle(path_name);
-            const uint64_t graph_length = graph.get_path_length(path_handle);
+            const uint64_t graph_length = graph_input.get_path_length(
+                handlegraph::as_path_handle(found->second));
             if (graph_length != entry.second.vg_path_length) {
                 throw std::runtime_error("path identity ledger vg_path_length for " + path_name +
                                          " is " +
                                          std::to_string(entry.second.vg_path_length) +
-                                         " but the XG path length is " +
+                                         " but the graph path length is " +
                                          std::to_string(graph_length));
             }
-            ledger_path_handles_by_name.emplace(
-                path_name, handlegraph::as_integer(path_handle));
         }
+    }
+    if (production_identity) {
+        const double ledger_path_handles_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - ledger_path_handles_started).count();
+        std::cerr << "panCollapse: initialization: phase=ledger_path_handles paths="
+                  << ledger_path_handles_by_name.size()
+                  << " seconds=" << ledger_path_handles_seconds << '\n';
     }
 
     // Score-mode HST lookup (node -> HST names, cached per node). Ledger-mode lookup is below.
@@ -1913,6 +3203,9 @@ int run_convert(int argc, char** argv) {
     std::unordered_map<std::string, uint32_t> body_name_gene;        // legacy body path -> gene idx
     std::unordered_map<std::string, uint32_t> body_name_transcript;  // D063 body path -> target id
     std::unordered_map<std::string_view, uint32_t> ledger_parent_rank_by_name;
+    // Catalog map nodes remain immutable and alive until all counting workers
+    // join. Resolve each Parent once at initialization, then index by ledger rank.
+    std::vector<const pancollapse::direct_count::ParentFact*> count_parent_facts;
     // Per-transcript spans for the spliced/unspliced classification, built once at load. For each
     // gene, each exon transcript contributes (first_on_body_exon_node_id, last_on_body_exon_node_id,
     // transcript_target_id). At read time a transcript "spans" the read iff its [lo,hi] node-id
@@ -1929,7 +3222,7 @@ int run_convert(int argc, char** argv) {
     // Legacy and score BAMs deliberately keep their marker-absent historical interpretation.
     const bool exact_ex50 = production_identity &&
                            options.count_mode != pathtally::CountMode::Score &&
-                           !options.bam_out.empty();
+                           (options.direct_count || !options.bam_out.empty());
     using ExactEdge = std::tuple<int64_t, bool, int64_t, bool>;
     struct ExactEx50Model {
         const path_identity::PathIdentityRow* exon = nullptr;
@@ -1941,7 +3234,10 @@ int run_convert(int argc, char** argv) {
         uint32_t body_path_rank = 0;
         uint32_t exon_parent_rank = 0;
         uint32_t body_parent_rank = 0;
-        std::shared_ptr<const std::set<ExactEdge>> exon_edges;
+        // A sorted unique vector, not a set: these geometries are built once and then only
+        // membership-tested, and a red-black node costs about 80 bytes to carry 32 bytes of
+        // edge. Over 1.23 million geometries that difference was 22.7 GiB of a 122 GiB peak.
+        std::shared_ptr<const std::vector<ExactEdge>> exon_edges;
         bool body_exon_same = true;
         // Most models never need an occurrence override. Avoid carrying an allocated tree
         // header in every model; only repeated-but-resolvable body nodes own this map.
@@ -1987,8 +3283,25 @@ int run_convert(int argc, char** argv) {
         };
         std::vector<ExactStep> exact_exon_steps;
         std::vector<ExactStep> exact_body_steps;
+        // Fallback-only skip: 0 no Parent crosses the node, 1 every Parent's gene is FALLBACK in
+        // every profile, 2 otherwise. For state 1, fallback_genes holds per profile the node's
+        // one equivalence gene, or kSeveralFallbackGenes.
+        uint8_t fallback_state = 0;
+        std::vector<uint32_t> fallback_genes;
     };
+    // A read whose every overlapped gene is FALLBACK in every profile, with at least two such
+    // genes, cannot be counted by any profile, so its route tally and exact evidence are skipped
+    // (user decision 2026-09-25; one FALLBACK gene still takes the full path). Set before the
+    // first node ledger is built and never changed, so every cached node summary agrees with it.
+    bool fallback_only_skip = false;
+    std::vector<uint8_t> parent_fallback_only;   // by ledger Parent rank
+    std::vector<uint32_t> parent_fallback_gene;  // rank * profiles + profile -> gene id
+    size_t fallback_profile_count = 0;
+    constexpr uint32_t kSeveralFallbackGenes = std::numeric_limits<uint32_t>::max();
+    constexpr uint32_t kNoFallbackGene = kSeveralFallbackGenes - 1;
+    std::atomic<uint64_t> fallback_only_skipped_reads{0};
     ShardedLazyCache<int64_t, NodeLedger> node_ledger_cache(options.threads > 1);
+    using ReadNodeCache = pathtally::ReadNodeTallyCache<NodeLedger>;
     std::function<const NodeLedger&(int64_t)> node_ledger_of;
     pathtally::PathLookup ledger_lookup;
 
@@ -2020,10 +3333,82 @@ int run_convert(int argc, char** argv) {
             ledger_parent_rank_by_name.emplace(
                 *unique_parent_names[rank], static_cast<uint32_t>(rank));
         }
+        if (count_facts) {
+            count_parent_facts.reserve(unique_parent_names.size());
+            const auto& parents = count_facts->parents();
+            auto fact = parents.begin();
+            // Both sequences are lexical. Bind and validate in one linear pass;
+            // never silently attach another Parent's metadata to a ledger rank.
+            for (const std::string* name : unique_parent_names) {
+                while (fact != parents.end() && fact->first < *name) ++fact;
+                if (fact == parents.end() || fact->first != *name ||
+                    fact->second.unique_parent != *name) {
+                    throw std::runtime_error(
+                        "count facts do not match ranked ledger Parent: " + *name);
+                }
+                count_parent_facts.push_back(&fact->second);
+                ++fact;
+            }
+            // Compatibility capture and RAD record policy-neutral evidence, so they keep every
+            // read. PANCOLLAPSE_FALLBACK_ONLY_SKIP=off restores the full path for comparison.
+            const char* skip_switch = std::getenv("PANCOLLAPSE_FALLBACK_ONLY_SKIP");
+            fallback_only_skip = options.direct_count && options.compatibility_out.empty() &&
+                                 !options.count_rad_out &&
+                                 !(skip_switch != nullptr && std::string_view(skip_switch) == "off");
+            if (fallback_only_skip) {
+                // Classify each Parent exactly as gene competition will: through candidate(),
+                // which applies novel-paralog identity and reads the equivalence row.
+                const auto classify_started = std::chrono::steady_clock::now();
+                fallback_profile_count = options.count_profiles.size();
+                parent_fallback_only.assign(count_parent_facts.size(), 0);
+                parent_fallback_gene.assign(count_parent_facts.size() * fallback_profile_count,
+                                            kNoFallbackGene);
+                std::unordered_map<std::string, uint32_t> fallback_gene_ids;
+                size_t fallback_parents = 0;
+                for (size_t rank = 0; rank < count_parent_facts.size(); ++rank) {
+                    bool all_fallback = true;
+                    std::vector<std::string> genes;
+                    genes.reserve(fallback_profile_count);
+                    for (const auto& profile : options.count_profiles) {
+                        const pancollapse::direct_count::AssignmentCandidate candidate =
+                            count_facts->candidate(
+                                profile, *count_parent_facts[rank], 0,
+                                pancollapse::direct_count::EvidenceTier::exon,
+                                pancollapse::direct_count::EvidenceStrand::forward);
+                        if (candidate.competition !=
+                            pancollapse::direct_count::CompetitionClass::fallback) {
+                            all_fallback = false;
+                            break;
+                        }
+                        genes.push_back(candidate.equivalence_gene.empty()
+                                            ? candidate.gene
+                                            : candidate.equivalence_gene);
+                    }
+                    if (!all_fallback) {
+                        continue;
+                    }
+                    parent_fallback_only[rank] = 1;
+                    ++fallback_parents;
+                    for (size_t profile = 0; profile < fallback_profile_count; ++profile) {
+                        const auto [id, inserted] = fallback_gene_ids.try_emplace(
+                            genes[profile], static_cast<uint32_t>(fallback_gene_ids.size()));
+                        static_cast<void>(inserted);
+                        parent_fallback_gene[rank * fallback_profile_count + profile] = id->second;
+                    }
+                }
+                std::cerr << "panCollapse: initialization: phase=fallback_only_parents parents="
+                          << count_parent_facts.size() << " fallback_only_parents="
+                          << fallback_parents << " fallback_genes=" << fallback_gene_ids.size()
+                          << " seconds="
+                          << std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                           classify_started).count()
+                          << '\n';
+            }
+        }
     }
     if (options.count_mode == pathtally::CountMode::Score) {
-        graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
-            std::string name = graph.get_path_name(path);
+        graph_input.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+            std::string name = graph_input.get_path_name(path);
             if (resolve_graph_transcript(t2g, name, false) != nullptr) {
                 hst_path_name.emplace(handlegraph::as_integer(path), std::move(name));
             }
@@ -2032,17 +3417,16 @@ int run_convert(int argc, char** argv) {
             const auto& entries = node_hst_cache.get_or_build(node_id, [&]() {
                 if (!graph.has_node(node_id)) {
                     throw std::runtime_error(
-                        "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
+                        "GAMP/graph node-id-space mismatch: node " + std::to_string(node_id) +
                         " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
                 std::vector<std::pair<const std::string*, bool>> built;
-                const handlegraph::handle_t handle = graph.get_handle(node_id, false);
-                graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
+                graph_input.for_each_node_occurrence(node_id, [&](const pancollapse::GraphPathStep& step) {
                     const auto it =
-                        hst_path_name.find(handlegraph::as_integer(graph.get_path_handle_of_step(step)));
+                        hst_path_name.find(handlegraph::as_integer(step.path));
                     if (it != hst_path_name.end()) {
                         built.emplace_back(&it->second,
-                                           graph.get_is_reverse(graph.get_handle_of_step(step)));
+                                           graph.get_is_reverse(step.handle));
                     }
                     return true;
                 });
@@ -2130,8 +3514,8 @@ int run_convert(int argc, char** argv) {
                 transcript_body_paths[target_id].push_back(path);
             }
         } else {
-            graph.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
-                const std::string name = graph.get_path_name(path);
+            graph_input.for_each_path_handle([&](const handlegraph::path_handle_t& path) {
+                const std::string name = graph_input.get_path_name(path);
                 // Exact exon rows win first. Then exact body rows win over the legacy exon
                 // bare-name fallback, so an explicitly named transcript-body path cannot be
                 // mistaken for an exon.
@@ -2250,7 +3634,7 @@ int run_convert(int argc, char** argv) {
                 std::min(options.threads, parent_block_count);
             size_t prepared_exon_path_count = 0;
             size_t prepared_body_path_count = 0;
-            std::unordered_set<const std::set<ExactEdge>*> retained_exon_edge_geometries;
+            std::unordered_set<const std::vector<ExactEdge>*> retained_exon_edge_geometries;
             parallel_transform_ordered_blocks(
                 parent_tasks.size(), options.threads, parent_block_size,
                 [&](size_t block, size_t begin, size_t end) {
@@ -2267,7 +3651,7 @@ int run_convert(int argc, char** argv) {
                             const path_identity::PathIdentityRow* row = nullptr;
                             uint64_t path_handle = 0;
                             std::vector<std::pair<int64_t, bool>> steps;
-                            std::shared_ptr<const std::set<ExactEdge>> edges;
+                            std::shared_ptr<const std::vector<ExactEdge>> edges;
                         };
                         struct PreparedBody {
                             const path_identity::PathIdentityRow* row = nullptr;
@@ -2286,11 +3670,11 @@ int run_convert(int argc, char** argv) {
                             prepared.row = exon;
                             prepared.path_handle =
                                 std::as_const(ledger_path_handles_by_name).at(exon->vg_path_name);
-                            graph.for_each_step_in_path(
+                            graph_input.for_each_path_step(
                                 handlegraph::as_path_handle(prepared.path_handle),
-                                [&](const handlegraph::step_handle_t& step) {
+                                [&](const pancollapse::GraphPathStep& step) {
                                     const handlegraph::handle_t handle =
-                                        graph.get_handle_of_step(step);
+                                        step.handle;
                                     prepared.steps.emplace_back(graph.get_id(handle),
                                                                 graph.get_is_reverse(handle));
                                 });
@@ -2314,19 +3698,25 @@ int run_convert(int argc, char** argv) {
                                 }
                             }
                             if (!current.edges) {
-                                std::set<ExactEdge> edges;
+                                std::vector<ExactEdge> edges;
+                                edges.reserve(current.steps.size() * 2);
                                 for (size_t step_index = 1;
                                      step_index < current.steps.size(); ++step_index) {
                                     const auto& previous = current.steps[step_index - 1];
                                     const auto& next = current.steps[step_index];
-                                    edges.emplace(previous.first, previous.second,
-                                                  next.first, next.second);
+                                    edges.emplace_back(previous.first, previous.second,
+                                                       next.first, next.second);
                                     // Reverse traversal reverses node order and flips handles.
-                                    edges.emplace(next.first, !next.second,
-                                                  previous.first, !previous.second);
+                                    edges.emplace_back(next.first, !next.second,
+                                                       previous.first, !previous.second);
                                 }
-                                current.edges =
-                                    std::make_shared<const std::set<ExactEdge>>(std::move(edges));
+                                // Match std::set's content exactly: sorted and unique.
+                                std::sort(edges.begin(), edges.end());
+                                edges.erase(std::unique(edges.begin(), edges.end()),
+                                            edges.end());
+                                edges.shrink_to_fit();
+                                current.edges = std::make_shared<const std::vector<ExactEdge>>(
+                                    std::move(edges));
                                 representatives.push_back(prepared_exons.size() - 1);
                             }
                             ++result.prepared_exon_paths;
@@ -2338,15 +3728,15 @@ int run_convert(int argc, char** argv) {
                             prepared.row = body;
                             prepared.path_handle =
                                 std::as_const(ledger_path_handles_by_name).at(body->vg_path_name);
-                            graph.for_each_step_in_path(
+                            graph_input.for_each_path_step(
                                 handlegraph::as_path_handle(prepared.path_handle),
-                                [&](const handlegraph::step_handle_t& step) {
+                                [&](const pancollapse::GraphPathStep& step) {
                                     const handlegraph::handle_t handle =
-                                        graph.get_handle_of_step(step);
+                                        step.handle;
                                     prepared.occurrences[graph.get_id(handle)].emplace_back(
                                         graph.get_is_reverse(handle),
-                                        graph.get_position_of_step(step));
-                                });
+                                        step.base_position());
+                                }, true);
                             prepared_bodies.push_back(std::move(prepared));
                             ++result.prepared_body_paths;
                         }
@@ -2575,7 +3965,7 @@ int run_convert(int argc, char** argv) {
                     .target_id;
             }
             return std::as_const(exon_name_transcript).at(
-                graph.get_path_name(exon_path));
+                graph_input.get_path_name(exon_path));
         };
 
         // Shared geometry worker. Legacy D060 records exon spans against a pooled gene body. D063
@@ -2597,9 +3987,9 @@ int run_convert(int argc, char** argv) {
                             "internal transcript-body geometry mixed canonical targets");
                     }
                     std::vector<int64_t> node_ids;
-                    graph.for_each_step_in_path(
-                        exon_path, [&](const handlegraph::step_handle_t& step) {
-                            node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
+                    graph_input.for_each_path_step(
+                        exon_path, [&](const pancollapse::GraphPathStep& step) {
+                            node_ids.push_back(graph.get_id(step.handle));
                     });
                     for (size_t i = 0; i + 1 < node_ids.size(); ++i) {
                         if (node_ids[i] != node_ids[i + 1]) {
@@ -2618,21 +4008,19 @@ int run_convert(int argc, char** argv) {
                 const bool degraded_parent =
                     production_identity && body_unresolvable_targets.count(*target_id) != 0;
                 // For the fragment-only audit, record whether both endpoints ever coexist on one
-                // raw body path. Index each candidate edge by its lower endpoint so each body path
-                // only probes candidates incident on nodes it actually contains.
-                std::unordered_map<int64_t, std::vector<GeometryEdge>> exon_edges_by_first;
-                for (const GeometryEdge& edge : exon_edges) {
-                    exon_edges_by_first[edge.first].push_back(edge);
-                }
-
+                // raw body path.
                 pathtally::BodyGeometryIndex body_geometry;
                 std::unordered_set<GeometryEdge, pathtally::NodePairHash>
                     same_path_endpoint_edges;
                 bool has_usable_body_path = false;
                 for (const handlegraph::path_handle_t& body_path : body_paths) {
                     if (production_identity) {
-                        const auto& annotation = std::as_const(identity_ledger->rows_by_path).at(
-                            graph.get_path_name(body_path)).annotation;
+                        // ledger_path_info is already keyed by graph handle and holds a pointer
+                        // to the ledger row. Going through get_path_name built a string and
+                        // hashed it into the millions-of-rows by-name map once per body path.
+                        const auto& annotation =
+                            ledger_path_info.at(handlegraph::as_integer(body_path))
+                                .identity->annotation;
                         if (body_unresolvable_exon_parents.count(
                                 annotation.exon_unique_parent) != 0) {
                             continue;
@@ -2640,25 +4028,27 @@ int run_convert(int argc, char** argv) {
                     }
                     has_usable_body_path = true;
                     std::vector<int64_t> path_node_ids;
-                    graph.for_each_step_in_path(
-                        body_path, [&](const handlegraph::step_handle_t& step) {
-                            path_node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
+                    graph_input.for_each_path_step(
+                        body_path, [&](const pancollapse::GraphPathStep& step) {
+                            path_node_ids.push_back(graph.get_id(step.handle));
                         });
                     pathtally::add_body_path(body_geometry, path_node_ids);
                     if (same_path_endpoint_edges.size() == exon_edges.size()) {
                         continue;  // all candidates already have same-path support; only union/adjacency remains
                     }
+                    // Probe the small side. A body path carries on the order of a thousand
+                    // nodes while a transcript contributes about a hundred candidate edges, so
+                    // asking each candidate whether both its endpoints are on this path is an
+                    // order of magnitude fewer lookups than walking the path's nodes against an
+                    // index of the candidates. The condition is the same one: the old form
+                    // indexed each edge under its lower endpoint, so it inserted exactly when
+                    // the path held both endpoints.
                     std::unordered_set<int64_t> path_nodes(path_node_ids.begin(),
                                                            path_node_ids.end());
-                    for (const int64_t node_id : path_nodes) {
-                        const auto candidates = exon_edges_by_first.find(node_id);
-                        if (candidates == exon_edges_by_first.end()) {
-                            continue;
-                        }
-                        for (const GeometryEdge& edge : candidates->second) {
-                            if (path_nodes.count(edge.second) != 0) {
-                                same_path_endpoint_edges.insert(edge);
-                            }
+                    for (const GeometryEdge& edge : exon_edges) {
+                        if (path_nodes.count(edge.first) != 0 &&
+                            path_nodes.count(edge.second) != 0) {
+                            same_path_endpoint_edges.insert(edge);
                         }
                     }
                 }
@@ -2678,8 +4068,11 @@ int run_convert(int argc, char** argv) {
                         ++result.adjacent_vetoed;
                         continue;
                     }
-                    if (!pathtally::body_geometry_owns_splice_edge(
-                            body_geometry, edge.first, edge.second)) {
+                    // body_geometry_owns_splice_edge re-tests the adjacency the line above just
+                    // ruled out, and re-normalizes a pair that is already normalized. Both
+                    // endpoint tests are all that remains of it here.
+                    if (body_geometry.nodes.count(edge.first) == 0 ||
+                        body_geometry.nodes.count(edge.second) == 0) {
                         continue;
                     }
                     ++result.owned;
@@ -2694,8 +4087,8 @@ int run_convert(int argc, char** argv) {
             // Legacy D060 deliberately retains its historical numeric span/edge behavior.
             std::unordered_set<int64_t> body_nodes;
             for (const handlegraph::path_handle_t& body_path : body_paths) {
-                graph.for_each_step_in_path(body_path, [&](const handlegraph::step_handle_t& step) {
-                    body_nodes.insert(graph.get_id(graph.get_handle_of_step(step)));
+                graph_input.for_each_path_step(body_path, [&](const pancollapse::GraphPathStep& step) {
+                    body_nodes.insert(graph.get_id(step.handle));
                 });
             }
             std::vector<int64_t> body_sorted(body_nodes.begin(), body_nodes.end());
@@ -2704,8 +4097,8 @@ int run_convert(int argc, char** argv) {
             result.spans.reserve(exon_paths.size());
             for (const handlegraph::path_handle_t& exon_path : exon_paths) {
                 std::vector<int64_t> node_ids;
-                graph.for_each_step_in_path(exon_path, [&](const handlegraph::step_handle_t& step) {
-                    node_ids.push_back(graph.get_id(graph.get_handle_of_step(step)));
+                graph_input.for_each_path_step(exon_path, [&](const pancollapse::GraphPathStep& step) {
+                    node_ids.push_back(graph.get_id(step.handle));
                 });
                 const uint32_t target_id = exon_target_id(exon_path);
 
@@ -2771,35 +4164,65 @@ int run_convert(int argc, char** argv) {
                   [](const GeometryTask& a, const GeometryTask& b) {
                       return a.key < b.key;
                   });
+        // One task per transcript went through the scheduler and the ordered-commit ring
+        // individually, so a graph with over a million transcripts paid a mutex handshake and a
+        // ring slot per unit. Every other parallel phase here batches; this one did not. Batch it
+        // the same way. Blocks still commit in ordinal order, so the reduction below sees results
+        // in task order exactly as before.
+        constexpr size_t kMaxGeometryBlockSize = 32;
+        constexpr size_t kGeometryBlocksPerWorker = 4;
+        const size_t desired_geometry_blocks = geometry_tasks.empty()
+            ? 0
+            : std::min(geometry_tasks.size(),
+                       options.threads > std::numeric_limits<size_t>::max() /
+                                             kGeometryBlocksPerWorker
+                           ? geometry_tasks.size()
+                           : options.threads * kGeometryBlocksPerWorker);
+        const size_t geometry_block_size = geometry_tasks.empty()
+            ? 1
+            : std::min(kMaxGeometryBlockSize,
+                       1 + (geometry_tasks.size() - 1) / desired_geometry_blocks);
         const size_t geometry_worker_count =
-            std::min(options.threads, geometry_tasks.size());
+            std::min(options.threads,
+                     geometry_tasks.empty()
+                         ? size_t{1}
+                         : 1 + (geometry_tasks.size() - 1) / geometry_block_size);
         parallel_transform_ordered_blocks(
-            geometry_tasks.size(), options.threads, /*block_size=*/1,
+            geometry_tasks.size(), options.threads, geometry_block_size,
             [&](size_t block, size_t begin, size_t end) {
                 static_cast<void>(block);
-                static_cast<void>(end);
-                const GeometryTask& task = geometry_tasks[begin];
+                std::vector<GeometryResult> block_results;
+                block_results.reserve(end - begin);
                 const std::vector<handlegraph::path_handle_t> no_body;
-                return record_geometry(
-                    *task.exon_paths, task.body_paths == nullptr ? no_body : *task.body_paths,
-                    task.legacy_gene_idx);
+                for (size_t index = begin; index < end; ++index) {
+                    const GeometryTask& task = geometry_tasks[index];
+                    block_results.push_back(record_geometry(
+                        *task.exon_paths,
+                        task.body_paths == nullptr ? no_body : *task.body_paths,
+                        task.legacy_gene_idx));
+                }
+                return block_results;
             },
-            [&](size_t block, size_t begin, size_t end, GeometryResult result) {
+            [&](size_t block, size_t begin, size_t end,
+                std::vector<GeometryResult> block_results) {
                 static_cast<void>(block);
                 static_cast<void>(end);
-                const GeometryTask& task = geometry_tasks[begin];
                 // Results commit by stable numeric target/gene ID. Expensive graph traversal is
                 // lock-free; only this reduction mutates shared splice/counter structures.
-                if (task.legacy_gene_idx.has_value()) {
-                    transcript_spans[*task.legacy_gene_idx] = std::move(result.spans);
+                for (size_t offset = 0; offset < block_results.size(); ++offset) {
+                    const GeometryTask& task = geometry_tasks[begin + offset];
+                    GeometryResult& result = block_results[offset];
+                    if (task.legacy_gene_idx.has_value()) {
+                        transcript_spans[*task.legacy_gene_idx] = std::move(result.spans);
+                    }
+                    for (const auto& [edge, target_id] : result.splice_owners) {
+                        splice_edges[edge].insert(target_id);
+                    }
+                    d63_splice_target_edges_evaluated += result.evaluated;
+                    d63_splice_target_edges_owned += result.owned;
+                    d63_splice_target_edges_fragment_only += result.fragment_only;
+                    d63_splice_target_edges_adjacent_vetoed += result.adjacent_vetoed;
                 }
-                for (const auto& [edge, target_id] : result.splice_owners) {
-                    splice_edges[edge].insert(target_id);
-                }
-                d63_splice_target_edges_evaluated += result.evaluated;
-                d63_splice_target_edges_owned += result.owned;
-                d63_splice_target_edges_fragment_only += result.fragment_only;
-                d63_splice_target_edges_adjacent_vetoed += result.adjacent_vetoed;
             });
         const double splice_geometry_seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - splice_geometry_started).count();
@@ -2830,7 +4253,7 @@ int run_convert(int argc, char** argv) {
             return node_ledger_cache.get_or_build(node_id, [&]() {
                 if (!graph.has_node(node_id)) {
                     throw std::runtime_error(
-                        "GAMP/xg node-id-space mismatch: node " + std::to_string(node_id) +
+                        "GAMP/graph node-id-space mismatch: node " + std::to_string(node_id) +
                         " is absent from the graph; the GAMP was likely aligned to a different graph");
                 }
                 NodeLedger nl;
@@ -2844,23 +4267,42 @@ int run_convert(int argc, char** argv) {
                     gene_orient_here.emplace();
                     body_genes_here.emplace();
                 }
-                const handlegraph::handle_t handle = graph.get_handle(node_id, false);
-                graph.for_each_step_on_handle(handle, [&](const handlegraph::step_handle_t& step) {
+                graph_input.for_each_node_occurrence(node_id, [&](const pancollapse::GraphPathStep& step) {
                     const uint64_t path_handle =
-                        handlegraph::as_integer(graph.get_path_handle_of_step(step));
+                        handlegraph::as_integer(step.path);
                     const auto it = ledger_path_info.find(path_handle);
                     if (it == ledger_path_info.end()) {
                         return true;
                     }
-                    const bool path_is_reverse = graph.get_is_reverse(graph.get_handle_of_step(step));
+                    const bool path_is_reverse = graph.get_is_reverse(step.handle);
                     // Every reference path crossing the node (exon transcript or gene body),
                     // un-collapsed, is a scoreable reference for tally_read_group_into.
                     nl.ref_paths.push_back(
                         {path_handle, &it->second.path_name(), path_is_reverse});
+                    if (fallback_only_skip && nl.fallback_state != 2) {
+                        const uint32_t rank = it->second.parent_rank;
+                        if (parent_fallback_only.at(rank) == 0) {
+                            nl.fallback_state = 2;
+                            nl.fallback_genes.clear();
+                        } else {
+                            const uint32_t* genes =
+                                &parent_fallback_gene[rank * fallback_profile_count];
+                            if (nl.fallback_state == 0) {
+                                nl.fallback_state = 1;
+                                nl.fallback_genes.assign(genes, genes + fallback_profile_count);
+                            } else {
+                                for (size_t p = 0; p < fallback_profile_count; ++p) {
+                                    if (nl.fallback_genes[p] != genes[p]) {
+                                        nl.fallback_genes[p] = kSeveralFallbackGenes;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if (exact_ex50) {
                         NodeLedger::ExactStep exact_step{
                             path_handle, path_is_reverse,
-                            graph.get_position_of_step(step)};
+                            step.base_position()};
                         if (it->second.is_exon) {
                             nl.exact_exon_steps.push_back(exact_step);
                         } else {
@@ -2874,7 +4316,7 @@ int run_convert(int argc, char** argv) {
                         }
                     }
                     return true;
-                });
+                }, exact_ex50);
                 if (!body_t2g.transcript_specific) {
                     nl.legacy.emplace();
                     for (const auto& [gene_idx, is_reverse] : *gene_orient_here) {
@@ -2935,18 +4377,7 @@ int run_convert(int argc, char** argv) {
                std::make_tuple(b.target_id, b.locus_parent_rank, b.direction,
                                tier_rank(b.tier), b.path_rank, b.parent_rank);
     };
-    using ExactEx50EvidenceSet =
-        std::set<ExactEx50Evidence, decltype(exact_evidence_less)>;
-    auto retain_best_exact_evidence = [](ExactEx50EvidenceSet& evidence,
-                                         ExactEx50Evidence candidate) {
-        const auto existing = evidence.find(candidate);
-        if (existing == evidence.end()) {
-            evidence.insert(std::move(candidate));
-        } else if (candidate.score > existing->score) {
-            evidence.erase(existing);
-            evidence.insert(std::move(candidate));
-        }
-    };
+    using ExactEx50EvidenceSet = std::vector<ExactEx50Evidence>;
 
     ShardedLazyCache<int64_t, std::vector<size_t>>
         exact_model_candidates(options.threads > 1);
@@ -2966,9 +4397,9 @@ int run_convert(int argc, char** argv) {
         return std::make_pair(first, last);
     };
 
-    auto model_candidates_for_node = [&](int64_t node_id) -> const std::vector<size_t>& {
+    auto model_candidates_for_node = [&](int64_t node_id, const NodeLedger& node)
+        -> const std::vector<size_t>& {
         return exact_model_candidates.get_or_build(node_id, [&]() {
-            const NodeLedger& node = node_ledger_of(node_id);
             std::vector<size_t> candidates;
             std::optional<uint64_t> previous_path;
             for (const NodeLedger::ExactStep& body_step : node.exact_body_steps) {
@@ -2993,7 +4424,7 @@ int run_convert(int argc, char** argv) {
         });
     };
 
-    auto exon_edges_for = [](const ExactEx50Model& model) -> const std::set<ExactEdge>& {
+    auto exon_edges_for = [](const ExactEx50Model& model) -> const std::vector<ExactEdge>& {
         if (!model.exon_edges) {
             throw std::runtime_error("internal exact model is missing exon-edge geometry");
         }
@@ -3008,8 +4439,9 @@ int run_convert(int argc, char** argv) {
     std::atomic<uint64_t> exact_unstarted_model_candidates_after_prefilter{0};
 
     auto exact_ex50_evidence_for =
-        [&](const vg::MultipathAlignment& alignment) -> ExactEx50EvidenceSet {
-        ExactEx50EvidenceSet evidence(exact_evidence_less);
+        [&](const vg::MultipathAlignment& alignment, const auto& read_node_ledger_of)
+        -> ExactEx50EvidenceSet {
+        ExactEx50EvidenceSet evidence;
         if (!exact_ex50 || alignment.subpath_size() == 0) {
             return evidence;
         }
@@ -3070,21 +4502,12 @@ int run_convert(int argc, char** argv) {
                 return hash;
             }
         };
-        std::unordered_map<StateKey, size_t, StateKeyHash> state_index;
+        // Reused within this alignment only: no retained per-read or shared cache.
+        pancollapse::StableScoreDedup state_index;
         auto deduplicate_states = [&](std::vector<State>& states) {
-            state_index.clear();
-            state_index.reserve(states.size());
-            std::vector<State> retained;
-            retained.reserve(states.size());
-            for (State& state : states) {
-                const auto [it, inserted] = state_index.try_emplace(StateKey(state), retained.size());
-                if (inserted) {
-                    retained.push_back(std::move(state));
-                } else if (state.score > retained[it->second].score) {
-                    retained[it->second].score = state.score;
-                }
-            }
-            states = std::move(retained);
+            state_index.retain_best(states,
+                [](const State& state) { return StateKeyHash{}(StateKey(state)); },
+                [](const State& a, const State& b) { return StateKey(a) == StateKey(b); });
         };
 
         auto mapping_reference_bases = [](const vg::Mapping& mapping) {
@@ -3158,7 +4581,8 @@ int run_convert(int argc, char** argv) {
                         prior.last_at_node_end && offset == 0;
                     next.splice_concordant =
                         next.splice_concordant && boundary_exact &&
-                        exon_edges_for(model).count(edge) != 0;
+                        std::binary_search(exon_edges_for(model).begin(),
+                                           exon_edges_for(model).end(), edge);
                 }
             }
 
@@ -3177,6 +4601,7 @@ int run_convert(int argc, char** argv) {
         const size_t subpath_count =
             static_cast<size_t>(alignment.subpath_size());
         std::vector<std::vector<State>> incoming(subpath_count);
+        std::vector<State> advanced_states;
         std::vector<char> is_source(subpath_count, 0);
         if (alignment.start_size() > 0) {
             for (const uint32_t start : alignment.start()) {
@@ -3257,7 +4682,8 @@ int run_convert(int argc, char** argv) {
                         continue;
                     }
                     const std::vector<size_t>& mapping_models =
-                        model_candidates_for_node(mapping.position().node_id());
+                        model_candidates_for_node(mapping.position().node_id(),
+                            read_node_ledger_of(mapping.position().node_id()));
                     if (first_mapping_models == nullptr) {
                         first_mapping_models = &mapping_models;
                         exact_unstarted_model_candidates_before_prefilter.fetch_add(
@@ -3292,8 +4718,11 @@ int run_convert(int argc, char** argv) {
                     continue;
                 }
                 const NodeLedger& node =
-                    node_ledger_of(mapping.position().node_id());
-                std::vector<State> advanced;
+                    read_node_ledger_of(mapping.position().node_id());
+                // Reused across mappings for the same reason: one allocation per mapping,
+                // per subpath, per record is the dominant churn in this region.
+                advanced_states.clear();
+                std::vector<State>& advanced = advanced_states;
                 for (const State& state : states) {
                     if (state.model_id == kUnstarted) {
                         for (const NodeLedger::ExactStep& body_step :
@@ -3333,7 +4762,10 @@ int run_convert(int argc, char** argv) {
                         }
                     }
                 }
-                states = std::move(advanced);
+                // swap, not move: a move donates the buffer to states and leaves nothing to
+                // recycle, so the next mapping allocates again. Swapping hands the previous
+                // states buffer back for reuse.
+                states.swap(advanced);
                 deduplicate_states(states);
                 if (states.empty()) {
                     break;
@@ -3380,8 +4812,7 @@ int run_convert(int argc, char** argv) {
                     state.body_forward ==
                     body_exon_orientation_same(state.model_id);
                 const bool body_tier = tier == pathtally::Ex50Tier::Body;
-                retain_best_exact_evidence(
-                    evidence,
+                evidence.push_back(
                     {model.target_id,
                      &model.exon->annotation.unique_parent,
                      body_tier ? &model.body->vg_path_name
@@ -3394,6 +4825,7 @@ int run_convert(int argc, char** argv) {
                      direction_forward ? 'F' : 'R', tier, state.score});
             }
         }
+        pancollapse::sort_best_evidence(evidence, exact_evidence_less);
         return evidence;
     };
 
@@ -3417,40 +4849,142 @@ int run_convert(int argc, char** argv) {
 
     auto tally_numeric_ledger_group_into =
         [&](pathtally::NumericTallyMap& tallies,
+            ReadNodeCache& read_nodes,
             const std::vector<const vg::MultipathAlignment*>& records) {
         tallies.clear();
+        if (!pathtally::structural_tally_summed()) {
+            // D091: each HST keeps its best alignment path. Node ledgers resolve once per read
+            // through read_nodes, backed by the shared node ledger cache.
+            thread_local pathtally::RouteTally<uint64_t> route_tally;
+            route_tally.run(
+                records, node_scorer,
+                [&](int64_t node_id, const auto& emit) {
+                    for (const auto& reference :
+                         read_nodes.resolve(node_id, node_ledger_of).ref_paths) {
+                        emit(reference.path_handle, reference.path_is_reverse);
+                    }
+                },
+                [&](uint64_t path_handle, const pathtally::RouteScore& best) {
+                    tallies[path_handle] = {best.score, best.forward_bases, best.reverse_bases};
+                });
+            return;
+        }
         std::vector<int64_t> per_node;
-        for (const vg::MultipathAlignment* record : records) {
-            const vg::MultipathAlignment& alignment = *record;
-            const std::vector<size_t> offsets = pathtally::subpath_read_offsets(alignment);
-            for (int subpath_index = 0; subpath_index < alignment.subpath_size();
-                 ++subpath_index) {
-                const vg::Subpath& subpath = alignment.subpath(subpath_index);
-                node_scorer(alignment, subpath_index,
-                            offsets[static_cast<size_t>(subpath_index)], per_node);
-                const vg::Path& path = subpath.path();
-                for (int mapping_index = 0; mapping_index < path.mapping_size();
-                     ++mapping_index) {
-                    const vg::Mapping& mapping = path.mapping(mapping_index);
-                    const bool read_is_reverse = mapping.position().is_reverse();
-                    const int64_t node_score = per_node[static_cast<size_t>(mapping_index)];
-                    const int64_t aligned_bases = pathtally::mapping_aligned_bases(mapping);
-                    for (const NodeLedger::ReferenceStep& reference :
-                         node_ledger_of(mapping.position().node_id()).ref_paths) {
-                        pathtally::HstTally& tally = tallies[reference.path_handle];
-                        tally.score += node_score;
-                        if (read_is_reverse == reference.path_is_reverse) {
-                            tally.forward_bases += aligned_bases;
-                        } else {
-                            tally.reverse_bases += aligned_bases;
-                        }
+        auto visit_mappings = [&](const auto& visit) {
+            for (const vg::MultipathAlignment* record : records) {
+                const vg::MultipathAlignment& alignment = *record;
+                const std::vector<size_t> offsets = pathtally::subpath_read_offsets(alignment);
+                for (int subpath_index = 0; subpath_index < alignment.subpath_size();
+                     ++subpath_index) {
+                    const vg::Subpath& subpath = alignment.subpath(subpath_index);
+                    node_scorer(alignment, subpath_index,
+                                offsets[static_cast<size_t>(subpath_index)], per_node);
+                    const vg::Path& path = subpath.path();
+                    for (int mapping_index = 0; mapping_index < path.mapping_size();
+                         ++mapping_index) {
+                        const vg::Mapping& mapping = path.mapping(mapping_index);
+                        const bool read_is_reverse = mapping.position().is_reverse();
+                        const int64_t node_score = per_node[static_cast<size_t>(mapping_index)];
+                        const int64_t aligned_bases = pathtally::mapping_aligned_bases(mapping);
+                        visit(mapping.position().node_id(), read_is_reverse, node_score,
+                              aligned_bases);
                     }
                 }
             }
-        }
+        };
+        bool fits = true;
+        visit_mappings([&](int64_t node_id, bool reverse, int64_t score, int64_t bases) {
+            fits &= read_nodes.add(node_id, reverse, score, bases);
+        });
+        if (fits && read_nodes.expand(tallies, node_ledger_of)) return;
+
+        // Preserve the old mapping-order arithmetic on a regrouping overflow.
+        tallies.clear();
+        visit_mappings([&](int64_t node_id, bool reverse, int64_t score, int64_t bases) {
+            for (const auto& reference : read_nodes.resolve(node_id, node_ledger_of).ref_paths) {
+                pathtally::HstTally& tally = tallies[reference.path_handle];
+                tally.score += score;
+                if (reverse == reference.path_is_reverse) tally.forward_bases += bases;
+                else tally.reverse_bases += bases;
+            }
+        });
     };
 
-    std::filesystem::create_directories(options.out_dir);
+    struct CountStageCleanup {
+        std::filesystem::path path;
+        bool active = false;
+        ~CountStageCleanup() {
+            if (active) {
+                std::error_code ignored;
+                std::filesystem::remove_all(path, ignored);
+            }
+        }
+    } count_stage_cleanup;
+    std::filesystem::path count_stage;
+    if (options.direct_count) {
+        if (std::filesystem::exists(options.out_dir)) {
+            throw std::runtime_error("panCollapse count output directory already exists: " +
+                                     options.out_dir.string());
+        }
+        std::filesystem::path parent = options.out_dir.parent_path();
+        if (parent.empty()) {
+            parent = ".";
+        }
+        std::filesystem::create_directories(parent);
+        count_stage = std::filesystem::absolute(parent) /
+                      ("." + options.out_dir.filename().string() + ".staging-" +
+                       std::to_string(static_cast<unsigned long long>(getpid())));
+        if (std::filesystem::exists(count_stage)) {
+            throw std::runtime_error("panCollapse count staging directory already exists: " +
+                                     count_stage.string());
+        }
+        std::filesystem::create_directories(count_stage);
+        count_stage_cleanup.path = count_stage;
+        count_stage_cleanup.active = true;
+    } else {
+        std::filesystem::create_directories(options.out_dir);
+    }
+
+    std::unique_ptr<pancollapse::direct_count::CountRuntime> count_runtime;
+    std::vector<std::array<std::atomic<std::uint64_t>,
+                           pancollapse::direct_count::kAssignmentTerminalCount>>
+        profile_assignment_terminals(options.count_profiles.size());
+    if (options.direct_count) {
+        std::vector<std::string> features;
+        features.reserve(count_facts->genes().size());
+        for (const auto& [gene, fact] : count_facts->genes()) {
+            static_cast<void>(fact);
+            features.push_back(gene);
+        }
+        pancollapse::direct_count::CountRuntimeOptions runtime_options;
+        runtime_options.memory_budget_bytes = options.count_memory_budget;
+        runtime_options.spill_directory = count_stage / "spill";
+        runtime_options.raw_barcode_length = options.raw_cb_length;
+        runtime_options.raw_umi_length = options.raw_umi_length;
+        count_runtime = std::make_unique<pancollapse::direct_count::CountRuntime>(
+            options.count_profiles,
+            pancollapse::direct_count::read_barcode_whitelist(
+                options.barcode_whitelist, options.raw_cb_length),
+            std::move(features), std::move(runtime_options));
+    }
+    std::unique_ptr<pancollapse::direct_count::CompatibilityBundleWriter>
+        compatibility_writer;
+    std::optional<pancollapse::direct_count::CompatibilityWriteReceipt>
+        compatibility_receipt;
+    if (!options.compatibility_out.empty()) {
+        pancollapse::direct_count::CompatibilityWriteOptions write_options;
+        write_options.output_directory = options.compatibility_out;
+        compatibility_writer = std::make_unique<
+            pancollapse::direct_count::CompatibilityBundleWriter>(
+            pancollapse::direct_count::CompatibilityBundleIdentity{
+                {}, PANCOLLAPSE_VERSION,
+                std::string(
+                    pancollapse::direct_count::kCompatibilityAlgorithmId),
+                pancollapse::direct_count::compatibility_structural_surface_id(
+                    *identity_ledger),
+                0, 0},
+            std::move(write_options));
+    }
     uint64_t max_chunk_bytes = static_cast<uint64_t>(1) << 30;  // 1 GiB, well under the u32 chunk field
     if (const char* env = std::getenv("PANCOLLAPSE_MAX_CHUNK_BYTES")) {
         max_chunk_bytes = std::strtoull(env, nullptr, 10);
@@ -3458,8 +4992,13 @@ int run_convert(int argc, char** argv) {
             max_chunk_bytes = 1;
         }
     }
-    RadStreamWriter rad_writer(options.out_dir / "map.rad", t2g.target_names, options.raw_cb_length,
-                               options.raw_umi_length, max_chunk_bytes);
+    std::unique_ptr<RadStreamWriter> rad_writer;
+    if (!options.direct_count || options.count_rad_out) {
+        rad_writer = std::make_unique<RadStreamWriter>(
+            options.direct_count ? count_stage / "map.rad" : options.out_dir / "map.rad",
+            t2g.target_names, options.raw_cb_length, options.raw_umi_length,
+            max_chunk_bytes);
+    }
 
     std::unique_ptr<BamWriter> bam_writer;
     if (!options.bam_out.empty()) {
@@ -3505,6 +5044,12 @@ int run_convert(int argc, char** argv) {
         }
         gamp_in = &gamp_file;
     }
+    std::unique_ptr<Sha256InputStream> gamp_hash_stream;
+    if (options.direct_count) {
+        gamp_hash_stream = std::make_unique<Sha256InputStream>(*gamp_in);
+        gamp_in = gamp_hash_stream.get();
+    }
+    std::string gamp_input_sha256;
 
     size_t input_records = 0;
     size_t input_read_groups = 0;
@@ -3534,22 +5079,36 @@ int run_convert(int argc, char** argv) {
     bool have_group = false;
     Group current_group;
 
-    auto start_group = [&](const vg::MultipathAlignment& alignment) {
-        if (completed_names.count(alignment.name()) != 0) {
+    auto start_group = [&](std::string_view name) {
+        std::string group_name(name);
+        if (completed_names.count(group_name) != 0) {
             ++grouping_recurrence_failures;
             throw std::runtime_error("grouping_recurrence_failures: completed GAMP read name recurred");
         }
         current_group = {};
-        current_group.name = alignment.name();
+        current_group.name = std::move(group_name);
         ++input_read_groups;
         const MoleculeParseResult molecule =
-            parse_molecule_id(alignment.name(), options.raw_cb_length, options.raw_umi_length);
+            parse_molecule_id(current_group.name, options.raw_cb_length,
+                              options.raw_umi_length);
         if (molecule.status == MoleculeParseStatus::Ok) {
             current_group.molecule = molecule.id;
+            if (options.direct_count) {
+                // parse_molecule_id accepts either case and the RAD path folds it;
+                // the count runtime packs uppercase bases only.
+                for (std::string* field :
+                     {&current_group.molecule.barcode, &current_group.molecule.umi}) {
+                    std::transform(field->begin(), field->end(), field->begin(),
+                                   [](unsigned char base) {
+                                       return static_cast<char>(std::toupper(base));
+                                   });
+                }
+            }
         } else {
             current_group.skip_for_molecule_identity = true;
             current_group.molecule_status = molecule.status;
             current_group.molecule_message = molecule.message;
+            current_group.molecule.original_name = molecule.id.original_name;
             if (options.molecule_identity_failures == MoleculeIdentityFailurePolicy::Fail) {
                 throw std::runtime_error(molecule_status_counter(molecule.status) + "=1: " + molecule.message);
             }
@@ -3557,55 +5116,226 @@ int run_convert(int argc, char** argv) {
         have_group = true;
     };
 
+    const auto current_thread_cpu_seconds = []() -> double {
+#ifdef CLOCK_THREAD_CPUTIME_ID
+        timespec value{};
+        if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value) == 0) {
+            return static_cast<double>(value.tv_sec) + value.tv_nsec / 1e9;
+        }
+#endif
+        return 0.0;
+    };
     const auto processing_started = std::chrono::steady_clock::now();
+    const double producer_cpu_started = current_thread_cpu_seconds();
     // A thread handoff plus deterministic output turn costs more than evaluating a tiny exact
     // surface. Keep toy/small-reference conversions serial even when a larger ceiling was
     // requested; chromosome/pangenome ledgers exceed this threshold by orders of magnitude.
     constexpr size_t kMinExactModelsForWorkerPool = 32;
-    const size_t processing_threads =
-        exact_ex50 && exact_ex50_models.size() < kMinExactModelsForWorkerPool
+    // PANCOLLAPSE_FORCE_WORKER_POOL=1 lets the count CLI tests drive the multi-worker
+    // path on a fixture whose exact surface would otherwise be processed serially.
+    // It is count-only so legacy convert keeps its clamp regardless of environment.
+    const char* force_worker_pool_env = std::getenv("PANCOLLAPSE_FORCE_WORKER_POOL");
+    const bool force_worker_pool = options.direct_count && force_worker_pool_env != nullptr &&
+                                   std::string_view(force_worker_pool_env) == "1";
+    const size_t requested_processing_threads =
+        exact_ex50 && !force_worker_pool &&
+                exact_ex50_models.size() < kMinExactModelsForWorkerPool
             ? 1 : options.threads;
-    if (processing_threads != options.threads) {
+    if (requested_processing_threads != options.threads) {
         std::cerr << "panCollapse: processing workers: requested=" << options.threads
-                  << " active=" << processing_threads
+                  << " active=" << requested_processing_threads
                   << " reason=small_exact_model_surface exact_models="
                   << exact_ex50_models.size() << '\n';
     }
+    const bool parallel_native_input = options.direct_count && requested_processing_threads >= 8;
+    // D090: by default the producer groups serialized records and each count worker decodes
+    // the whole read it counts, so a dense read occupies one worker instead of stalling an
+    // in-order batch commit. The ordered batch reader remains selectable for A/B measurement.
+    bool read_granular_input = parallel_native_input;
+    if (const char* mode = std::getenv("PANCOLLAPSE_INPUT_MODE")) {
+        const std::string_view requested(mode);
+        if (requested == "ordered_batch") {
+            read_granular_input = false;
+        } else if (requested != "read_granular") {
+            throw std::runtime_error(
+                "PANCOLLAPSE_INPUT_MODE must be read_granular or ordered_batch");
+        }
+    }
+    pancollapse::input::OrderedGampReaderOptions input_reader_options;
+    input_reader_options.decoder_threads = parallel_native_input && !read_granular_input
+        ? std::min<size_t>(4, requested_processing_threads / 4) : 0;
+    input_reader_options.decompression_threads = parallel_native_input ? 2 : 0;
+    input_reader_options.max_inflight_batches =
+        std::max<size_t>(1, 2 * input_reader_options.decoder_threads);
+    // Pipeline depth is derived from the DECODER count, so it is 8 with four decoders
+    // while the consumers number processing_threads (24 at --threads 32). Where a region's
+    // records are large enough that batch_bytes rather than batch_records seals a batch,
+    // eight in-flight batches cannot keep the counters fed. This override exists to measure
+    // that effect; unset, the depth is exactly the previous default.
+    if (const char* inflight = std::getenv("PANCOLLAPSE_INPUT_INFLIGHT_BATCHES")) {
+        const unsigned long long requested = std::strtoull(inflight, nullptr, 10);
+        if (requested > 0) {
+            input_reader_options.max_inflight_batches = static_cast<size_t>(requested);
+        }
+    }
+    // htslib adds one BGZF I/O thread alongside its decompression workers.
+    // The caller frames input and commits decoded records in order; it is also
+    // part of the pipeline budget, rather than an extra pool of 32 counters.
+    const size_t input_background_threads = parallel_native_input
+        ? input_reader_options.decoder_threads + input_reader_options.decompression_threads + 1 : 0;
+    const size_t processing_threads = parallel_native_input
+        ? requested_processing_threads - input_background_threads - 1
+        : requested_processing_threads;
+    if (options.direct_count) {
+        std::cerr << "panCollapse: input pipeline: mode="
+                  << (read_granular_input ? "read_granular"
+                      : parallel_native_input ? "ordered_parallel" : "serial")
+                  << " requested_threads=" << options.threads
+                  << " count_workers=" << processing_threads
+                  << " decode_workers=" << input_reader_options.decoder_threads
+                  << " decompression_workers=" << input_reader_options.decompression_threads
+                  << " bgzf_io_workers=" << (parallel_native_input ? 1 : 0)
+                  << " pipeline_threads=" << (processing_threads + input_background_threads +
+                      (processing_threads > 1 ? 1 : 0))
+                  << " batch_bytes=" << input_reader_options.batch_bytes
+                  << " inflight_batches=" << input_reader_options.max_inflight_batches
+                  << " buffer_bytes=" << input_reader_options.max_buffer_bytes << '\n';
+    }
     const bool profile_runtime_timing =
         std::getenv("PANCOLLAPSE_PROFILE_TIMING") != nullptr;
+    using CachedAssignmentResults =
+        std::vector<pancollapse::direct_count::AssignmentResult>;
+    // Five times the original 131,072: at 32 workers the full filtered input filled the smaller
+    // cache and 71% of reads then missed it (user-approved, 2026-09-25).
+    constexpr size_t kAssignmentSignatureCacheEntries = 655360;
+    std::unique_ptr<BoundedShardedCache<std::string, CachedAssignmentResults>>
+        assignment_cache;
+    std::vector<std::unique_ptr<pancollapse::direct_count::CountWorker>> count_workers;
+    if (options.direct_count) {
+        assignment_cache = std::make_unique<
+            BoundedShardedCache<std::string, CachedAssignmentResults>>(
+            kAssignmentSignatureCacheEntries);
+        count_workers.reserve(processing_threads);
+        for (size_t index = 0; index < processing_threads; ++index) {
+            count_workers.push_back(
+                std::make_unique<pancollapse::direct_count::CountWorker>(
+                    count_runtime->make_worker()));
+        }
+    }
+    // The shared FIFO gives each worker increasing ordinals. Private streams
+    // avoid blocking computation on diagnostic order; merge after counting.
+    std::vector<std::filesystem::path> diagnostics_spool_paths;
+    std::vector<std::unique_ptr<pancollapse::direct_count::DirectCountDiagnosticsSpool>>
+        diagnostics_spools;
+    if (options.direct_count && !options.read_assignments_out.empty()) {
+        for (size_t index = 0; index < processing_threads; ++index) {
+            diagnostics_spool_paths.push_back(
+                count_stage / (".read-assignments." + std::to_string(index) + ".spool.zst"));
+            diagnostics_spools.push_back(std::make_unique<
+                pancollapse::direct_count::DirectCountDiagnosticsSpool>(
+                    diagnostics_spool_paths.back()));
+        }
+    }
     struct alignas(64) WorkerRuntimeTiming {
+        double cpu_seconds = 0.0;
+        uint64_t empty_queue_wait_ns = 0;
         uint64_t groups = 0;
         uint64_t queue_wait_ns = 0;
         uint64_t compute_before_output_ns = 0;
         uint64_t ordered_wait_ns = 0;
         uint64_t ordered_region_ns = 0;
+        // Regions inside compute_before_output, so these sum to at most that figure. Each
+        // worker owns its own cache line, so accumulating costs nothing across threads.
+        uint64_t prelude_ns = 0;     // molecule identity and record marshalling
+        uint64_t tally_ns = 0;       // scoring the read's alignments against paths
+        uint64_t evidence_ns = 0;    // identity evidence, splice concordance, Ex50 evidence
+        uint64_t facts_ns = 0;       // gathering candidate inputs (full facts for capture)
+        uint64_t signature_ns = 0;   // canonicalizing and hashing assignment cache inputs
+        uint64_t digest_ns = 0;      // finalizing the cache-key digest
+        uint64_t resolve_ns = 0;     // lookup, plus fact materialization/resolution on a miss
+        uint64_t observe_ns = 0;     // UMI status, barcode handling, observe_assignment
+        uint64_t tail_ns = 0;        // everything after counting, up to the output phase
+        double decode_cpu_seconds = 0.0;  // read-granular input: decoding the read's records
+        uint64_t decoded_records = 0;
+        uint64_t reorder_blocked_ns = 0;  // waiting on the reorder stage's pending bound
     };
     std::vector<WorkerRuntimeTiming> worker_runtime_timing(processing_threads);
     uint64_t producer_admission_wait_ns = 0;
     size_t queue_high_water = 0;
+    // Serialized bytes waiting in the job queue. Read-granular input bounds them by the same
+    // budget the ordered reader used for raw plus decoded bytes; decoded reads never queue.
+    size_t queued_raw_bytes = 0;
+    size_t peak_queued_raw_bytes = 0;
+    const size_t max_queued_raw_bytes = input_reader_options.max_buffer_bytes;
     auto producer_finished = processing_started;
     auto next_progress_report = processing_started + std::chrono::minutes(5);
     size_t next_progress_group = 1000000;
-    size_t completed_groups_for_progress = 0;  // touched only while holding the output turn
-    OrderedOutputCoordinator ordered_output(processing_threads > 1);
+    std::atomic<size_t> completed_groups_for_progress{0};
+    std::mutex progress_mutex;
+    // Count's ordered sinks go through the reorder stage; convert keeps the output turn.
+    // PANCOLLAPSE_ORDERED_OUTPUT=turn restores the turn for count, for A/B measurement.
+    bool reorder_count_output = options.direct_count && processing_threads > 1 &&
+        (options.count_rad_out || compatibility_writer != nullptr);
+    if (const char* ordered_mode = std::getenv("PANCOLLAPSE_ORDERED_OUTPUT")) {
+        const std::string_view requested(ordered_mode);
+        if (requested == "turn") {
+            reorder_count_output = false;
+        } else if (requested != "reorder") {
+            throw std::runtime_error("PANCOLLAPSE_ORDERED_OUTPUT must be reorder or turn");
+        }
+    }
+    OrderedOutputCoordinator ordered_output(
+        processing_threads > 1 && !reorder_count_output &&
+        (!options.direct_count || options.count_rad_out ||
+         compatibility_writer != nullptr));
+    // Pending reads are small (targets and identity, or one read's compatibility facts); the
+    // bound lets the other workers run tens of seconds ahead of one dense read.
+    constexpr size_t kMaxPendingOrderedReads = 16384;
+    pancollapse::output::OrderedOutputReorder output_reorder(kMaxPendingOrderedReads);
     auto process_group = [&](Group group, size_t ordinal,
                              pathtally::TallyMap& tally_workspace,
                              pathtally::NumericTallyMap& numeric_tally_workspace,
-                             WorkerRuntimeTiming& runtime_timing) {
+                             ReadNodeCache& read_nodes,
+                             WorkerRuntimeTiming& runtime_timing,
+                             pancollapse::direct_count::CountWorker* count_worker,
+                             pancollapse::direct_count::DirectCountDiagnosticsSpool* diagnostics_spool) {
         Group& current_group = group;
+        read_nodes.clear();
+        const auto read_node_ledger_of = [&](int64_t node_id) -> const NodeLedger& {
+            return read_nodes.resolve(node_id, node_ledger_of);
+        };
         const size_t current_read_group = ordinal + 1;
         OrderedOutputCoordinator::Guard output_guard(ordered_output, ordinal);
         const auto group_started = profile_runtime_timing
             ? std::chrono::steady_clock::now()
             : std::chrono::steady_clock::time_point{};
         bool output_phase_started = false;
+        std::chrono::steady_clock::time_point output_wait_started_at;
         std::chrono::steady_clock::time_point output_phase_started_at;
+        // Region clock for the read path. Regions nest inside compute_before_output_ns, so
+        // their sum plus tail is a check on the instrumentation itself: a shortfall means
+        // real work sits outside every bracket.
+        // Reused across the group's profiles so the row vector allocates once per read.
+        std::vector<std::string> signature_rows;
+        auto region_clock = group_started;
+        auto mark = [&](uint64_t& bucket) {
+            if (!profile_runtime_timing) return;
+            // A bracket can straddle acquire_output (notably observe). Clip it
+            // to the end of compute, excluding both ordered wait and output.
+            const auto now = output_phase_started
+                ? output_wait_started_at : std::chrono::steady_clock::now();
+            bucket += static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(now - region_clock)
+                    .count());
+            region_clock = now;
+        };
         auto acquire_output = [&]() {
             if (!profile_runtime_timing || output_phase_started) {
                 output_guard.acquire();
                 return;
             }
             const auto wait_started = std::chrono::steady_clock::now();
+            output_wait_started_at = wait_started;
             runtime_timing.compute_before_output_ns += static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     wait_started - group_started).count());
@@ -3616,9 +5346,22 @@ int run_convert(int argc, char** argv) {
                     output_phase_started_at - wait_started).count());
             output_phase_started = true;
         };
-        auto process = [&]() {
-        if (current_group.skip_for_molecule_identity) {
+        // An ordered write runs now under the output turn, or is captured with everything it needs
+        // (never a reference into the read's arena) and committed later by the reorder stage.
+        pancollapse::output::OrderedOutputReorder::Actions ordered_actions;
+        auto emit_ordered = [&](std::function<void()> action) {
+            if (reorder_count_output) {
+                ordered_actions.push_back(std::move(action));
+                return;
+            }
             acquire_output();
+            action();
+        };
+        auto process = [&]() {
+        if (current_group.skip_for_molecule_identity && !compatibility_writer) {
+            if (!reorder_count_output) {
+                acquire_output();
+            }
             if (debug_writer) {
                 debug_writer->write_read(current_read_group, current_group.name, ".", 0);
             }
@@ -3636,9 +5379,28 @@ int run_convert(int argc, char** argv) {
             case MoleculeParseStatus::Ok:
                 throw std::runtime_error("internal molecule identity skip state mismatch");
             }
-            std::cerr << "panCollapse: warning: skipped read group with invalid raw molecule identity: "
-                      << current_group.name << ": " << current_group.molecule_message << '\n';
+            emit_ordered([warning = "panCollapse: warning: skipped read group with invalid raw "
+                                    "molecule identity: " + current_group.name + ": " +
+                                    current_group.molecule_message + '\n'] {
+                std::cerr << warning;
+            });
+            if (diagnostics_spool) {
+                for (size_t profile_index = 0;
+                     profile_index < options.count_profiles.size(); ++profile_index) {
+                    diagnostics_spool->append(
+                        {ordinal,
+                         current_group.molecule.original_name.empty()
+                             ? current_group.name
+                             : current_group.molecule.original_name,
+                         static_cast<std::uint32_t>(profile_index), std::nullopt,
+                         std::nullopt, std::nullopt, "invalid_raw_molecule",
+                         std::nullopt, std::nullopt, 0});
+                }
+            }
             return;
+        }
+        if (count_worker != nullptr && !current_group.skip_for_molecule_identity) {
+            count_worker->observe_barcode(current_group.molecule.barcode);
         }
 
         bool bam_record_written = false;
@@ -3649,7 +5411,7 @@ int run_convert(int argc, char** argv) {
             acquire_output();
             const std::string empty;
             const vg::MultipathAlignment* read =
-                current_group.records.empty() ? nullptr : &current_group.records.front();
+                current_group.records.empty() ? nullptr : current_group.records.front();
             bam_writer->write_record(
                 current_group.molecule.original_name, /*gene_tid=*/-1,
                 read == nullptr || bam_writer->compact_exact() ? empty : read->sequence(),
@@ -3669,10 +5431,12 @@ int run_convert(int argc, char** argv) {
         // Unique RAD drop, which is a multi-GENE rule, not a multi-transcript one (a gene with >=2
         // emitted isoforms is still one gene).
         std::set<std::string> ledger_genes;
+        bool fallback_only_skipped = false;
         if (options.count_mode == pathtally::CountMode::Score) {
             std::vector<const vg::MultipathAlignment*> record_ptrs;
             record_ptrs.reserve(current_group.records.size());
-            for (const vg::MultipathAlignment& record : current_group.records) {
+            for (const vg::MultipathAlignment* record_pointer : current_group.records) {
+                const vg::MultipathAlignment& record = *record_pointer;
                 record_ptrs.push_back(&record);
             }
             pathtally::tally_read_group_into(tally_workspace, record_ptrs, lookup, node_scorer);
@@ -3707,15 +5471,62 @@ int run_convert(int argc, char** argv) {
             // to score every reference the read touches, then classify per transcript on top of it.
             std::vector<const vg::MultipathAlignment*> record_ptrs;
             record_ptrs.reserve(current_group.records.size());
-            for (const vg::MultipathAlignment& record : current_group.records) {
+            for (const vg::MultipathAlignment* record_pointer : current_group.records) {
+                const vg::MultipathAlignment& record = *record_pointer;
                 record_ptrs.push_back(&record);
             }
-            if (production_identity) {
-                tally_numeric_ledger_group_into(numeric_tally_workspace, record_ptrs);
+            mark(runtime_timing.prelude_ns);
+            if (fallback_only_skip && production_identity) {
+                // Any node carrying a countable Parent vetoes the skip, aligned or not; genes are
+                // gathered only where the read aligns bases.
+                bool any_fallback = false;
+                bool countable = false;
+                std::vector<uint32_t> genes(fallback_profile_count, kNoFallbackGene);
+                for (const vg::MultipathAlignment* record : record_ptrs) {
+                    for (int s = 0; s < record->subpath_size() && !countable; ++s) {
+                        const vg::Path& path = record->subpath(s).path();
+                        for (int i = 0; i < path.mapping_size(); ++i) {
+                            const vg::Mapping& mapping = path.mapping(i);
+                            const NodeLedger& nl =
+                                read_node_ledger_of(mapping.position().node_id());
+                            if (nl.fallback_state == 2) {
+                                countable = true;
+                                break;
+                            }
+                            if (nl.fallback_state == 0 ||
+                                pathtally::mapping_aligned_bases(mapping) == 0) {
+                                continue;
+                            }
+                            any_fallback = true;
+                            for (size_t p = 0; p < fallback_profile_count; ++p) {
+                                if (genes[p] == kNoFallbackGene) {
+                                    genes[p] = nl.fallback_genes[p];
+                                } else if (genes[p] != nl.fallback_genes[p]) {
+                                    genes[p] = kSeveralFallbackGenes;
+                                }
+                            }
+                        }
+                    }
+                    if (countable) {
+                        break;
+                    }
+                }
+                fallback_only_skipped =
+                    !countable && any_fallback &&
+                    std::all_of(genes.begin(), genes.end(), [&](uint32_t gene) {
+                        return gene == kSeveralFallbackGenes;
+                    });
+            }
+            if (fallback_only_skipped) {
+                numeric_tally_workspace.clear();
+                fallback_only_skipped_reads.fetch_add(1, std::memory_order_relaxed);
+            } else if (production_identity) {
+                tally_numeric_ledger_group_into(numeric_tally_workspace, read_nodes, record_ptrs);
             } else {
                 pathtally::tally_read_group_into(
                     tally_workspace, record_ptrs, ledger_lookup, node_scorer);
             }
+            mark(runtime_timing.tally_ns);
 
             // Score-independent aligned-base orientation and touched body ranges are retained for
             // the legacy two-column mode. D063 orientation is derived later from the winning raw
@@ -3726,7 +5537,8 @@ int run_convert(int argc, char** argv) {
             if (!body_t2g.transcript_specific) {
                 gene_orient.emplace();
                 body_range.emplace();
-                for (const vg::MultipathAlignment& record : current_group.records) {
+                for (const vg::MultipathAlignment* record_pointer : current_group.records) {
+                    const vg::MultipathAlignment& record = *record_pointer;
                     for (int s = 0; s < record.subpath_size(); ++s) {
                         const vg::Path& path = record.subpath(s).path();
                         for (int i = 0; i < path.mapping_size(); ++i) {
@@ -3862,15 +5674,16 @@ int run_convert(int argc, char** argv) {
             const std::optional<std::set<uint32_t>> splice_concordant =
                 pathtally::splice_concordant_transcripts(read_node_pairs, splice_edges);
 
-            ExactEx50EvidenceSet exact_group_evidence(exact_evidence_less);
-            if (exact_ex50) {
-                for (const vg::MultipathAlignment& record : current_group.records) {
+            ExactEx50EvidenceSet exact_group_evidence;
+            if (exact_ex50 && !fallback_only_skipped) {
+                for (const vg::MultipathAlignment* record_pointer : current_group.records) {
+                    const vg::MultipathAlignment& record = *record_pointer;
                     ExactEx50EvidenceSet record_evidence =
-                        exact_ex50_evidence_for(record);
-                    for (const ExactEx50Evidence& evidence : record_evidence) {
-                        retain_best_exact_evidence(exact_group_evidence, evidence);
-                    }
+                        exact_ex50_evidence_for(record, read_node_ledger_of);
+                    exact_group_evidence.insert(exact_group_evidence.end(),
+                                                record_evidence.begin(), record_evidence.end());
                 }
+                pancollapse::sort_best_evidence(exact_group_evidence, exact_evidence_less);
                 // Reference filtering changes the compatible transcript surface, so it must run
                 // before the top-score-minus-5 window and before the global E/P/B rank. Filtering
                 // a projected winner downstream cannot recover an allowed lower candidate.
@@ -3884,7 +5697,7 @@ int run_convert(int argc, char** argv) {
                     strict_allowlisted_evidence_dropped.fetch_add(
                         before - exact_group_evidence.size(), std::memory_order_relaxed);
                 }
-                if (options.exact_ex50_score_window_enabled &&
+                if (!options.direct_count && options.exact_ex50_score_window_enabled &&
                     !exact_group_evidence.empty()) {
                     int64_t top_score = std::numeric_limits<int64_t>::min();
                     for (const ExactEx50Evidence& evidence : exact_group_evidence) {
@@ -3953,7 +5766,12 @@ int run_convert(int argc, char** argv) {
             // raw paths in the layer that supplied the call (exon for S, body for U); tied aliases
             // combine aligned-base evidence with a deterministic forward fallback. Legacy
             // two-column bodies retain D060's per-gene orientation for byte-compatible behavior.
-            std::map<uint32_t, char> transcript_gd;  // transcript target id -> 'F'/'R'
+            // pathtally builds `calls` by draining a std::map keyed on the transcript target
+            // id, so the ids are unique and ascending and a call's own position is a complete
+            // key. One char per call replaces a std::map whose every node was a separate
+            // allocation, on every read.
+            std::vector<char> transcript_gd;  // parallel to calls: 'F'/'R'
+            transcript_gd.reserve(calls.size());
             for (const pathtally::LedgerCall& call : calls) {
                 const std::string& transcript = t2g.target_names[call.transcript_target_id];
                 const std::string& gene = t2g.transcript_gene.at(transcript);
@@ -3970,7 +5788,358 @@ int run_convert(int argc, char** argv) {
                     const auto oit = gene_orient->find(gene_idx);
                     forward = oit == gene_orient->end() || oit->second.first >= oit->second.second;
                 }
-                transcript_gd[call.transcript_target_id] = forward ? 'F' : 'R';
+                transcript_gd.push_back(forward ? 'F' : 'R');
+            }
+            const auto call_strand = [&](const pathtally::LedgerCall& call) {
+                return transcript_gd[static_cast<size_t>(&call - calls.data())];
+            };
+
+            std::optional<pancollapse::direct_count::CompatibilityFactSet>
+                compatibility_facts;
+            if (compatibility_writer) {
+                using pancollapse::direct_count::EvidenceStrand;
+                using pancollapse::direct_count::EvidenceTier;
+                compatibility_facts.emplace();
+                compatibility_facts->exact.reserve(exact_group_evidence.size());
+                for (const ExactEx50Evidence& evidence : exact_group_evidence) {
+                    EvidenceTier tier = EvidenceTier::body;
+                    if (evidence.tier == pathtally::Ex50Tier::FullyExonic) {
+                        tier = EvidenceTier::exon;
+                    } else if (evidence.tier ==
+                               pathtally::Ex50Tier::ExonicMajority) {
+                        tier = EvidenceTier::partial_exon;
+                    }
+                    compatibility_facts->exact.push_back(
+                        {t2g.target_names.at(evidence.target_id),
+                         *evidence.locus_parent, *evidence.path, *evidence.parent,
+                         evidence.score, tier,
+                         evidence.direction == 'F' ? EvidenceStrand::forward
+                                                   : EvidenceStrand::reverse});
+                }
+                compatibility_facts->structural.reserve(calls.size());
+                for (const pathtally::LedgerCall& call : calls) {
+                    const auto& evidence_map = call.spliced
+                        ? exon_identity_evidence
+                        : body_identity_evidence;
+                    const auto evidence =
+                        evidence_map.find(call.transcript_target_id);
+                    if (evidence == evidence_map.end()) {
+                        throw std::runtime_error(
+                            "internal path identity provenance is missing for a "
+                            "structural compatibility call");
+                    }
+                    std::vector<std::string> winning_paths;
+                    winning_paths.reserve(evidence->second.winning_paths.size());
+                    for (const std::string* path :
+                         evidence->second.winning_paths) {
+                        winning_paths.push_back(*path);
+                    }
+                    std::vector<std::string> winning_parents;
+                    winning_parents.reserve(
+                        evidence->second.winning_parents.size());
+                    for (const pathtally::RankedParent& parent :
+                         evidence->second.winning_parents) {
+                        winning_parents.push_back(*parent.unique_parent);
+                    }
+                    compatibility_facts->structural.push_back(
+                        {t2g.target_names.at(call.transcript_target_id),
+                         call.spliced
+                             ? pancollapse::direct_count::StructuralLayer::spliced
+                             : pancollapse::direct_count::StructuralLayer::unspliced,
+                         evidence->second.score,
+                         call_strand(call) == 'F'
+                             ? EvidenceStrand::forward
+                             : EvidenceStrand::reverse,
+                         std::move(winning_paths),
+                         std::move(winning_parents)});
+                }
+            }
+
+            if (current_group.skip_for_molecule_identity) {
+                if (!compatibility_writer || !compatibility_facts) {
+                    throw std::logic_error(
+                        "invalid molecule compatibility capture is unavailable");
+                }
+                pancollapse::direct_count::MoleculeStatus status =
+                    pancollapse::direct_count::MoleculeStatus::malformed;
+                switch (current_group.molecule_status) {
+                    case MoleculeParseStatus::Missing:
+                        status = pancollapse::direct_count::MoleculeStatus::missing;
+                        ++raw_molecule_missing_groups;
+                        break;
+                    case MoleculeParseStatus::Malformed:
+                        status = pancollapse::direct_count::MoleculeStatus::malformed;
+                        ++raw_molecule_malformed_groups;
+                        break;
+                    case MoleculeParseStatus::Unsupported:
+                        status = pancollapse::direct_count::MoleculeStatus::unsupported;
+                        ++raw_molecule_unsupported_groups;
+                        break;
+                    case MoleculeParseStatus::Ok:
+                        throw std::logic_error(
+                            "internal molecule identity skip state mismatch");
+                }
+                ++raw_molecule_skipped_groups;
+                emit_ordered([row = pancollapse::direct_count::ReadCompatibilityRow{
+                                  ordinal,
+                                  current_group.molecule.original_name.empty()
+                                      ? current_group.name
+                                      : current_group.molecule.original_name,
+                                  status, std::nullopt, std::nullopt, std::nullopt,
+                                  std::nullopt, 0},
+                              facts = std::make_shared<
+                                  pancollapse::direct_count::CompatibilityFactSet>(
+                                  std::move(*compatibility_facts)),
+                              writer = compatibility_writer.get()]() {
+                    writer->append(row, std::move(*facts));
+                });
+                emit_ordered([warning = "panCollapse: warning: skipped read group with invalid "
+                                        "raw molecule identity: " + current_group.name + ": " +
+                                        current_group.molecule_message + '\n'] {
+                    std::cerr << warning;
+                });
+                if (diagnostics_spool) {
+                    for (size_t profile_index = 0;
+                         profile_index < options.count_profiles.size();
+                         ++profile_index) {
+                        diagnostics_spool->append(
+                            {ordinal,
+                             current_group.molecule.original_name.empty()
+                                 ? current_group.name
+                                 : current_group.molecule.original_name,
+                             static_cast<std::uint32_t>(profile_index),
+                             std::nullopt, std::nullopt, std::nullopt,
+                             "invalid_raw_molecule", std::nullopt,
+                             std::nullopt, 0});
+                    }
+                }
+                return;
+            }
+
+            if (count_worker != nullptr) {
+                using pancollapse::direct_count::AssignmentCandidateInput;
+                using pancollapse::direct_count::AssignmentFacts;
+                using pancollapse::direct_count::digest_assignment_inputs;
+                mark(runtime_timing.evidence_ns);
+                using pancollapse::direct_count::EvidenceStrand;
+                using pancollapse::direct_count::EvidenceTier;
+                const auto& selected_profiles = count_runtime->profiles();
+                std::vector<AssignmentFacts> profile_assignment_facts;
+                std::vector<AssignmentCandidateInput> exact_inputs;
+                std::vector<AssignmentCandidateInput> fallback_inputs;
+                const bool use_candidate_inputs = compatibility_writer == nullptr;
+                if (!use_candidate_inputs) {
+                    if (!compatibility_facts) {
+                        throw std::logic_error("compatibility capture is missing assignment facts");
+                    }
+                    profile_assignment_facts.resize(selected_profiles.size());
+                    for (size_t profile_index = 0;
+                         profile_index < selected_profiles.size(); ++profile_index) {
+                        profile_assignment_facts[profile_index] =
+                            count_facts->assignment_facts(
+                                selected_profiles[profile_index],
+                                *compatibility_facts);
+                    }
+                } else {
+                    exact_inputs.reserve(exact_group_evidence.size());
+                    for (const ExactEx50Evidence& evidence : exact_group_evidence) {
+                        EvidenceTier tier = EvidenceTier::body;
+                        if (evidence.tier == pathtally::Ex50Tier::FullyExonic) {
+                            tier = EvidenceTier::exon;
+                        } else if (evidence.tier ==
+                                   pathtally::Ex50Tier::ExonicMajority) {
+                            tier = EvidenceTier::partial_exon;
+                        }
+                        exact_inputs.push_back(
+                            {count_parent_facts.at(evidence.parent_rank), evidence.score, tier,
+                             evidence.direction == 'F' ? EvidenceStrand::forward
+                                                       : EvidenceStrand::reverse});
+                    }
+                    for (const pathtally::LedgerCall& call : calls) {
+                        // Frozen exact-strand Gene fallback is a forward, spliced
+                        // (XR=G, GL=S) surface. Unspliced/body calls must never
+                        // rescue an otherwise antisense-only exact assignment.
+                        if (!call.spliced) {
+                            continue;
+                        }
+                        const auto& evidence_map = exon_identity_evidence;
+                        const auto evidence =
+                            evidence_map.find(call.transcript_target_id);
+                        if (evidence == evidence_map.end()) {
+                            throw std::runtime_error(
+                                "internal path identity provenance is missing for a "
+                                "Gene fallback");
+                        }
+                        const EvidenceStrand direction =
+                            call_strand(call) == 'F'
+                                ? EvidenceStrand::forward
+                                : EvidenceStrand::reverse;
+                        for (const pathtally::RankedParent& parent :
+                             evidence->second.winning_parents) {
+                            fallback_inputs.push_back(
+                                {count_parent_facts.at(parent.parent_rank),
+                                 evidence->second.score, EvidenceTier::gene,
+                                 direction});
+                        }
+                    }
+                }
+                const auto quality = current_group.molecule.barcode_quality.empty()
+                    ? std::optional<std::string_view>{}
+                    : std::optional<std::string_view>{
+                          current_group.molecule.barcode_quality};
+                mark(runtime_timing.facts_ns);
+                SignatureDigest signature_digest;
+                signature_digest.integer(selected_profiles.size());
+                // Domain-separate the raw-input and full-fact formats. The latter
+                // remains the capture path and includes incomplete-provenance facts.
+                signature_digest.byte(use_candidate_inputs ? 1 : 0);
+                // A skipped read shares its empty evidence with genuine no-evidence reads but
+                // carries its own reason bit, so it needs its own cache entry.
+                signature_digest.byte(fallback_only_skipped ? 1 : 0);
+                if (!use_candidate_inputs) {
+                    for (const AssignmentFacts& facts : profile_assignment_facts) {
+                        digest_assignment_facts(signature_digest, facts, signature_rows);
+                    }
+                } else {
+                    std::vector<const AssignmentCandidateInput*> input_rows;
+                    digest_assignment_inputs(signature_digest, exact_inputs, input_rows);
+                    digest_assignment_inputs(signature_digest, fallback_inputs, input_rows);
+                }
+                mark(runtime_timing.signature_ns);
+                std::string assignment_key = signature_digest.finish();
+                mark(runtime_timing.digest_ns);
+                const std::shared_ptr<const CachedAssignmentResults> assignments =
+                    assignment_cache->get_or_build(
+                        std::move(assignment_key), [&]() {
+                        if (use_candidate_inputs) {
+                            profile_assignment_facts.resize(selected_profiles.size());
+                            for (size_t profile_index = 0;
+                                 profile_index < selected_profiles.size(); ++profile_index) {
+                                AssignmentFacts& facts = profile_assignment_facts[profile_index];
+                                const auto materialize = [&](const auto& inputs, auto& candidates) {
+                                    candidates.reserve(inputs.size());
+                                    for (const auto& input : inputs) {
+                                        candidates.push_back(count_facts->candidate(
+                                            selected_profiles[profile_index], *input.parent,
+                                            input.score, input.tier, input.strand,
+                                            input.body_sample_support));
+                                    }
+                                };
+                                materialize(exact_inputs, facts.exact);
+                                materialize(fallback_inputs, facts.gene_fallback);
+                            }
+                        }
+                        CachedAssignmentResults resolved;
+                        resolved.reserve(selected_profiles.size());
+                        for (size_t profile_index = 0;
+                             profile_index < selected_profiles.size(); ++profile_index) {
+                            resolved.push_back(
+                                pancollapse::direct_count::resolve_assignment(
+                                    selected_profiles[profile_index],
+                                    profile_assignment_facts[profile_index]));
+                            if (fallback_only_skipped) {
+                                resolved.back().reasons |=
+                                    pancollapse::direct_count::reason_fallback_only_skipped;
+                            }
+                        }
+                        return resolved;
+                    });
+                mark(runtime_timing.resolve_ns);
+                const auto umi_status = pancollapse::direct_count::basic_umi_status(
+                    current_group.molecule.umi);
+                if (!assignments->empty()) {
+                    const bool barcode_eligible =
+                        assignments->front().barcode_correction_eligible;
+                    for (const auto& assignment : *assignments) {
+                        if (assignment.barcode_correction_eligible != barcode_eligible) {
+                            throw std::logic_error(
+                                "count profiles disagree on profile-invariant barcode "
+                                "correction eligibility");
+                        }
+                    }
+                }
+                for (size_t profile_index = 0; profile_index < assignments->size();
+                     ++profile_index) {
+                    const auto& assignment = assignments->at(profile_index);
+                    profile_assignment_terminals[profile_index]
+                        [static_cast<size_t>(assignment.terminal)]
+                            .fetch_add(1, std::memory_order_relaxed);
+                    // Barcode-only reads never enter correct_cb's feature-bearing
+                    // pass. For every other read, defer the final molecule outcome
+                    // until barcode correction while preserving whether Python's
+                    // early evidence exits would have reached the UMI filter.
+                    if (assignment.barcode_correction_eligible) {
+                        count_worker->observe_assignment(
+                            static_cast<std::uint32_t>(profile_index),
+                            current_group.molecule.barcode, quality,
+                            current_group.molecule.umi, assignment.genes,
+                            /*read_count=*/1, assignment.reaches_umi_filter);
+                    }
+                    if (diagnostics_spool) {
+                        std::optional<std::string> selected_gene;
+                        if (!assignment.genes.empty()) {
+                            selected_gene.emplace();
+                            for (const std::string& gene : assignment.genes) {
+                                if (!selected_gene->empty()) {
+                                    *selected_gene += ';';
+                                }
+                                *selected_gene += gene;
+                            }
+                        }
+                        const std::optional<std::string> selected_tier =
+                            assignment.genes.empty()
+                                ? std::nullopt
+                                : std::optional<std::string>(
+                                      pancollapse::direct_count::evidence_tier_name(
+                                          assignment.winning_tier));
+                        auto terminal =
+                            pancollapse::direct_count::terminal_after_umi_filter(
+                                assignment, umi_status);
+                        diagnostics_spool->append(
+                            {ordinal, current_group.molecule.original_name,
+                             static_cast<std::uint32_t>(profile_index),
+                             current_group.molecule.barcode,
+                             current_group.molecule.barcode_quality.empty()
+                                 ? std::nullopt
+                                 : std::optional<std::string>(
+                                       current_group.molecule.barcode_quality),
+                             current_group.molecule.umi,
+                             std::move(terminal.name),
+                             std::move(selected_gene), selected_tier,
+                             terminal.reasons,
+                             assignment.barcode_correction_eligible});
+                    }
+                }
+                mark(runtime_timing.observe_ns);
+                if (compatibility_writer) {
+                    if (!compatibility_facts) {
+                        throw std::logic_error(
+                            "valid molecule compatibility facts are unavailable");
+                    }
+                    emit_ordered([row = pancollapse::direct_count::ReadCompatibilityRow{
+                                      ordinal, current_group.molecule.original_name,
+                                      pancollapse::direct_count::MoleculeStatus::valid,
+                                      current_group.molecule.barcode,
+                                      current_group.molecule.barcode_quality.empty()
+                                          ? std::nullopt
+                                          : std::optional<std::string>(
+                                                current_group.molecule.barcode_quality),
+                                      current_group.molecule.umi,
+                                      current_group.molecule.umi_quality.empty()
+                                          ? std::nullopt
+                                          : std::optional<std::string>(
+                                                current_group.molecule.umi_quality),
+                                      0},
+                                  facts = std::make_shared<
+                                      pancollapse::direct_count::CompatibilityFactSet>(
+                                      std::move(*compatibility_facts)),
+                                  writer = compatibility_writer.get()]() {
+                        writer->append(row, std::move(*facts));
+                    });
+                }
+                if (!options.count_rad_out) {
+                    return;
+                }
             }
 
             // The production normal BAM is a versioned typed union. G rows retain ordinary S/U
@@ -4032,7 +6201,7 @@ int run_convert(int argc, char** argv) {
                     xr += 'G';
                     tx += transcript;
                     gx += gene;
-                    gd += transcript_gd.at(call.transcript_target_id);
+                    gd += call_strand(call);
                     gl += call.spliced ? 'S' : 'U';
                     gt += '.';
                     const auto& evidence_map =
@@ -4075,7 +6244,7 @@ int run_convert(int argc, char** argv) {
                 const bool multigene = bam_genes.size() > 1;
                 const bool has_xt = !multigene || options.bam_multigene == BamMultiGenePolicy::First;
                 const vg::MultipathAlignment& read =
-                    current_group.records.front();
+                    *current_group.records.front();
                 if (!multigene || options.bam_multigene != BamMultiGenePolicy::Omit) {
                     bam_writer->write_record(
                         current_group.molecule.original_name, primary_tid,
@@ -4107,7 +6276,7 @@ int run_convert(int argc, char** argv) {
                     }
                     tx += transcript;
                     gx += gene;
-                    gd += transcript_gd.at(call.transcript_target_id);
+                    gd += call_strand(call);
                     gl += call.spliced ? 'S' : 'U';
                     if (production_identity) {
                         const auto& evidence_map =
@@ -4130,7 +6299,7 @@ int run_convert(int argc, char** argv) {
                 if (!multigene || options.bam_multigene != BamMultiGenePolicy::Omit) {
                     const bool has_xt =
                         !multigene || options.bam_multigene == BamMultiGenePolicy::First;
-                    const vg::MultipathAlignment& read = current_group.records.front();
+                    const vg::MultipathAlignment& read = *current_group.records.front();
                     bam_writer->write_record(current_group.molecule.original_name, primary_tid,
                                              read.sequence(), read.quality(),
                                              current_group.molecule.barcode, current_group.molecule.umi,
@@ -4146,7 +6315,7 @@ int run_convert(int argc, char** argv) {
             // RAD/alevin-fry: the emitted transcripts are the read's equivalence class.
             for (const pathtally::LedgerCall& call : calls) {
                 targets.push_back({t2g.target_names[call.transcript_target_id],
-                                   transcript_gd.at(call.transcript_target_id) == 'F', {}, {}});
+                                   call_strand(call) == 'F', {}, {}});
             }
         }
 
@@ -4201,8 +6370,12 @@ int run_convert(int argc, char** argv) {
                 }
                 hits.push_back({target_id->second, target.forward});
             }
-            acquire_output();
-            rad_writer.write_record(current_group.molecule, hits);
+            if (rad_writer) {
+                emit_ordered([writer = rad_writer.get(), molecule = current_group.molecule,
+                              hits]() { writer->write_record(molecule, hits); });
+            } else if (!reorder_count_output) {
+                acquire_output();
+            }
         }
         if (bam_writer && options.count_mode == pathtally::CountMode::Score) {
             // Score mode keeps the transcript-target BAM: collapse the read's transcript targets to
@@ -4246,7 +6419,7 @@ int run_convert(int argc, char** argv) {
                     xu += join_sorted(parents, ',');
                 }
             }
-            const vg::MultipathAlignment& read = current_group.records.front();
+            const vg::MultipathAlignment& read = *current_group.records.front();
             bam_writer->write_record(current_group.molecule.original_name,
                                      t2g.gene_ids.at(primary_gene), read.sequence(), read.quality(),
                                      current_group.molecule.barcode, current_group.molecule.umi,
@@ -4259,33 +6432,60 @@ int run_convert(int argc, char** argv) {
         // hits stays empty for a ledger multi-gene read (RAD skipped even when the BAM rescues
         // it), so the RAD emitted-target histogram reflects only actual RAD records.
         if (!ledger_multigene) {
-            ++emitted_target_histogram[hits.size()];
+            emit_ordered([&histogram = emitted_target_histogram, size = hits.size()] {
+                ++histogram[size];
+            });
         }
         write_barcode_only();
         };
         process();
-        // Even groups with no output must take and retire their ordinal so later writers progress.
-        acquire_output();
-        ++completed_groups_for_progress;
-        const bool group_report = completed_groups_for_progress >= next_progress_group;
-        if (group_report || completed_groups_for_progress % 4096 == 0) {
+        mark(runtime_timing.tail_ns);
+        // Every ordinal is deposited, including a read that wrote nothing, or later reads
+        // could never commit.
+        if (reorder_count_output) {
+            runtime_timing.reorder_blocked_ns +=
+                output_reorder.deposit(ordinal, std::move(ordered_actions));
+        }
+        // Convert's ordinal is retired even when a group emitted nothing. Native
+        // count has no ordered sink by default, so progress uses a small periodic
+        // critical section rather than serializing every completed group.
+        if (!reorder_count_output && (!options.direct_count || options.count_rad_out)) {
+            acquire_output();
+        }
+        const size_t completed =
+            completed_groups_for_progress.fetch_add(1, std::memory_order_relaxed) + 1;
+        auto report_progress = [&]() {
+            const bool group_report = completed >= next_progress_group;
             const auto progress_now = std::chrono::steady_clock::now();
             if (group_report || progress_now >= next_progress_report) {
                 const double elapsed = std::chrono::duration<double>(
                     progress_now - processing_started).count();
                 std::cerr << "panCollapse: progress: completed_read_groups="
-                          << completed_groups_for_progress << " elapsed_seconds=" << elapsed
+                          << completed << " elapsed_seconds=" << elapsed
                           << " groups_per_second="
-                          << (elapsed > 0.0 ? completed_groups_for_progress / elapsed : 0.0)
-                          << '\n';
+                          << (elapsed > 0.0 ? completed / elapsed : 0.0) << '\n';
                 next_progress_report = progress_now + std::chrono::minutes(5);
-                next_progress_group = completed_groups_for_progress + 1000000;
+                next_progress_group = completed + 1000000;
             }
+        };
+        if (options.direct_count && (!options.count_rad_out || reorder_count_output)) {
+            if (completed % 4096 == 0) {
+                std::lock_guard<std::mutex> lock(progress_mutex);
+                report_progress();
+            }
+        } else if (completed >= next_progress_group || completed % 4096 == 0) {
+            report_progress();
         }
         if (profile_runtime_timing) {
-            runtime_timing.ordered_region_ns += static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - output_phase_started_at).count());
+            if (output_phase_started) {
+                runtime_timing.ordered_region_ns += static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - output_phase_started_at).count());
+            } else {
+                runtime_timing.compute_before_output_ns += static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - group_started).count());
+            }
             ++runtime_timing.groups;
         }
     };
@@ -4305,24 +6505,60 @@ int run_convert(int argc, char** argv) {
     std::vector<std::thread> workers;
     pathtally::TallyMap serial_tally_workspace;
     pathtally::NumericTallyMap serial_numeric_tally_workspace;
+    ReadNodeCache serial_read_nodes;
+    google::protobuf::Arena serial_decode_arena;
+
+    // Arena decode: a dense read is thousands of nested messages, and allocating then
+    // freeing each one was the largest decoder cost after the cliff. The worker resets its
+    // arena once the read is counted, so no decoded object crosses a thread.
+    auto decode_group_records = [&](Group& group, WorkerRuntimeTiming& runtime_timing,
+                                    google::protobuf::Arena& arena) {
+        if (group.raw_records.empty()) {
+            return;
+        }
+        const double decode_cpu_started = current_thread_cpu_seconds();
+        group.records.reserve(group.raw_records.size());
+        for (std::unique_ptr<std::string>& raw : group.raw_records) {
+            auto* record = google::protobuf::Arena::Create<vg::MultipathAlignment>(&arena);
+            pancollapse::input::decode_multipath_record(*raw, *record);
+            group.records.push_back(record);
+            raw.reset();
+        }
+        runtime_timing.decoded_records += group.raw_records.size();
+        std::vector<std::unique_ptr<std::string>>().swap(group.raw_records);
+        runtime_timing.decode_cpu_seconds += current_thread_cpu_seconds() - decode_cpu_started;
+    };
 
     auto worker_loop = [&](size_t worker_id) {
+#ifdef __linux__
+        pthread_setname_np(pthread_self(), "pc-count");
+#endif
+        const double worker_cpu_started = current_thread_cpu_seconds();
         pathtally::TallyMap tally_workspace;
         pathtally::NumericTallyMap numeric_tally_workspace;
+        ReadNodeCache read_nodes;
+        google::protobuf::Arena decode_arena;
         WorkerRuntimeTiming& runtime_timing = worker_runtime_timing[worker_id];
         try {
             while (true) {
                 GroupJob job;
                 {
                     std::unique_lock<std::mutex> lock(jobs_mutex);
-                    jobs_ready.wait(lock, [&] {
-                        return stop_workers || !jobs.empty() || jobs_closed;
-                    });
+                    if (!stop_workers && jobs.empty() && !jobs_closed) {
+                        const auto idle_started = std::chrono::steady_clock::now();
+                        jobs_ready.wait(lock, [&] {
+                            return stop_workers || !jobs.empty() || jobs_closed;
+                        });
+                        runtime_timing.empty_queue_wait_ns += static_cast<uint64_t>(
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - idle_started).count());
+                    }
                     if (stop_workers || (jobs.empty() && jobs_closed)) {
-                        return;
+                        break;
                     }
                     job = std::move(jobs.front());
                     jobs.pop_front();
+                    queued_raw_bytes -= job.group.raw_bytes;
                 }
                 if (profile_runtime_timing) {
                     runtime_timing.queue_wait_ns += static_cast<uint64_t>(
@@ -4330,11 +6566,16 @@ int run_convert(int argc, char** argv) {
                             std::chrono::steady_clock::now() - job.submitted_at).count());
                 }
                 jobs_have_space.notify_one();
+                decode_group_records(job.group, runtime_timing, decode_arena);
                 process_group(std::move(job.group), job.ordinal, tally_workspace,
-                              numeric_tally_workspace, runtime_timing);
+                              numeric_tally_workspace, read_nodes, runtime_timing,
+                              options.direct_count ? count_workers[worker_id].get() : nullptr,
+                              diagnostics_spools.empty() ? nullptr : diagnostics_spools[worker_id].get());
+                decode_arena.Reset();
             }
         } catch (...) {
             ordered_output.fail(std::current_exception());
+            output_reorder.abort();
             {
                 std::lock_guard<std::mutex> lock(jobs_mutex);
                 stop_workers = true;
@@ -4342,6 +6583,7 @@ int run_convert(int argc, char** argv) {
             jobs_ready.notify_all();
             jobs_have_space.notify_all();
         }
+        runtime_timing.cpu_seconds = current_thread_cpu_seconds() - worker_cpu_started;
     };
 
     if (processing_threads > 1) {
@@ -4370,25 +6612,34 @@ int run_convert(int argc, char** argv) {
         }
         const size_t ordinal = input_read_groups - 1;
         completed_names.insert(current_group.name);
+        // Moving the group moves owned_records' buffer, so these stay valid.
+        for (const vg::MultipathAlignment& record : current_group.owned_records) {
+            current_group.records.push_back(&record);
+        }
         GroupJob job{ordinal, std::move(current_group), {}};
         have_group = false;
         if (processing_threads == 1) {
+            decode_group_records(job.group, worker_runtime_timing.front(), serial_decode_arena);
             process_group(std::move(job.group), job.ordinal, serial_tally_workspace,
-                          serial_numeric_tally_workspace, worker_runtime_timing.front());
+                          serial_numeric_tally_workspace, serial_read_nodes,
+                          worker_runtime_timing.front(),
+                          options.direct_count ? count_workers.front().get() : nullptr,
+                          diagnostics_spools.empty() ? nullptr : diagnostics_spools.front().get());
+            serial_decode_arena.Reset();
             return;
         }
         std::unique_lock<std::mutex> lock(jobs_mutex);
-        const auto admission_wait_started = profile_runtime_timing
-            ? std::chrono::steady_clock::now()
-            : std::chrono::steady_clock::time_point{};
+        const auto admission_wait_started = std::chrono::steady_clock::now();
+        // A read larger than the byte budget is admitted alone into an empty queue.
+        const size_t job_raw_bytes = job.group.raw_bytes;
         jobs_have_space.wait(lock, [&] {
-            return stop_workers || jobs.size() < max_queued_groups;
+            return stop_workers ||
+                (jobs.size() < max_queued_groups &&
+                 (jobs.empty() || queued_raw_bytes + job_raw_bytes <= max_queued_raw_bytes));
         });
-        if (profile_runtime_timing) {
-            producer_admission_wait_ns += static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - admission_wait_started).count());
-        }
+        producer_admission_wait_ns += static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - admission_wait_started).count());
         if (stop_workers) {
             lock.unlock();
             const std::exception_ptr failure = ordered_output.failure();
@@ -4401,6 +6652,8 @@ int run_convert(int argc, char** argv) {
             job.submitted_at = std::chrono::steady_clock::now();
         }
         jobs.push_back(std::move(job));
+        queued_raw_bytes += job_raw_bytes;
+        peak_queued_raw_bytes = std::max(peak_queued_raw_bytes, queued_raw_bytes);
         if (profile_runtime_timing) {
             queue_high_water = std::max(queue_high_water, jobs.size());
         }
@@ -4409,16 +6662,19 @@ int run_convert(int argc, char** argv) {
     };
 
     std::exception_ptr producer_failure;
+    pancollapse::input::OrderedGampReaderStats input_reader_stats;
+    pancollapse::input::ReadGranularInputStats read_granular_stats;
+    uint64_t peek_fallback_records = 0;
     try {
-        vg::io::for_each<vg::MultipathAlignment>(*gamp_in, [&](vg::MultipathAlignment& alignment) {
+        const auto consume_alignment = [&](vg::MultipathAlignment& alignment) {
             ++input_records;
             if (!have_group) {
-                start_group(alignment);
+                start_group(alignment.name());
             } else if (alignment.name() != current_group.name) {
                 submit_group();
-                start_group(alignment);
+                start_group(alignment.name());
             }
-            if (!current_group.skip_for_molecule_identity) {
+            if (!current_group.skip_for_molecule_identity || compatibility_writer) {
                 if (alignment.subpath_size() == 0) {
                     current_group.saw_unaligned_record = true;
                 } else {
@@ -4427,19 +6683,63 @@ int run_convert(int argc, char** argv) {
                     // next parse, and we do not touch it again here. Copying deep-copied the whole
                     // protobuf MultipathAlignment (~21% of runtime in profiling); the move steals
                     // its internal storage instead.
-                    current_group.records.push_back(std::move(alignment));
+                    current_group.owned_records.push_back(std::move(alignment));
                 }
             }
-        });
+        };
+        // The same grouping as consume_alignment, from the serialized record's name and
+        // subpath presence. A record the top-level scan does not model is decoded in full.
+        const auto consume_raw_record = [&](std::unique_ptr<std::string> data) {
+            ++input_records;
+            pancollapse::input::MultipathRecordPeek peek;
+            std::string fallback_name;
+            if (!pancollapse::input::peek_multipath_record(*data, peek)) {
+                vg::MultipathAlignment decoded;
+                pancollapse::input::decode_multipath_record(*data, decoded);
+                fallback_name = decoded.name();
+                peek.name = fallback_name;
+                peek.has_subpath = decoded.subpath_size() > 0;
+                ++peek_fallback_records;
+            }
+            if (!have_group) {
+                start_group(peek.name);
+            } else if (peek.name != current_group.name) {
+                submit_group();
+                start_group(peek.name);
+            }
+            if (!current_group.skip_for_molecule_identity || compatibility_writer) {
+                if (!peek.has_subpath) {
+                    current_group.saw_unaligned_record = true;
+                } else {
+                    current_group.saw_subpath_record = true;
+                    current_group.raw_bytes += data->size();
+                    current_group.raw_records.push_back(std::move(data));
+                }
+            }
+        };
+        if (read_granular_input) {
+            read_granular_stats = pancollapse::input::raw_gamp_for_each(
+                *gamp_in, consume_raw_record, input_reader_options.decompression_threads);
+        } else if (parallel_native_input) {
+            input_reader_stats = pancollapse::input::ordered_gamp_for_each(
+                *gamp_in, consume_alignment, input_reader_options);
+        } else {
+            vg::io::for_each<vg::MultipathAlignment>(*gamp_in, consume_alignment);
+        }
         submit_group();
+        if (gamp_hash_stream) {
+            gamp_input_sha256 = gamp_hash_stream->complete_and_finish();
+        }
         producer_finished = std::chrono::steady_clock::now();
     } catch (...) {
         producer_finished = std::chrono::steady_clock::now();
         producer_failure = std::current_exception();
         ordered_output.fail(producer_failure);
+        output_reorder.abort();
         std::lock_guard<std::mutex> lock(jobs_mutex);
         stop_workers = true;
     }
+    const double producer_cpu_seconds = current_thread_cpu_seconds() - producer_cpu_started;
 
     if (processing_threads > 1) {
         {
@@ -4458,7 +6758,149 @@ int run_convert(int argc, char** argv) {
     if (const std::exception_ptr worker_failure = ordered_output.failure()) {
         std::rethrow_exception(worker_failure);
     }
+    if (reorder_count_output && output_reorder.committed() != input_read_groups) {
+        throw std::logic_error("ordered output reorder committed " +
+                               std::to_string(output_reorder.committed()) + " of " +
+                               std::to_string(input_read_groups) + " reads");
+    }
 
+    const auto read_processing_finished = std::chrono::steady_clock::now();
+    pancollapse::direct_count::CountProcessingPhases count_processing_phases;
+    count_processing_phases.read_processing_seconds = std::chrono::duration<double>(
+        read_processing_finished - processing_started).count();
+    if (options.direct_count) {
+        double worker_cpu_seconds = 0.0;
+        uint64_t empty_queue_wait_ns = 0;
+        double worker_decode_cpu_seconds = 0.0;
+        uint64_t worker_decoded_records = 0;
+        for (const auto& timing : worker_runtime_timing) {
+            worker_cpu_seconds += timing.cpu_seconds;
+            empty_queue_wait_ns += timing.empty_queue_wait_ns;
+            worker_decode_cpu_seconds += timing.decode_cpu_seconds;
+            worker_decoded_records += timing.decoded_records;
+        }
+        if (read_granular_input) {
+            input_reader_stats.records = read_granular_stats.records;
+            input_reader_stats.raw_bytes = read_granular_stats.raw_bytes;
+            input_reader_stats.producer_input_seconds = read_granular_stats.producer_input_seconds;
+            input_reader_stats.producer_callback_seconds =
+                read_granular_stats.producer_callback_seconds;
+        }
+        std::cerr << "panCollapse: read resources: count_worker_cpu_seconds=" << worker_cpu_seconds
+                  << " producer_cpu_seconds=" << producer_cpu_seconds
+                  << " decoder_cpu_seconds=" << input_reader_stats.decoder_cpu_seconds
+                  << " count_worker_empty_queue_wait_seconds=" << empty_queue_wait_ns / 1e9
+                  << " serial_count_on_producer=" << (processing_threads == 1 ? 1 : 0)
+                  << " producer_input_seconds=" << input_reader_stats.producer_input_seconds
+                  << " producer_commit_wait_seconds=" << input_reader_stats.producer_commit_wait_seconds
+                  << " producer_callback_seconds=" << input_reader_stats.producer_callback_seconds
+                  << " producer_admission_wait_seconds=" << producer_admission_wait_ns / 1e9
+                  << " count_worker_decode_cpu_seconds=" << worker_decode_cpu_seconds << '\n';
+        if (!pathtally::structural_tally_summed()) {
+            const pathtally::RouteTallyTotals& route = pathtally::route_tally_totals();
+            std::cerr << "panCollapse: structural tally: mode=route_max records="
+                      << route.records.load() << " single_route_records="
+                      << route.linear_records.load() << " groups=" << route.groups.load()
+                      << " max_groups=" << route.max_groups.load()
+                      << " dp_cells=" << route.dp_cells.load()
+                      << " grouping_thread_seconds=" << route.grouping_ns.load() / 1e9
+                      << " dp_thread_seconds=" << route.dp_ns.load() / 1e9 << '\n';
+        }
+        if (rad_writer) {
+            std::cerr << "panCollapse: rad output: records=" << rad_writer->record_count()
+                      << " no_compatible_transcript_groups="
+                      << no_compatible_transcript_groups.load()
+                      << " strand_filtered_groups=" << strand_filtered_groups.load()
+                      << " multigene_dropped_groups=" << multigene_dropped_groups.load() << '\n';
+        }
+        if (reorder_count_output) {
+            uint64_t reorder_blocked_ns = 0;
+            for (const auto& timing : worker_runtime_timing) {
+                reorder_blocked_ns += timing.reorder_blocked_ns;
+            }
+            std::cerr << "panCollapse: ordered output: mode=reorder committed_reads="
+                      << output_reorder.committed()
+                      << " peak_pending_reads=" << output_reorder.peak_pending()
+                      << " pending_read_limit=" << kMaxPendingOrderedReads
+                      << " worker_blocked_seconds=" << reorder_blocked_ns / 1e9 << '\n';
+        }
+        if (read_granular_input) {
+            std::cerr << "panCollapse: input reader: mode=read_granular records="
+                      << input_reader_stats.records
+                      << " raw_bytes=" << input_reader_stats.raw_bytes
+                      << " decoded_records=" << worker_decoded_records
+                      << " peek_fallback_records=" << peek_fallback_records
+                      << " peak_queued_raw_bytes=" << peak_queued_raw_bytes
+                      << " queued_raw_byte_limit=" << max_queued_raw_bytes << '\n';
+        } else if (parallel_native_input) {
+            std::cerr << "panCollapse: input reader: records=" << input_reader_stats.records
+                      << " batches=" << input_reader_stats.batches
+                      << " raw_bytes=" << input_reader_stats.raw_bytes
+                      << " decoded_bytes=" << input_reader_stats.decoded_bytes
+                      << " peak_raw_bytes=" << input_reader_stats.peak_raw_bytes
+                      << " peak_decoded_bytes=" << input_reader_stats.peak_decoded_bytes
+                      << " peak_buffer_bytes=" << input_reader_stats.peak_buffer_bytes
+                      << " budget_oversize_records=" << input_reader_stats.budget_oversize_records << '\n';
+        }
+    }
+    if (compatibility_writer) {
+        std::vector<pancollapse::direct_count::CompatibilityInputIdentity> inputs{
+            {"gamp", gamp_input_sha256, options.gamp == std::filesystem::path("-")
+                ? 0 : std::filesystem::file_size(options.gamp)}};
+        if (!options.xg.empty()) inputs.push_back({"xg", xg_input_sha256, std::filesystem::file_size(options.xg)});
+        if (!options.gbz.empty()) inputs.push_back({"gbz", gbz_input_sha256, std::filesystem::file_size(options.gbz)});
+        if (!options.gbwt.empty()) inputs.push_back({"gbwt", gbwt_input_sha256, std::filesystem::file_size(options.gbwt)});
+        compatibility_writer->set_inputs(std::move(inputs), input_records, input_read_groups);
+        compatibility_receipt = compatibility_writer->finalize();
+        count_processing_phases.compatibility_finalize_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - read_processing_finished).count();
+    }
+
+    std::optional<pancollapse::direct_count::CountRuntimeResult> count_result;
+    std::optional<pancollapse::direct_count::DirectCountDiagnosticsParquetResult>
+        diagnostics_result;
+    if (options.direct_count) {
+        const auto count_finalize_started = std::chrono::steady_clock::now();
+        for (const auto& worker : count_workers) {
+            worker->flush();
+        }
+        count_result = count_runtime->finalize();
+        const auto count_finalize_finished = std::chrono::steady_clock::now();
+        count_processing_phases.count_finalize_seconds = std::chrono::duration<double>(
+            count_finalize_finished - count_finalize_started).count();
+        if (!diagnostics_spools.empty()) {
+            for (const auto& spool : diagnostics_spools) {
+                spool->finish();
+            }
+            diagnostics_spools.clear();
+            pancollapse::direct_count::DirectCountDiagnosticsParquetOptions
+                diagnostics_options;
+            diagnostics_options.output_path = count_stage / options.read_assignments_out;
+            diagnostics_options.expected_read_groups = input_read_groups;
+            diagnostics_result =
+                pancollapse::direct_count::write_direct_count_diagnostics_parquet(
+                    diagnostics_spool_paths, *count_runtime, diagnostics_options);
+            if (input_read_groups > std::numeric_limits<std::uint64_t>::max() /
+                                        options.count_profiles.size() ||
+                diagnostics_result->rows != input_read_groups * options.count_profiles.size()) {
+                throw std::runtime_error("diagnostic row count does not cover every input group/profile");
+            }
+            for (const auto& path : diagnostics_spool_paths) {
+                std::filesystem::remove(path);
+            }
+            count_processing_phases.diagnostics_merge_export_seconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - count_finalize_finished).count();
+        }
+        std::cerr << "panCollapse: native-count phases: read_processing_seconds="
+                  << count_processing_phases.read_processing_seconds
+                  << " compatibility_finalize_seconds=" << count_processing_phases.compatibility_finalize_seconds
+                  << " count_finalize_seconds=" << count_processing_phases.count_finalize_seconds
+                  << " diagnostics_merge_export_seconds=" << count_processing_phases.diagnostics_merge_export_seconds
+                  << " read_groups_per_second="
+                  << (count_processing_phases.read_processing_seconds > 0.0
+                          ? input_read_groups / count_processing_phases.read_processing_seconds : 0.0)
+                  << '\n';
+    }
     const auto processing_finished = std::chrono::steady_clock::now();
 
     if (profile_runtime_timing) {
@@ -4470,6 +6912,15 @@ int run_convert(int argc, char** argv) {
             sum.compute_before_output_ns += timing.compute_before_output_ns;
             sum.ordered_wait_ns += timing.ordered_wait_ns;
             sum.ordered_region_ns += timing.ordered_region_ns;
+            sum.prelude_ns += timing.prelude_ns;
+            sum.tally_ns += timing.tally_ns;
+            sum.evidence_ns += timing.evidence_ns;
+            sum.facts_ns += timing.facts_ns;
+            sum.signature_ns += timing.signature_ns;
+            sum.digest_ns += timing.digest_ns;
+            sum.resolve_ns += timing.resolve_ns;
+            sum.observe_ns += timing.observe_ns;
+            sum.tail_ns += timing.tail_ns;
             maximum.queue_wait_ns = std::max(maximum.queue_wait_ns, timing.queue_wait_ns);
             maximum.compute_before_output_ns = std::max(
                 maximum.compute_before_output_ns, timing.compute_before_output_ns);
@@ -4483,6 +6934,24 @@ int run_convert(int argc, char** argv) {
             producer_finished - processing_started).count();
         const double producer_admission_wait_seconds =
             producer_admission_wait_ns / kNanosecondsPerSecond;
+        const uint64_t region_sum_ns =
+            sum.prelude_ns + sum.tally_ns + sum.evidence_ns + sum.facts_ns +
+            sum.signature_ns + sum.digest_ns + sum.resolve_ns + sum.observe_ns +
+            sum.tail_ns;
+        std::cerr << "panCollapse: read-path regions:"
+                  << " prelude_seconds=" << sum.prelude_ns / kNanosecondsPerSecond
+                  << " tally_seconds=" << sum.tally_ns / kNanosecondsPerSecond
+                  << " evidence_seconds=" << sum.evidence_ns / kNanosecondsPerSecond
+                  << " facts_seconds=" << sum.facts_ns / kNanosecondsPerSecond
+                  << " signature_seconds=" << sum.signature_ns / kNanosecondsPerSecond
+                  << " digest_seconds=" << sum.digest_ns / kNanosecondsPerSecond
+                  << " resolve_seconds=" << sum.resolve_ns / kNanosecondsPerSecond
+                  << " observe_seconds=" << sum.observe_ns / kNanosecondsPerSecond
+                  << " tail_seconds=" << sum.tail_ns / kNanosecondsPerSecond
+                  << " region_sum_seconds=" << region_sum_ns / kNanosecondsPerSecond
+                  << " compute_total_seconds="
+                  << sum.compute_before_output_ns / kNanosecondsPerSecond
+                  << " (worker-seconds; region_sum should approach compute_total)\n";
         std::cerr << "panCollapse: runtime profile: groups=" << sum.groups
                   << " queue_high_water=" << queue_high_water
                   << " producer_wall_seconds=" << producer_wall_seconds
@@ -4510,8 +6979,10 @@ int run_convert(int argc, char** argv) {
                   << '\n';
     }
 
-    if (input_records == 0) {
-        throw std::runtime_error("panCollapse convert expects at least one GAMP record");
+    if (input_records == 0 && !options.direct_count) {
+        throw std::runtime_error(
+            std::string("panCollapse ") + (options.direct_count ? "count" : "convert") +
+            " expects at least one GAMP record");
     }
 
     if (exact_ex50) {
@@ -4525,6 +6996,31 @@ int run_convert(int argc, char** argv) {
         processing_started - invocation_started).count();
     const double processing_seconds = std::chrono::duration<double>(
         processing_finished - processing_started).count();
+    if (assignment_cache) {
+        using pancollapse::direct_count::AssignmentResult;
+        const size_t cache_bytes = assignment_cache->approximate_bytes(
+            [](const CachedAssignmentResults& results) {
+                size_t bytes = sizeof(results) + results.capacity() * sizeof(AssignmentResult);
+                for (const AssignmentResult& result : results) {
+                    bytes += result.genes.capacity() * sizeof(std::string);
+                    for (const std::string& gene : result.genes) {
+                        bytes += BoundedShardedCache<std::string,
+                                                     CachedAssignmentResults>::string_heap_bytes(gene);
+                    }
+                }
+                return bytes;
+            });
+        std::cerr << "panCollapse: assignment cache: capacity=" << kAssignmentSignatureCacheEntries
+                  << " entries=" << assignment_cache->entries()
+                  << " hits=" << assignment_cache->hits()
+                  << " misses=" << assignment_cache->misses()
+                  << " uncached=" << assignment_cache->uncached()
+                  << " approximate_bytes=" << cache_bytes << '\n';
+    }
+    if (fallback_only_skip) {
+        std::cerr << "panCollapse: fallback-only skip: enabled=1 skipped_read_groups="
+                  << fallback_only_skipped_reads.load() << '\n';
+    }
     std::cerr << "panCollapse: performance: workers=" << processing_threads
               << " requested_workers=" << options.threads
               << " initialization_seconds=" << initialization_seconds
@@ -4542,12 +7038,116 @@ int run_convert(int argc, char** argv) {
               << exact_model_candidates.build_count()
               << '\n';
 
-    rad_writer.finalize();
+    if (rad_writer) {
+        rad_writer->finalize();
+    }
     if (bam_writer) {
         bam_writer->finalize();
     }
     if (debug_writer) {
         debug_writer->finalize();
+    }
+    if (options.direct_count) {
+        pancollapse::direct_count::CountOutputOptions output_options;
+        output_options.output_directory = std::filesystem::absolute(options.out_dir);
+        output_options.staging_directory = count_stage;
+        output_options.pancollapse_version = PANCOLLAPSE_VERSION;
+        for (int index = 0; index < argc; ++index) {
+            if (!output_options.command_line.empty()) {
+                output_options.command_line += ' ';
+            }
+            output_options.command_line += argv[index];
+        }
+        output_options.analysis_scope = options.analysis_scope.empty()
+                                            ? "frozen-profiles"
+                                            : options.analysis_scope;
+        output_options.fact_bundle_content_id = count_facts->content_id();
+        output_options.fact_authority = count_facts->authority();
+        if (compatibility_receipt) {
+            const std::filesystem::path compatibility_manifest =
+                std::filesystem::absolute(options.compatibility_out /
+                                          "manifest.json");
+            output_options.compatibility_bundle =
+                pancollapse::direct_count::CountCompatibilityIdentity{
+                    "produced", compatibility_manifest,
+                    compatibility_receipt->content_id,
+                    compatibility_receipt->manifest_sha256,
+                    std::filesystem::file_size(compatibility_manifest)};
+        }
+        auto add_input = [&](const std::string& role, const std::filesystem::path& path,
+                             const std::string& streamed_sha256 = std::string{}) {
+            if (path.empty()) {
+                return;
+            }
+            const bool standard_input = path == std::filesystem::path("-");
+            output_options.inputs.push_back(
+                {role, standard_input ? path : std::filesystem::absolute(path),
+                 streamed_sha256.empty()
+                     ? pancollapse::direct_count::sha256_file(path)
+                     : streamed_sha256,
+                 standard_input ? 0 : std::filesystem::file_size(path)});
+        };
+        add_input("gamp", options.gamp, gamp_input_sha256);
+        add_input("xg", options.xg, xg_input_sha256);
+        add_input("gbz", options.gbz, gbz_input_sha256);
+        add_input("gbwt", options.gbwt, gbwt_input_sha256);
+        add_input("barcode_whitelist", options.barcode_whitelist);
+        if (count_bundle) {
+            add_input("count_bundle_manifest", count_bundle->manifest_path);
+        } else {
+            add_input("annotation", options.annotation);
+            add_input("annotation_reference", options.annotation_reference);
+            add_input("path_identity_ledger", options.path_identity_ledger);
+        }
+        add_input("t2g", options.t2g);
+        add_input("body_t2g", options.body_t2g);
+        output_options.threads = processing_threads;
+        output_options.memory_budget_bytes = options.count_memory_budget;
+        output_options.assignment_cache_capacity = kAssignmentSignatureCacheEntries;
+        output_options.assignment_cache_entries = assignment_cache->entries();
+        output_options.assignment_cache_hits = assignment_cache->hits();
+        output_options.assignment_cache_misses = assignment_cache->misses();
+        output_options.assignment_cache_uncached = assignment_cache->uncached();
+        output_options.input_records = input_records;
+        output_options.input_read_groups = input_read_groups;
+        output_options.raw_molecule_missing_groups = raw_molecule_missing_groups.load();
+        output_options.raw_molecule_malformed_groups = raw_molecule_malformed_groups.load();
+        output_options.raw_molecule_unsupported_groups = raw_molecule_unsupported_groups.load();
+        output_options.raw_molecule_skipped_groups = raw_molecule_skipped_groups.load();
+        output_options.profile_assignment_terminals.resize(
+            profile_assignment_terminals.size());
+        for (size_t profile_index = 0;
+             profile_index < profile_assignment_terminals.size(); ++profile_index) {
+            for (size_t terminal = 0;
+                 terminal < pancollapse::direct_count::kAssignmentTerminalCount; ++terminal) {
+                output_options.profile_assignment_terminals[profile_index][terminal] =
+                    profile_assignment_terminals[profile_index][terminal].load(
+                        std::memory_order_relaxed);
+            }
+        }
+        output_options.initialization_seconds = initialization_seconds;
+        output_options.processing_seconds = processing_seconds;
+        output_options.processing_phases = count_processing_phases;
+        output_options.write_10x_mex = options.count_10x_mex;
+        output_options.rad_records = rad_writer ? rad_writer->record_count() : 0;
+        if (diagnostics_result) {
+            output_options.read_assignments =
+                pancollapse::direct_count::CountTableIdentity{
+                    options.read_assignments_out.string(), diagnostics_result->rows,
+                    std::filesystem::file_size(
+                        count_stage / options.read_assignments_out),
+                    diagnostics_result->canonical_logical_sha256,
+                    diagnostics_result->parquet_byte_sha256};
+        }
+        const auto count_output_started = std::chrono::steady_clock::now();
+        static_cast<void>(pancollapse::direct_count::write_count_outputs(
+            *count_runtime, *count_result, *count_facts, output_options));
+        std::cerr << "panCollapse: native-count output_publish_seconds="
+                  << std::chrono::duration<double>(
+                         std::chrono::steady_clock::now() - count_output_started).count()
+                  << '\n';
+        count_stage_cleanup.active = false;
+        return 0;
     }
     std::string tx2gene;
     for (const std::string& target_name : t2g.target_names) {
@@ -4572,7 +7172,7 @@ int run_convert(int argc, char** argv) {
     write_text_file(options.out_dir / "summary.tsv",
                     "input_records\t" + std::to_string(input_records) + "\ninput_read_groups\t" +
                         std::to_string(input_read_groups) + "\nemitted_groups\t" +
-                        std::to_string(rad_writer.record_count()) + "\nno_compatible_transcript_groups\t" +
+                        std::to_string(rad_writer ? rad_writer->record_count() : 0) + "\nno_compatible_transcript_groups\t" +
                         std::to_string(no_compatible_transcript_groups.load()) + "\nstrand_filtered_groups\t" +
                         std::to_string(strand_filtered_groups.load()) + "\nmultigene_dropped_groups\t" +
                         std::to_string(multigene_dropped_groups.load()) + "\nunaligned_reads\t" +

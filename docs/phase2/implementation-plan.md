@@ -171,7 +171,7 @@ cmake --build build-pure
 ctest --test-dir build-pure --output-on-failure
 cmake --build build
 ctest --test-dir build --output-on-failure
-./scripts/verify-workspace.sh
+./scripts/tooling/verify-workspace.sh
 ```
 
 The Phase 2 alevin-fry smoke should follow this shape with one thread:

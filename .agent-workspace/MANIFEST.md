@@ -10,10 +10,10 @@ no longer uses agent orchestration:
 - `PROGRESS.md`
 - `TASKS.md`
 - `.githooks/`
-- `scripts/install-git-hooks.sh`
-- `scripts/provenance-guard.sh`
-- `scripts/remove-agent-workspace.sh`
-- `scripts/verify-workspace.sh`
+- `scripts/tooling/install-git-hooks.sh`
+- `scripts/tooling/provenance-guard.sh`
+- `scripts/tooling/remove-agent-workspace.sh`
+- `scripts/tooling/verify-workspace.sh`
 
 The following are durable project artifacts and are intentionally retained:
 
@@ -26,6 +26,7 @@ The following are durable project artifacts and are intentionally retained:
 - `docs/validation-contract.md`
 - `docs/roadmap.md`
 - `docs/glossary.md`
+- `scripts/README.md` and the annotation/fixture scripts it describes
 - research and architecture documents once they contain completed project knowledge.
 
 The removal script deletes only the first group.

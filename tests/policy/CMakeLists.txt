@@ -1,4 +1,73 @@
 add_executable(target_set_policy_smoke target_set_policy_smoke.cpp)
 
+add_executable(score_dedup_smoke score_dedup_smoke.cpp)
+target_link_libraries(score_dedup_smoke PRIVATE panCollapse::direct_count panCollapse::warnings)
+add_test(NAME score_dedup_smoke COMMAND score_dedup_smoke)
+set_tests_properties(score_dedup_smoke PROPERTIES LABELS "pure;policy;count;ex50")
+
+add_executable(ordered_output_reorder_smoke ordered_output_reorder_smoke.cpp)
+target_include_directories(ordered_output_reorder_smoke PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(ordered_output_reorder_smoke PRIVATE panCollapse::warnings Threads::Threads)
+add_test(NAME ordered_output_reorder_smoke COMMAND ordered_output_reorder_smoke)
+set_tests_properties(ordered_output_reorder_smoke PROPERTIES LABELS "pure;policy;count;threads" TIMEOUT 120)
+
 add_test(NAME target_set_policy_smoke COMMAND target_set_policy_smoke)
 set_tests_properties(target_set_policy_smoke PROPERTIES LABELS "pure;policy")
+
+add_executable(direct_count_policy_smoke direct_count_policy_smoke.cpp)
+target_link_libraries(direct_count_policy_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_policy_smoke COMMAND direct_count_policy_smoke)
+set_tests_properties(direct_count_policy_smoke PROPERTIES LABELS "pure;policy;count")
+
+add_executable(direct_count_assignment_smoke direct_count_assignment_smoke.cpp)
+target_link_libraries(direct_count_assignment_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_assignment_smoke COMMAND direct_count_assignment_smoke)
+set_tests_properties(direct_count_assignment_smoke PROPERTIES LABELS "pure;policy;count")
+
+add_executable(direct_count_candidate_inputs_smoke direct_count_candidate_inputs_smoke.cpp)
+target_link_libraries(direct_count_candidate_inputs_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_candidate_inputs_smoke COMMAND direct_count_candidate_inputs_smoke)
+set_tests_properties(direct_count_candidate_inputs_smoke PROPERTIES LABELS "pure;policy;count;cache")
+
+add_executable(count_fact_bundle_smoke count_fact_bundle_smoke.cpp)
+target_link_libraries(count_fact_bundle_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME count_fact_bundle_smoke COMMAND count_fact_bundle_smoke)
+set_tests_properties(count_fact_bundle_smoke PROPERTIES LABELS "pure;policy;count")
+
+add_executable(direct_count_runtime_smoke direct_count_runtime_smoke.cpp)
+target_link_libraries(direct_count_runtime_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_runtime_smoke COMMAND direct_count_runtime_smoke)
+set_tests_properties(direct_count_runtime_smoke PROPERTIES LABELS "pure;policy;count")
+
+add_executable(direct_count_runtime_determinism direct_count_runtime_determinism.cpp)
+target_link_libraries(direct_count_runtime_determinism PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_runtime_determinism COMMAND direct_count_runtime_determinism)
+set_tests_properties(direct_count_runtime_determinism PROPERTIES
+  LABELS "pure;policy;count;determinism;spill")
+
+add_executable(direct_count_diagnostics_smoke direct_count_diagnostics_smoke.cpp)
+target_link_libraries(direct_count_diagnostics_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_diagnostics_smoke COMMAND direct_count_diagnostics_smoke)
+set_tests_properties(direct_count_diagnostics_smoke PROPERTIES
+  LABELS "pure;policy;count;parquet;diagnostics")
+
+add_executable(direct_count_compatibility_smoke direct_count_compatibility_smoke.cpp)
+target_link_libraries(direct_count_compatibility_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME direct_count_compatibility_smoke COMMAND direct_count_compatibility_smoke)
+set_tests_properties(direct_count_compatibility_smoke PROPERTIES
+  LABELS "pure;policy;count;parquet;compatibility")
+
+add_executable(count_fact_annotation_smoke count_fact_annotation_smoke.cpp)
+target_link_libraries(count_fact_annotation_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME count_fact_annotation_smoke COMMAND count_fact_annotation_smoke)
+set_tests_properties(count_fact_annotation_smoke PROPERTIES
+  LABELS "pure;policy;count;annotation")

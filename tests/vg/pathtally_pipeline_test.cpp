@@ -70,6 +70,17 @@ std::vector<std::string> pointed_strings(
     return copied;
 }
 
+std::vector<std::pair<std::string, uint32_t>> ranked_parents(
+    const std::vector<pathtally::RankedParent>& values) {
+    std::vector<std::pair<std::string, uint32_t>> copied;
+    copied.reserve(values.size());
+    for (const pathtally::RankedParent& value : values) {
+        copied.emplace_back(*value.unique_parent, value.parent_rank);
+    }
+    std::sort(copied.begin(), copied.end());
+    return copied;
+}
+
 void run() {
     // transcript_id_of: strip _H<n>/_R<n>, keep everything else.
     check(pathtally::transcript_id_of("NM_000063.6_H1") == "NM_000063.6", "strip _H1");
@@ -190,13 +201,14 @@ void run() {
     // implementation detail here; BAM serialization sorts it lexically.
     {
         const std::map<uint64_t, std::string> paths = {
-            {91, "A_path_1"}, {7, "A_path_2"}, {42, "A_lower"},
+            {1, "A_replaced"}, {91, "A_path_1"}, {7, "A_path_2"}, {42, "A_lower"},
             {3, "B_path"}, {77, "body_path"}};
         const std::string parent_a = "PARENT_A";
         const std::string parent_b = "PARENT_B";
         const std::string parent_body = "PARENT_BODY";
         pathtally::NumericTallyMap tallies;
         // Handles intentionally disagree with lexical path order.
+        tallies[1] = {10, 100, 0};
         tallies[91] = {20, 10, 0};
         tallies[7] = {20, 0, 6};
         tallies[42] = {10, 100, 0};
@@ -205,7 +217,7 @@ void run() {
         const auto layers = pathtally::collapse_ranked_identity_tallies(
             tallies, [&](uint64_t handle)
                 -> std::optional<pathtally::RankedPathIdentity> {
-                if (handle == 91 || handle == 7 || handle == 42) {
+                if (handle == 1 || handle == 91 || handle == 7 || handle == 42) {
                     return pathtally::RankedPathIdentity{
                         &paths.at(handle), &parent_a, 0, 7, true};
                 }
@@ -223,14 +235,18 @@ void run() {
               "H: tied Parent winners combine orientation without score summing");
         check(pointed_strings(exon.winning_paths) ==
                   (std::vector<std::string>{"A_path_1", "A_path_2", "B_path"}),
-              "H: compact collapse retains tied paths only");
-        check(pointed_strings(exon.winning_parents) ==
-                  (std::vector<std::string>{"PARENT_A", "PARENT_B"}),
-              "H: compact collapse retains tied Parents");
+              "H: compact path MAX replacement drops the earlier lower path");
+        check(ranked_parents(exon.winning_parents) ==
+                  (std::vector<std::pair<std::string, uint32_t>>{
+                      {"PARENT_A", 0}, {"PARENT_B", 1}}),
+              "H: compact collapse retains tied Parent names with their ranks");
         check(layers.body.at(7).score == 19 &&
                   pointed_strings(layers.body.at(7).winning_paths) ==
                       (std::vector<std::string>{"body_path"}),
               "H: body evidence is independently MAX-collapsed");
+        check(ranked_parents(layers.body.at(7).winning_parents) ==
+                  (std::vector<std::pair<std::string, uint32_t>>{{"PARENT_BODY", 2}}),
+              "H: body Parent rank stays paired with its name");
     }
 
     std::printf("pathtally pipeline: PASS\n");

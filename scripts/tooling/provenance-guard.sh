@@ -15,7 +15,7 @@ is_exempt() {
   case "$1" in
     AGENTS.md|CLAUDE.md|PROGRESS.md|TASKS.md) return 0 ;;
     docs/*|.claude/*|.agent-workspace/*|.githooks/*) return 0 ;;
-    scripts/install-git-hooks.sh|scripts/provenance-guard.sh|scripts/remove-agent-workspace.sh|scripts/verify-workspace.sh) return 0 ;;
+    scripts/tooling/install-git-hooks.sh|scripts/tooling/provenance-guard.sh|scripts/tooling/remove-agent-workspace.sh|scripts/tooling/verify-workspace.sh) return 0 ;;
     *) return 1 ;;
   esac
 }

@@ -3,6 +3,41 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [0.10.0]
+
+- Adds native `panCollapse count`, which consumes a verified `panSC-count-facts-v1` bundle
+  and emits a Parquet count dataset by default. Native count uses frozen profiles, retains
+  legacy `convert` unchanged, rejects mixed legacy identity/policy inputs, writes no BAM,
+  and has no Python production dependency.
+- Adds immutable `cr7-v1` and `pansc-strict-v1` profiles, selectable together in one GAMP
+  pass. Typed assignment-policy overrides are accepted only under explicit
+  `sensitivity-analysis` scope and always receive a derived profile ID plus full effective-policy
+  SHA-256; barcode and UMI algorithms cannot be overridden.
+- Adds all-valid-read barcode priors, frozen one-mismatch posterior correction, exact basic-UMI
+  filtering, non-transitive `1MM_CR`, and cross-gene `MultiGeneUMI_CR` support/tie handling.
+  Profile-specific terminal counters preserve the oracle ordering between correction, early
+  evidence exits, and UMI filtering.
+- Adds deterministic aggregate spill/merge under `--count-memory-budget` and a bounded sharded
+  numeric-evidence assignment cache. Decoded semantic rows and per-profile logical hashes are
+  invariant to thread count, scheduling, spill boundaries, and joint-versus-separate execution;
+  operational manifest fields are intentionally not byte-identical.
+- Adds optional 10x MEX (`--10x-mex`) and RAD (`--rad-out`) compatibility outputs to native
+  count, plus opt-in ordered read-assignment Parquet (`--read-assignments-out`) for per-read
+  audit. The latter is disabled by default because it is per-read-scale I/O.
+- The release image now requires and stages Arrow/Parquet runtime libraries, verifies the
+  staged loader closure before image build, requires Zstandard for compressed native outputs,
+  and fails if `libpython` would enter the image. The image is standalone and makes no
+  workflow-orchestrator runtime assumption.
+- Adds optional `--gbz` and graph-only `--xg ... --gbwt ...` count/convert inputs using
+  in-memory FastLocate and selected-path prefixes. Embedded-path XG remains the default;
+  no external r-index flag or custom persistent index is added, and annotation/count policy
+  is unchanged. The documented 100,000-read input-mode comparison establishes scientific
+  byte identity, not full-GAMP performance or an isolated speedup.
+- Improves native-count assignment-cache misses by allowing construction outside shard locks with
+  first-insert-wins and a fivefold cache capacity. The accepted constrained
+  FALLBACK-only-read skip preserves the documented count tables in its measured runs while
+  avoiding downstream work for reads that cannot receive a unique assignment (D093).
+
 ## [0.9.0]
 
 - Adds deterministic read-group parallelism through `--threads N`. One parser owns GAMP

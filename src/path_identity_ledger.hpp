@@ -20,6 +20,25 @@ namespace path_identity {
 
 inline constexpr const char* kSchemaVersion = "panSC-path-identity-v1";
 
+// Columns the runtime never reads. They back a body/exon consistency check and the
+// fallback validation below, both of which still run whenever the columns are present, but a
+// ledger that omits them is accepted: nothing in counting, and nothing in the compatibility
+// structural surface digest, consults them. Keeping them optional lets a producer emit a
+// ledger carrying only what panCollapse actually needs.
+inline constexpr std::array<const char*, 9> kOptionalColumns = {
+    "vg_haplotype_origins", "source_parent",     "input_parent",
+    "haplotype",            "annotation_source", "selection_status",
+    "fallback_status",      "source_transcript", "transcript_class",
+};
+
+inline bool is_optional_column(std::string_view name) {
+    for (const char* optional : kOptionalColumns) {
+        if (name == optional) return true;
+    }
+    return false;
+}
+
+// The canonical column order. Every column a ledger does carry must appear in this order.
 inline constexpr std::array<const char*, 24> kRequiredColumns = {
     "schema_version",
     "vg_path_name",
@@ -87,6 +106,9 @@ struct PathIdentityLedger {
     // cannot be invalidated by an accidental deep copy.
     std::map<std::string, const AnnotationIdentity*> identities_by_parent;
     std::map<std::string, std::string> canonical_gene;
+    // Where these rows were read from, so a consumer deriving an identity from the ledger
+    // does not have to be handed the path a second time alongside the ledger itself.
+    std::filesystem::path source_path;
     bool has_body_layer = false;
 
     PathIdentityLedger() = default;
@@ -202,15 +224,33 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
         throw std::runtime_error("path identity ledger is missing its header");
     }
     const std::vector<std::string> header = split_tab(header_line);
-    if (header.size() != kRequiredColumns.size()) {
-        throw std::runtime_error("path identity ledger header does not exactly match schema " +
-                                 std::string(kSchemaVersion));
-    }
-    for (size_t i = 0; i < kRequiredColumns.size(); ++i) {
-        if (header[i] != kRequiredColumns[i]) {
-            throw std::runtime_error("path identity ledger header column " +
-                                     std::to_string(i + 1) + " is " + header[i] +
-                                     "; expected " + kRequiredColumns[i]);
+    // Accept a ledger that omits the optional columns. The columns present must still be a
+    // subsequence of the canonical order, so a shuffled or unknown header is still refused.
+    {
+        size_t canonical = 0;
+        for (size_t i = 0; i < header.size(); ++i) {
+            while (canonical < kRequiredColumns.size() &&
+                   header[i] != kRequiredColumns[canonical]) {
+                if (!is_optional_column(kRequiredColumns[canonical])) {
+                    throw std::runtime_error("path identity ledger is missing required column " +
+                                             std::string(kRequiredColumns[canonical]));
+                }
+                ++canonical;
+            }
+            if (canonical == kRequiredColumns.size()) {
+                throw std::runtime_error("path identity ledger header column " +
+                                         std::to_string(i + 1) + " is " + header[i] +
+                                         "; not a column of schema " +
+                                         std::string(kSchemaVersion) +
+                                         " or out of canonical order");
+            }
+            ++canonical;
+        }
+        for (; canonical < kRequiredColumns.size(); ++canonical) {
+            if (!is_optional_column(kRequiredColumns[canonical])) {
+                throw std::runtime_error("path identity ledger is missing required column " +
+                                         std::string(kRequiredColumns[canonical]));
+            }
         }
     }
     std::map<std::string, size_t> column;
@@ -224,17 +264,20 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
         }
     }
     for (const char* required : kRequiredColumns) {
-        if (column.count(required) == 0) {
+        if (column.count(required) == 0 && !is_optional_column(required)) {
             throw std::runtime_error("path identity ledger is missing required column " +
                                      std::string(required));
         }
     }
 
     auto field = [&](const std::vector<std::string>& fields, const char* name) -> const std::string& {
-        return fields[column.at(name)];
+        static const std::string absent;
+        const auto found = column.find(name);
+        return found == column.end() ? absent : fields[found->second];
     };
 
     PathIdentityLedger ledger;
+    ledger.source_path = filename;
     std::string line;
     size_t line_number = 1;
     while (std::getline(in, line)) {
@@ -253,6 +296,9 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
             require_tsv_safe(fields[i], header[i], line_number);
         }
         for (const char* required : kRequiredColumns) {
+            if (is_optional_column(required)) {
+                continue;
+            }
             if (field(fields, required).empty()) {
                 throw std::runtime_error("path identity ledger line " +
                                          std::to_string(line_number) + " has empty required field " +

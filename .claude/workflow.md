@@ -1,8 +1,10 @@
 # Delegation Workflow
 
-One orchestrator owns the plan, repository edits, decisions, and development-gate status.
-Subagents are read-only investigators or reviewers and return concise evidence-backed
-reports.
+One orchestrator owns the plan, edit integration, decisions, and development-gate status.
+Investigators and reviewers are read-only and return concise evidence-backed reports.
+Before each new scientific phase, a documentation agent receives bounded write ownership
+to reconcile local AI-facing state before execution continues. This automatic checkpoint
+replaces offering `/reload`; follow `.agent-workspace/ORCHESTRATION.md`.
 
 ## Delegate when
 
