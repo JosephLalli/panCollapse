@@ -33,6 +33,10 @@ All notable changes to panCollapse are recorded here. Versions follow the projec
   no external r-index flag or custom persistent index is added, and annotation/count policy
   is unchanged. The documented 100,000-read input-mode comparison establishes scientific
   byte identity, not full-GAMP performance or an isolated speedup.
+- Makes each read the native `count` decode/count unit (D090), with per-worker protobuf
+  arenas reset per read and bounded ordered-output reordering for RAD and compatibility
+  outputs. The measured count-table identity is bounded to the documented workloads and is
+  not a new full-performance claim.
 - Improves native-count assignment-cache misses by allowing construction outside shard locks with
   first-insert-wins and a fivefold cache capacity. The accepted constrained
   FALLBACK-only-read skip preserves the documented count tables in its measured runs while

@@ -7,8 +7,16 @@ create a local tag only after the merged-snapshot verification, with no push or 
 This integration adds native `count`, the D093 cache/FALLBACK-only performance change, and
 the D094 optional GBZ and graph-only XG+GBWT routes while retaining default XG behavior.
 No scientific policy changed and no original scientific or release gate is waived. The
-source-branch named-subset acceptance and its limits remain the applicable evidence; merged
-verification is pending. The merge receipt root is
+source-branch named-subset acceptance and its limits remain the applicable evidence. Fresh
+merged commit `17d32ab5734b57cf53d1f0a45ac12426ae4cf35c` regression passed: build 56/56 and
+serial CTest 179/179 (45.38 s; serial avoids known cross-test fixture-output collisions).
+The binary SHA-256 is `5b61fbc5a9fe0ecdd5d57c7840e0c2a5bd8bcd9a06e29d7fd8885bd7ebbffc7e`.
+Image packaging passed for `josephlalli/pancollapse:v0.10.0` (OCI version and CLI both
+`0.10.0`); its existing all-format smoke passed both profiles (Parquet, MEX, RAD, and
+read assignments) with no Python/libpython. The package script's fixture-work path was
+mechanically repaired after a stale namespace failure; C++ was unchanged. Root will create
+the local `v0.10.0` tag after committing this record, with no push. Original full scientific
+gates remain pending and unwaived. The merge receipt root is
 `/mnt/ssd/lalli/pancollapse_v0100_main_merge_20261027T225050Z/`.
 
 ## CURRENT: GBZ/GBWT feature implemented; scientific acceptance passed (2026-09-26)

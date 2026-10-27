@@ -115,7 +115,8 @@ echo "building image: $TAG"
 docker build -f "${REPO_ROOT}/Dockerfile" -t "$TAG" "$CONTEXT"
 
 BUILD_ROOT="$(dirname "$(dirname "$BINARY")")"
-COUNT_WORK="${BUILD_ROOT}/tests/vg/ex50_tier_work"
+# Graph-input fixtures are separated by backend; the release smoke uses embedded-path XG.
+COUNT_WORK="${BUILD_ROOT}/tests/vg/xg/ex50_tier_work"
 COUNT_SOURCE="${REPO_ROOT}/tests/vg/fixtures/ex50_tier_smoke"
 if [ ! -s "${COUNT_WORK}/reads.gamp" ] ||
    [ ! -s "${COUNT_WORK}/graph.xg" ] ||

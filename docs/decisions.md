@@ -3862,7 +3862,16 @@ local tag after merged-snapshot verification. Do not push or publish. This recor
 release integration of the existing D093 and D094 work; it makes no annotation, counting,
 or scientific-policy change and does not waive an original scientific or release gate.
 
-**Evidence and limit.** The source branch's named-subset input-mode acceptance and its
-explicit limits remain controlling until the merged snapshot is verified. In particular,
-full-GAMP/chr2 native-count performance and runtime nonregression are not established. The
-merge receipt root is `/mnt/ssd/lalli/pancollapse_v0100_main_merge_20261027T225050Z/`.
+**Evidence and limit.** Fresh merged commit
+`17d32ab5734b57cf53d1f0a45ac12426ae4cf35c` regression passed: build 56/56 and serial CTest
+179/179 in 45.38 s (serial avoids known cross-test fixture-output collisions); binary SHA-256
+`5b61fbc5a9fe0ecdd5d57c7840e0c2a5bd8bcd9a06e29d7fd8885bd7ebbffc7e`. Image packaging is
+now complete: `josephlalli/pancollapse:v0.10.0` has OCI version and CLI
+`0.10.0`, and the existing all-format smoke passed both profiles (Parquet, MEX, RAD, read
+assignments) without Python/libpython. A stale fixture-work namespace in the package script
+was mechanically repaired; C++ is unchanged. Root will create the local `v0.10.0` tag after
+committing this record, with no push. The source branch's named-subset input-mode acceptance
+and its explicit limits remain controlling; full-GAMP/chr2 performance of the new graph-input
+backends and their runtime nonregression are not established, and original full scientific gates remain
+unwaived. The merge receipt root is
+`/mnt/ssd/lalli/pancollapse_v0100_main_merge_20261027T225050Z/`.
