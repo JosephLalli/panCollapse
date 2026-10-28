@@ -40,16 +40,42 @@ running under 64 GiB/no swap/16 CPUs in
 `ca9938a5a868d1a6cc734571fc6f2e0c799113b1954921a7fe2a3925285d7c6a`; Python
 image `sha256:b4403f3b7acf5e0700a5dd4e7ab01456d62b557a208a04f8a42d3470d93b5730`;
 utility commit `6c72e607dc548026256cd79b1c7010da270ae976`). Final timing receipt
-`logs/global-reconciliation.json` is completion-only. Freeze/commit only the
-new reference utility and tests. No native count or large preload has started.
+`logs/global-reconciliation.json` is completion-only. Native implementation
+is committed at `990872cf7ff8d68d52f459e2e93af4b7f5616da0`; the running
+reconciler remains the unchanged `6c72e60` utility. No native count or large
+preload has started.
 
-**Current parallel preparation:** while global metadata repair runs, bounded
-tools/tests may perform namespace-only projection of count annotations/ledger
-and recover source provenance for certified frozen profile facts. Full facts
-need full CAT competitors, GENCODE v48, frozen old closure, then chr20--22
-golden parity. Graph-retained GFF alone is insufficient for policy facts. This
-does not authorize a scientific-policy change, another scale pilot, remapping,
-BAM, Nextflow, release/tag, cap increase, native count, or large preload.
+**Current source gate:** the prior full-raw-CAT requirement is superseded as
+incorrect: the frozen chr20--22 command used retained exons/bodies, and raw CAT
+would change the frozen competitor universe. While repair runs, bounded
+tools/tests may stream-restore and SHA-verify exactly 24 accepted retained
+graph shards, one original-byte copy preserving inner gzip. The 19 archive
+hashes and five live producer checksums are recovered and bound to exact
+SHA256SUMS sources in `live_annotation_source_hashes.json`. Do not rerun
+selection/dedup, ingest raw-CAT models, or change biology.
+
+Source restoration is now running in
+`pancollapse-count-sources-20261028T173014Z`, started
+`2026-10-28T18:44:54.701409115Z`, under 4 GiB/no swap/4 CPUs. It writes
+`RUN/verified_annotation_sources` atomically only after all 24 original
+source hashes match. Completion-only timing receipt:
+`logs/source-materialization.json`; inspect progress with `docker logs --tail
+10 pancollapse-count-sources-20261028T173014Z`. Materializer commit
+`fc1b7a68a43a47c6a4dfbae4d0ca03adf0d33e6b` passes 7 tests. Reference commit
+`5d60a21af1f6c8e5824ec4b904b67d3c839d652c` adds an optional read-only global
+registry to future projector runs: 6 registry/shard integration tests and the
+12 existing projector tests pass; the reconciler's 18 tests remain passed.
+Indexed context lookup avoids per-Parent full registry scans. Missing contexts
+reject; the flag requires a complete preparation scope and does not yet change
+build-driver defaults.
+
+**Next bounded action:** complete the namespace-only GFF migration/aggregation
+tool against the new registry reader, preserving opaque existing body IDs.
+After both preparation jobs succeed, project the verified shards through the
+completed registry, then validate frozen chr20--22 parity and compile facts.
+Conditional counting and startup measurement remain authorized but are not yet
+admitted or launched. No extra scale pilot, remapping, BAM, Nextflow,
+release/tag, or cap increase is authorized.
 
 ## CURRENT: v0.10.0 local merge/release reconciliation (2026-10-27)
 

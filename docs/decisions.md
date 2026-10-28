@@ -3885,6 +3885,11 @@ unwaived. The merge receipt root is
 across all chromosome ledgers using the existing full-context `panSCup1` rule;
 preserve opaque body IDs, biological provenance, graph paths/walks, and the
 completed GAMP. Derive graph-matched facts using the frozen counting mechanism.
+The frozen prior preparation consumed `retained_exons_and_bodies.gff3`, so
+the matched whole-genome source universe is the 24 accepted retained graph
+annotations after namespace repair, not an enlarged set of raw CAT models.
+Verify each producer/archive source checksum before issuing the new aggregate
+scope receipt; the receipt is a mechanical certification of this scope.
 This does not authorize a biological-policy change, remapping, BAM output,
 Nextflow integration, a new release/tag, or a resource-cap increase.
 
