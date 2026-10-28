@@ -1,5 +1,56 @@
 # Progress
 
+## CURRENT: whole-genome global-Parent identity repair gate (2026-10-28)
+
+Authorized work is bounded implementation and tests for reconciling global
+Parent identities, scoped streaming/compact loading, and preload admission;
+conditional pilot and full counts are authorized only after their gates. The
+pre-repair joint GBWT audit found 6,949,323
+colliding generic names (13,898,646 records; 3.726% of 373,001,671 generic
+paths), not genes or reads. Prefixing only `vg_path_name` cannot repair the
+collision: `NA20282_ha_T0382806` also collides as `unique_parent` across
+chr1-hap2 LUZP1 and chr3-hap1 SNRK. Keep opaque existing body IDs; repair exon
+links/fallback IDs and retain original input/source Parent provenance,
+biological ENSG/ENST, graph names/walks/coordinates, and frozen profiles. The
+existing ledger rejects one `unique_parent` mapping to multiple identities.
+
+Sources are located (including the cold-archived chr1 payload); do not request
+them again. Reconcile metadata globally, not by chromosome shards; the existing
+identity contract derives `panSCup1_<sha256>` for a non-unique source Parent.
+Pending gates are metadata reconciliation, compiler-derived facts, graph/profile
+compatibility, and resource admission. No native count has started; remapping,
+BAM output, biological decision, and profile/policy change remain unauthorized.
+A conditional count prefers original XG plus repaired GBWT and a certified derived-fact
+bundle, not incomplete `from_annotation` facts with protected flag false.
+Limits: 450,000,000,000 bytes, no swap, <=128 cores, and 128 GiB only for
+aggregation (never the whole process).
+
+**Bounded checkpoint (2026-10-28):** run root
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/count_identity_repair_20261028T173014Z/`
+records 24 sources (5 live/19 archived). Its 100-feature-per-chromosome,
+observed-exon inspection is SAMPLEONLY, not a full composition/hash proof; no
+full payload was restored or hashed. Native tests pass 180/180; `count
+--preload-only` returns before writers/GAMP and
+passes FIFO-unopened plus invalid-authority checks 7/7. The SQLite reconciliation
+utility's registry suite passes 18/18. A 10k real metadata reconciliation
+exited 0 in 1.081267 s at 33,554,432-byte peak child RSS; 100k was deliberately
+skipped and is not a blocker. Full 190,240,849-row/85-GB reconciliation is now
+running under 64 GiB/no swap/16 CPUs in
+`pancollapse-global-identity-20261028T173014Z` (container
+`ca9938a5a868d1a6cc734571fc6f2e0c799113b1954921a7fe2a3925285d7c6a`; Python
+image `sha256:b4403f3b7acf5e0700a5dd4e7ab01456d62b557a208a04f8a42d3470d93b5730`;
+utility commit `6c72e607dc548026256cd79b1c7010da270ae976`). Final timing receipt
+`logs/global-reconciliation.json` is completion-only. Freeze/commit only the
+new reference utility and tests. No native count or large preload has started.
+
+**Current parallel preparation:** while global metadata repair runs, bounded
+tools/tests may perform namespace-only projection of count annotations/ledger
+and recover source provenance for certified frozen profile facts. Full facts
+need full CAT competitors, GENCODE v48, frozen old closure, then chr20--22
+golden parity. Graph-retained GFF alone is insufficient for policy facts. This
+does not authorize a scientific-policy change, another scale pilot, remapping,
+BAM, Nextflow, release/tag, cap increase, native count, or large preload.
+
 ## CURRENT: v0.10.0 local merge/release reconciliation (2026-10-27)
 
 **User authorization:** merge the validated v0.10.0 source branch locally as a release;

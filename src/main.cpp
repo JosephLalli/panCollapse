@@ -60,6 +60,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <sys/resource.h>
 #include <unistd.h>
 
 namespace {
@@ -106,6 +107,7 @@ enum class MoleculeParseStatus { Ok, Missing, Malformed, Unsupported };
 
 struct Options {
     bool direct_count = false;
+    bool count_preload_only = false;
     std::filesystem::path gamp;
     std::filesystem::path xg;
     std::filesystem::path gbz;
@@ -224,7 +226,7 @@ constexpr const char* kUsageText =
     "[--t2g transcripts.tsv] [--body-t2g bodies.tsv] "
     "[--profile-override BASE:FIELD=VALUE ... "
     "--analysis-scope sensitivity-analysis] [--threads N] "
-    "[--count-memory-budget 128GiB] [--10x-mex] [--rad-out] "
+    "[--count-memory-budget 128GiB] [--preload-only] [--10x-mex] [--rad-out] "
     "[--read-assignments-out relative/path.parquet]\n"
     "       PROFILE_SELECTOR is --cr7, --pansc-strict-v1, or --profile ID; "
     "selectors may be combined";
@@ -573,6 +575,8 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--count-memory-budget" && options.direct_count) {
             options.count_memory_budget = parse_byte_size_option(
                 "--count-memory-budget", require_value("--count-memory-budget"));
+        } else if (arg == "--preload-only" && options.direct_count) {
+            options.count_preload_only = true;
         } else if (arg == "--10x-mex" && options.direct_count) {
             options.count_10x_mex = true;
         } else if (arg == "--rad-out" && options.direct_count) {
@@ -592,6 +596,9 @@ Options parse_options(int argc, char** argv) {
         usage_error();
     }
     const bool compatibility_replay = !options.compatibility_in.empty();
+    if (options.count_preload_only && compatibility_replay) {
+        throw std::runtime_error("--preload-only requires the graph/GAMP count route, not --compatibility-in");
+    }
     if (compatibility_replay) {
         if (!options.direct_count || !options.gamp.empty() || !options.xg.empty() ||
             !options.gbz.empty() || !options.gbwt.empty() ||
@@ -4966,6 +4973,34 @@ int run_convert(int argc, char** argv) {
             pancollapse::direct_count::read_barcode_whitelist(
                 options.barcode_whitelist, options.raw_cb_length),
             std::move(features), std::move(runtime_options));
+    }
+    if (options.count_preload_only) {
+        // Deliberately share all production reference/model/whitelist initialization.
+        // Nothing below this boundary (writers, GAMP, or processing workers) is opened.
+        // CountStageCleanup and CountRuntime remove the temporary staging/spill state.
+        struct rusage usage {};
+        if (getrusage(RUSAGE_SELF, &usage) != 0) {
+            throw std::runtime_error("cannot measure preload resource usage");
+        }
+        const double seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - invocation_started).count();
+        std::cout << "{\"schema\":\"pancollapse-count-preload-v1\","
+                  << "\"status\":\"preload_complete\",\"input_read_groups\":0,"
+                  << "\"path_rows\":" << identity_ledger->rows_by_path.size()
+                  << ",\"parents\":" << identity_ledger->identities_by_parent.size()
+                  << ",\"exact_models\":" << exact_ex50_models.size()
+                  << ",\"whitelist_barcodes\":" << count_runtime->whitelist().size()
+                  << ",\"features\":" << count_runtime->feature_catalog().size()
+                  << ",\"requested_threads\":" << options.threads
+                  << ",\"count_memory_budget_bytes\":" << options.count_memory_budget
+                  << ",\"peak_rss_bytes\":"
+                  << static_cast<std::uint64_t>(usage.ru_maxrss) * 1024ULL
+                  << ",\"worker_state_measured\":false,\"seconds\":" << seconds
+                  << "}\n";
+        if (!std::cout) {
+            throw std::runtime_error("cannot write preload receipt");
+        }
+        return 0;
     }
     std::unique_ptr<pancollapse::direct_count::CompatibilityBundleWriter>
         compatibility_writer;

@@ -92,8 +92,10 @@ std::vector<std::string> split_tab(const std::string& line) {
     return fields;
 }
 
-std::vector<Row> read_tsv(const std::filesystem::path& path,
-                          const std::vector<std::string>& expected_header) {
+template <typename Consume>
+void for_each_tsv_row(const std::filesystem::path& path,
+                      const std::vector<std::string>& expected_header,
+                      Consume&& consume) {
     std::ifstream input(path);
     if (!input) {
         throw std::runtime_error("cannot open count fact " + path.string());
@@ -105,7 +107,7 @@ std::vector<Row> read_tsv(const std::filesystem::path& path,
     if (split_tab(line) != expected_header) {
         throw std::runtime_error("count fact has an unexpected header: " + path.string());
     }
-    std::vector<Row> rows;
+    bool has_rows = false;
     size_t line_number = 1;
     while (std::getline(input, line)) {
         ++line_number;
@@ -125,12 +127,12 @@ std::vector<Row> read_tsv(const std::filesystem::path& path,
             }
             row.emplace(expected_header[index], std::move(fields[index]));
         }
-        rows.push_back(std::move(row));
+        consume(row);
+        has_rows = true;
     }
-    if (rows.empty()) {
+    if (!has_rows) {
         throw std::runtime_error("count fact has no data rows: " + path.string());
     }
-    return rows;
 }
 
 std::vector<std::string> token_list(std::string_view text, std::string_view field) {
@@ -1127,11 +1129,11 @@ CountFactCatalog CountFactCatalog::load(
     CountFactCatalog result;
     result.content_id_ = bundle.content_id;
     result.authority_ = "count-bundle";
-    const auto gene_rows = read_tsv(
+    for_each_tsv_row(
         required_file(bundle, "profile_gene_policy").path,
         {"profile_id", "count_gene", "gene_type", "competition_class",
-         "competition_reason", "equivalence_gene", "source_annotation", "nested_host"});
-    for (const Row& row : gene_rows) {
+         "competition_reason", "equivalence_gene", "source_annotation", "nested_host"},
+        [&](const Row& row) {
         const ProfileId profile_id = parse_policy_profile(row.at("profile_id"));
         const std::string& count_gene = row.at("count_gene");
         if (count_gene.empty()) {
@@ -1160,7 +1162,7 @@ CountFactCatalog CountFactCatalog::load(
                  .emplace(count_gene, std::move(fact)).second) {
             throw std::runtime_error("profile gene-policy repeats (profile_id,count_gene)");
         }
-    }
+    });
     const std::set<ProfileId> required_profiles{
         ProfileId::cr7_v1, ProfileId::pansc_strict_v1};
     for (const ProfileId profile_id : required_profiles) {
@@ -1207,10 +1209,10 @@ CountFactCatalog CountFactCatalog::load(
 
     const auto metadata_file = bundle.files.find("gene_metadata");
     if (metadata_file != bundle.files.end()) {
-        const auto metadata_rows = read_tsv(
-            metadata_file->second.path, {"count_gene", "gene_name", "gene_type"});
         std::set<std::string> seen;
-        for (const Row& row : metadata_rows) {
+        for_each_tsv_row(
+            metadata_file->second.path, {"count_gene", "gene_name", "gene_type"},
+            [&](const Row& row) {
             const std::string& count_gene = row.at("count_gene");
             const auto gene = result.genes_.find(count_gene);
             if (count_gene.empty() || gene == result.genes_.end() ||
@@ -1223,24 +1225,24 @@ CountFactCatalog CountFactCatalog::load(
                     "gene metadata gene_type disagrees with gene policy for " + count_gene);
             }
             gene->second.gene_name = row.at("gene_name");
-        }
+        });
         if (seen.size() != result.genes_.size()) {
             throw std::runtime_error(
                 "gene metadata does not exactly cover gene-policy count genes");
         }
     }
 
-    const auto category_rows = read_tsv(
-        required_file(bundle, "parent_category_ledger").path,
-        {"unique_parent", "categories"});
     std::map<std::string, std::vector<std::string>, std::less<>> categories;
-    for (const Row& row : category_rows) {
+    for_each_tsv_row(
+        required_file(bundle, "parent_category_ledger").path,
+        {"unique_parent", "categories"},
+        [&](const Row& row) {
         if (!categories.emplace(row.at("unique_parent"),
                                 token_list(row.at("categories"), "categories"))
                  .second) {
             throw std::runtime_error("Parent-category ledger repeats a Parent");
         }
-    }
+    });
 
     struct StrongFact {
         std::string count_gene;
@@ -1251,11 +1253,11 @@ CountFactCatalog CountFactCatalog::load(
         bool protected_host = false;
     };
     std::map<std::string, StrongFact, std::less<>> strong;
-    const auto strong_rows = read_tsv(
+    for_each_tsv_row(
         required_file(bundle, "strong_support_ledger").path,
         {"unique_parent", "count_gene", "raw_categories", "effective_categories",
-         "strong_support_tag", "protected_primary_protein_host", "exempted_categories"});
-    for (const Row& row : strong_rows) {
+         "strong_support_tag", "protected_primary_protein_host", "exempted_categories"},
+        [&](const Row& row) {
         StrongFact fact;
         fact.count_gene = row.at("count_gene");
         fact.raw = token_list(row.at("raw_categories"), "raw_categories");
@@ -1274,7 +1276,7 @@ CountFactCatalog CountFactCatalog::load(
         if (!strong.emplace(row.at("unique_parent"), std::move(fact)).second) {
             throw std::runtime_error("strong-support ledger repeats a Parent");
         }
-    }
+    });
 
     if (categories.size() != path_ledger.identities_by_parent.size() ||
         strong.size() != path_ledger.identities_by_parent.size()) {

@@ -381,6 +381,50 @@ int main() {
                 "mismatched profile terminal counters were accepted");
         }
 
+        // Exercise parser behavior independently of the earlier manifest checksums.
+        // A production invocation authenticates files first; this unit test reuses
+        // the already-loaded bundle to reach every streaming-parser failure branch.
+        const auto category_path = root / "files/parent_category_ledger.tsv";
+        const std::string category_header = "unique_parent\tcategories\n";
+        const std::string valid_categories = category_header +
+            "body-parent\t.\ncopy-parent\t.\nexon-parent\t.\n";
+        write_file(category_path, category_header +
+                   "exon-parent\t.\nbody-parent\t.\ncopy-parent\t.\n");
+        const auto unordered_catalog = CountFactCatalog::load(bundle, path_ledger);
+        if (!same_candidate(candidate, unordered_catalog.candidate(
+                ProfileId::cr7_v1, "exon-parent", 100, EvidenceTier::exon,
+                EvidenceStrand::forward))) {
+            throw std::runtime_error("streaming parser depends on TSV row order");
+        }
+        const std::vector<std::pair<std::string, std::string>> invalid_categories{
+            {"", "count fact is empty"},
+            {category_header, "count fact has no data rows"},
+            {"wrong\theader\n", "unexpected header"},
+            {category_header + "body-parent\n", "wrong field count"},
+            {category_header + "\n", "empty line"},
+            {valid_categories + "exon-parent\t.\n", "repeats a Parent"},
+            {category_header + "body-parent\t.\n", "do not exactly cover"},
+            {category_header + "body-parent\t.\r\n", "line delimiter"},
+        };
+        for (const auto& [contents, expected] : invalid_categories) {
+            write_file(category_path, contents);
+            bool rejected = false;
+            try {
+                static_cast<void>(CountFactCatalog::load(bundle, path_ledger));
+            } catch (const std::runtime_error& error) {
+                if (std::string(error.what()).find(expected) == std::string::npos) {
+                    throw std::runtime_error("wrong streaming TSV failure: " +
+                                             std::string(error.what()));
+                }
+                rejected = true;
+            }
+            if (!rejected) {
+                throw std::runtime_error("streaming TSV accepted invalid input: " + expected);
+            }
+        }
+        write_file(category_path, valid_categories);
+        static_cast<void>(CountFactCatalog::load(bundle, path_ledger));
+
         write_file(root / "files/parent_category_ledger.tsv", "tampered\n");
         try {
             static_cast<void>(load_count_fact_bundle(root));

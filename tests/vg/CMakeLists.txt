@@ -897,6 +897,15 @@ set_tests_properties(direct_count_bundle_tagged_fixture PROPERTIES
   FIXTURES_REQUIRED direct_count_clean
   FIXTURES_SETUP direct_count_bundle_tagged)
 
+add_test(NAME direct_count_preload_verify
+  COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_preload_verify.py"
+    "${PT_PROGRAM}" "${EX50_DIR}" "${EX50_FIX}" "${DIRECT_COUNT_BUNDLE}")
+set_tests_properties(direct_count_preload_verify PROPERTIES
+  LABELS "vg;count;direct-count;preload"
+  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
+  TIMEOUT 180)
+
 add_test(NAME direct_count_threads_1
   COMMAND ${PT_PROGRAM} count
     --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"

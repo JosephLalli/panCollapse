@@ -3875,3 +3875,33 @@ and its explicit limits remain controlling; full-GAMP/chr2 performance of the ne
 backends and their runtime nonregression are not established, and original full scientific gates remain
 unwaived. The merge receipt root is
 `/mnt/ssd/lalli/pancollapse_v0100_main_merge_20261027T225050Z/`.
+
+### D096 — Whole-genome identity repair and count startup admission
+
+**Status: ACCEPTED** (User, 2026-10-28: implement the global identity-repair plan).
+
+**Decision.** Continue from v0.10.0 main in the isolated
+`fix/whole-genome-count-repair-20261028` worktree. Reconcile Parent identities
+across all chromosome ledgers using the existing full-context `panSCup1` rule;
+preserve opaque body IDs, biological provenance, graph paths/walks, and the
+completed GAMP. Derive graph-matched facts using the frozen counting mechanism.
+This does not authorize a biological-policy change, remapping, BAM output,
+Nextflow integration, a new release/tag, or a resource-cap increase.
+
+**Scoped native changes.** Stream count-fact TSV rows into the existing catalog
+instead of retaining a second vector of parsed rows. Add `count --preload-only`
+on the graph/GAMP route: share production reference/model/whitelist/runtime
+initialization, emit a resource receipt, and return before opening GAMP or
+writers. No count directory is published. This is a startup measurement, not
+worker/cache/finalization memory or successful counting. It is rejected for
+compatibility replay. Legacy `convert` and frozen counting rules are unchanged.
+
+**Evidence and next gate.** The isolated native suite passes 180/180 in 49.62 s
+at `count_identity_repair_20261028T173014Z/logs/ctest-native-preload-full.log`
+under `/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/`. Registry tests pass
+18/18. The 10k-row metadata check passed; the redundant 100k step was skipped.
+Full global metadata reconciliation is running, not a count or another pilot.
+Complete facts, compatibility, and full-reference memory admission remain
+pending. Counting retains the hard 450,000,000,000-byte, zero-swap cap, at most
+128 cores, and at most 128 GiB for aggregation; aggregation is not the
+whole-process cap. `PROGRESS.md` names the live container and exact run root.
