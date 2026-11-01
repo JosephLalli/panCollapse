@@ -7555,3 +7555,50 @@ not an isolated causal claim across differing threads/shared host. Prior 128-cor
 goal stays historical achieved; 64-core goal failed. Future targeted profiling,
 scratch reuse or 96-core comparison are evidence-gated/unlaunched; no automatic
 full rerun or new phase authorization.
+
+**D112 64-core feasibility/comparator question (2026-11-01):** Read-only
+assessment requested at HEAD `5003be0` (source `3b4c76f`). Terminal C64 cost is
+534,792.51 CPU-s = 148.553475 CPU-hours for both count profiles including MEX;
+wall 8,770.10s is 1,570.10s/21.8% over target and needs 17.9% less wall time
+(1.218x throughput). Memory/parity remain accepted.
+No fresh C profile exists: the available fresh profile predates A/C, so it cannot
+assign the remaining gap or prove 64-core feasibility. STARsolo comparison is
+unverified until a matched receipt establishes inputs, threads, stages and output
+scope; no CPU-hours difference is claimed. Authorized next work is read-only
+profile/receipt interpretation only, not code, run, or new phase.
+
+**D112 comparator receipts verified (2026-11-01):** STARsolo GRCh38/T2T
+`count-resource.txt` under
+`/mnt/ssd/lalli/pancollapse-wg-analysis-20261101/data/linear/starsolo-{grch38,t2t}/run/`
+record native wall 455.30/469.75s and exit 0; Docker quotas were 32 cores.
+Their CPU user/system fields were not recorded. Quota*wall gives approximately
+4.05/4.18 core-hour upper bounds, not actual CPU measurements. Each
+`Log.final.out` confirms 66,601,887 reads; commands include linear alignment,
+decompression and three raw feature modes, no BAM, prebuilt indexes. C64's
+148.553475 measured CPU-hours (two profiles and MEX, counting only) exceed these
+bounds by at least ~144.51/144.38 hours (~36.7/35.6x CPU). Same named PBMC sample,
+different graph/linear reference and assignment machinery; not output equivalence
+or isolated causal efficiency evidence.
+
+The original attempt5 `full/process_receipt.json` cpu.stat counter is scoped to
+one mapping-attempt container, not a reused unrelated-job container: 446.2702
+CPU-hours, but it includes a 10k pilot, helpers and validation. Full-only start
+CPU delta is unavailable. Adding later C64 gives 594.8236 recorded CPU-hours for
+the composed attempt lifecycle plus counting, not a same-container/full-mapping-
+only benchmark. No new large-input hashes, profiling, code or runs were made.
+
+## D113 — Current-build 64-core optimization phase (2026-11-01)
+
+**Decision source: User. Status: bounded profiling/candidate implementation
+authorized; no full run yet.** “Do it” supersedes D112's read-only comparator
+restriction. Starting at current HEAD `5003be0`/production source `3b4c76f`,
+profile representative early/middle/late current-C membership/scoring work; the
+available fresh R7 profile predates C and cannot attribute its remaining gap.
+Implement only the most promising exact-count candidate, requiring per-patch
+tests, exact 1M parity, and representative windows before a gain-justified
+consolidated full gate. C64 needs 17.9% less wall time (1.218x); 64*7200=460,800
+CPU-s vs 534,792.51 observed requires at least 13.8% work reduction plus
+overhead. No new index build; no XG/GAMP/RI input, biology/scoring/UMI/policy or
+complexity-limit change; no artificial representative-family counts or spill.
+R7/C64 and STAR receipts remain scoped controls, not output-equivalence or causal
+claims.

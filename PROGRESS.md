@@ -24,7 +24,40 @@ but differing threads/shared host prevent causal inference. Authority:
 [candidate-c64-full-terminal.json](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_remaining_optimizations_20261101_gGNqCQ/candidate-c64-full-terminal.json).
 The prior 128-core objective remains historically achieved; do not mark 64-core
 achieved. Targeted profiling, remaining scratch reuse, or a 96-core comparison
-are evidence-gated and unlaunched; no automatic rerun.
+were evidence-gated and unlaunched. User now authorizes the bounded next phase
+below; no automatic full rerun follows.
+
+**D113 current-build optimization gate:** Latest “Do it” supersedes the prior
+read-only restriction. First take representative early/middle/late profiles of
+current C build membership/scoring work (the older R7 profile predates C), then
+implement only the most promising exact-count candidate. Each candidate needs
+tests, exact 1M parity and representative windows; consolidate to full only if
+gain justifies it. C64 needs 17.9% less wall time (1.218x); ideal 64*7200 CPU
+budget is 460,800s versus 534,792.51s, at least 13.8% CPU reduction plus
+overhead. No index build, XG/GAMP/RI input change, policy/complexity change,
+representative UMI-family shortcut, or spill. R7/C64 and STAR scope limitations
+remain controls, not causal comparisons.
+
+**64-core feasibility/comparator question (read-only):** Current HEAD is
+`5003be0` over source `3b4c76f`. C64 consumed 534,792.51 CPU-s = 148.553475
+CPU-hours for both count profiles including MEX, and is 1,570.10s/21.8% over
+target: it needs 17.9% less wall time (1.218x throughput). Its fresh C profile
+is unavailable; prior fresh profile predates A/C, so it cannot attribute the
+remaining gap or establish feasibility.
+Both completed STARsolo 2.7.11b arms processed the same named PBMC sample and
+66,601,887 read pairs, including linear alignment and three raw count modes,
+without BAM. GRCh38/T2T native walls are 455.30/469.75s at 32-core quotas:
+CPU user/system were not captured, so ~4.05/4.18 core-hours are quota-based
+upper bounds, not measured CPU. C64 counting alone therefore used at least
+~144.5/144.4 extra CPU-hours (at least ~36.7/35.6x); it excludes mpmap and uses
+different reference/assignment machinery. Receipts are in
+`/mnt/ssd/lalli/pancollapse-wg-analysis-20261101/data/linear/starsolo-{grch38,t2t}/run/count-resource.txt`;
+commands and `Log.final.out` in those directories establish scope/read counts.
+Attempt5's separate mapping-container terminal CPU counter is 446.2702 hours
+including its 10k pilot/helpers, not a full-mapping-only delta; adding C64 gives
+594.8236 recorded core-hours, not a same-container end-to-end benchmark.
+No code or run follows from this question alone; a current-build profile remains
+necessary before attributing or promising the remaining optimization gap.
 
 **D111 implementation gate:** Clean 119-file baseline commit `c408857` was made
 after source archive comparison and binary `cmp` to frozen R7. User authorizes
