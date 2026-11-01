@@ -50,25 +50,22 @@ def main(output, invalid=False, parent_count=64, paths_per_parent=1, read_count=
         if invalid and index in (0, 10):
             # Parent 000 is deliberately much slower than Parent 010. With eight workers the
             # later error should finish first, but PanCollapse must still report lexical Parent 000.
-            exon_node = 3000 + index
-            body_nodes = ([10000 + offset for offset in range(10000)]
-                          if index == 0 else [1, intron, endpoint])
-            gfa.append(f"S\t{exon_node}\tTTTTTTTTTT")
+            extra_body_nodes = ([10000 + offset for offset in range(10000)]
+                                if index == 0 else [])
+            body_nodes = [1, intron, endpoint] + extra_body_nodes
+            gfa.extend((f"S\t{intron}\tCCCCCCCCCC", f"S\t{endpoint}\tGGGGGGGGGG"))
             if index == 0:
-                gfa.extend(f"S\t{node}\tCCCCCCCCCC" for node in body_nodes)
-                gfa.extend(
-                    f"L\t{left}\t+\t{right}\t+\t0M"
-                    for left, right in zip(body_nodes, body_nodes[1:]))
-            else:
-                gfa.extend((
-                    f"S\t{intron}\tCCCCCCCCCC", f"S\t{endpoint}\tGGGGGGGGGG",
-                    f"L\t1\t+\t{intron}\t+\t0M",
-                    f"L\t{intron}\t+\t{endpoint}\t+\t0M",
-                ))
-            gfa.extend(f"P\t{path}\t{exon_node}+\t*" for path in exon_paths)
+                gfa.extend(f"S\t{node}\tCCCCCCCCCC" for node in extra_body_nodes)
+            gfa.extend(
+                f"L\t{left}\t+\t{right}\t+\t0M"
+                for left, right in zip(body_nodes, body_nodes[1:]))
+            # Disjoint fragments are valid. Keep this error-ordering fixture
+            # contradictory instead: the shared nodes imply opposite relations.
+            gfa.append(f"L\t1\t+\t{endpoint}\t-\t0M")
+            gfa.extend(f"P\t{path}\t1+,{endpoint}-\t*" for path in exon_paths)
             body_steps = ",".join(f"{node}+" for node in body_nodes)
             gfa.extend(f"P\t{path}\t{body_steps}\t*" for path in body_paths)
-            exon_length = 10
+            exon_length = 20
             body_length = 10 * len(body_nodes)
         else:
             gfa.extend((
@@ -85,8 +82,11 @@ def main(output, invalid=False, parent_count=64, paths_per_parent=1, read_count=
             # the production identity ledger instead of multiplying geometry units by aliases.
             t2g.append((exon_path, gene, target))
         for path_index, body_path in enumerate(body_paths):
-            ledger.append(row(body_path, body_length, f"BODY_{index:03d}_{path_index:03d}",
-                              target, gene, "body", parent, parent))
+            body_gene = f"OTHER_{gene}" if invalid and index in (0, 10) else gene
+            body_row = row(body_path, body_length, f"BODY_{index:03d}_{path_index:03d}",
+                           target, body_gene, "body", parent, parent)
+            body_row[18] = gene  # Keep source provenance; invalidate counted identity only.
+            ledger.append(body_row)
             body_t2g.append((body_path, gene, target))
         if index < read_count:
             reads.append({

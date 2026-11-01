@@ -49,7 +49,7 @@ target_link_libraries(direct_count_runtime_determinism PRIVATE panCollapse::dire
   panCollapse::warnings)
 add_test(NAME direct_count_runtime_determinism COMMAND direct_count_runtime_determinism)
 set_tests_properties(direct_count_runtime_determinism PROPERTIES
-  LABELS "pure;policy;count;determinism;spill")
+  LABELS "pure;policy;count;determinism;memory-only")
 
 add_executable(direct_count_diagnostics_smoke direct_count_diagnostics_smoke.cpp)
 target_link_libraries(direct_count_diagnostics_smoke PRIVATE panCollapse::direct_count
@@ -71,3 +71,16 @@ target_link_libraries(count_fact_annotation_smoke PRIVATE panCollapse::direct_co
 add_test(NAME count_fact_annotation_smoke COMMAND count_fact_annotation_smoke)
 set_tests_properties(count_fact_annotation_smoke PROPERTIES
   LABELS "pure;policy;count;annotation")
+
+add_executable(annotation_index_smoke annotation_index_smoke.cpp)
+target_link_libraries(annotation_index_smoke PRIVATE panCollapse::direct_count panCollapse::warnings)
+add_test(NAME annotation_index_smoke COMMAND annotation_index_smoke
+  "${PROJECT_SOURCE_DIR}/tests/fixtures/path_identity_conflict_ENST00000477740.tsv")
+set_tests_properties(annotation_index_smoke PROPERTIES LABELS "pure;policy;count;annotation;index")
+
+add_executable(qualified_transcript_targets_smoke qualified_transcript_targets_smoke.cpp)
+target_link_libraries(qualified_transcript_targets_smoke PRIVATE panCollapse::direct_count
+  panCollapse::warnings)
+add_test(NAME qualified_transcript_targets_smoke COMMAND qualified_transcript_targets_smoke)
+set_tests_properties(qualified_transcript_targets_smoke PROPERTIES
+  LABELS "pure;policy;count;identity-ledger;compatibility")

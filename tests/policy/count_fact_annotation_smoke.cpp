@@ -7,6 +7,7 @@
 #include "direct_count_output.hpp"
 
 #include <simdjson.h>
+#include <zlib.h>
 
 #include <chrono>
 #include <filesystem>
@@ -25,6 +26,14 @@ void write_file(const std::filesystem::path& path, const std::string& contents) 
     output << contents;
     if (!output) {
         throw std::runtime_error("cannot write fixture");
+    }
+}
+
+void write_gzip(const std::filesystem::path& path, const std::string& contents) {
+    gzFile output = gzopen(path.c_str(), "wb");
+    if (output == nullptr || gzwrite(output, contents.data(), static_cast<unsigned int>(contents.size())) !=
+                              static_cast<int>(contents.size()) || gzclose(output) != Z_OK) {
+        throw std::runtime_error("cannot write gzip fixture");
     }
 }
 
@@ -98,6 +107,73 @@ int main() {
         const CountFactCatalog catalog = CountFactCatalog::from_annotation(
             annotation_path, reference_path, path_ledger, profiles);
 
+        // GENCODE GTF has quoted attributes, permits repeated keys, and can contain semicolons
+        // and escapes inside a quoted value. GTF transcript_id/gene_id must produce the same
+        // ledger-facing candidates as the equivalent GFF3 rows.
+        const std::string gtf =
+            "chr1\tfixture\tgene\t1\t200\t.\t+\t.\tgene_id \"GENE1\"; gene_type \"protein_coding\"; "
+            "tag \"label_conflict\"; note \"semi; and \\\"quote\\\"\";\n"
+            "chr1\tfixture\ttranscript\t1\t100\t.\t+\t.\tgene_id \"GENE1\"; transcript_id \"exon-parent\"; "
+            "source_gene \"ENSG000001.2\"; gene_type \"protein_coding\"; transcript_type \"protein_coding\"; "
+            "tag \"repeated_tag\"; tag \"another_tag\";\n"
+            "chr1\tfixture\ttranscript\t1\t200\t.\t+\t.\tgene_id \"GENE1\"; transcript_id \"body-parent\"; "
+            "source_gene \"ENSG000001.2\"; gene_type \"protein_coding\"; transcript_type \"protein_coding\";\n";
+        const std::filesystem::path gtf_path = root / "corrected.gtf";
+        write_file(gtf_path, gtf);
+        const CountFactCatalog gtf_catalog = CountFactCatalog::from_annotation(
+            gtf_path, reference_path, path_ledger, profiles, AnnotationFormat::gtf);
+        require(gtf_catalog.parents().size() == catalog.parents().size() &&
+                    gtf_catalog.profile_gene(ProfileId::cr7_v1, "ENSG000001").competition ==
+                        catalog.profile_gene(ProfileId::cr7_v1, "ENSG000001").competition,
+                "equivalent GTF did not produce the GFF ledger candidates");
+        const ParentFact gtf_exon = gtf_catalog.parent("exon-parent");
+        require(std::find(gtf_exon.raw_categories.begin(), gtf_exon.raw_categories.end(),
+                          "label_conflict") != gtf_exon.raw_categories.end(),
+                "GTF repeated/quoted attributes did not retain the gene tag");
+
+        const std::filesystem::path gtf_gz = root / "corrected.gtf.gz";
+        const std::filesystem::path gff_gz = root / "corrected.gff3.gz";
+        write_gzip(gtf_gz, gtf);
+        write_gzip(gff_gz,
+                   "##gff-version 3\r\n"
+                   "chr1\tfixture\tgene\t1\t200\t.\t+\t.\tID=GENE1;gene_type=protein_coding\r\n" +
+                       transcript_row("exon-parent", "GENE1", "ENSG000001.2", "") +
+                       transcript_row("body-parent", "GENE1", "ENSG000001.2", ""));
+        require(CountFactCatalog::from_annotation(gtf_gz, reference_path, path_ledger, profiles,
+                                                  AnnotationFormat::gtf).parents().size() == 2 &&
+                    CountFactCatalog::from_annotation(gff_gz, reference_path, path_ledger, profiles)
+                        .parents().size() == 2,
+                "compressed GTF or CRLF GFF was not read");
+
+        const auto rejected = [&](const std::filesystem::path& path, AnnotationFormat format) {
+            try {
+                static_cast<void>(CountFactCatalog::from_annotation(
+                    path, reference_path, path_ledger, profiles, format));
+                return false;
+            } catch (const std::runtime_error&) {
+                return true;
+            }
+        };
+        const std::filesystem::path malformed_gtf = root / "malformed.gtf";
+        write_file(malformed_gtf,
+                   "chr1\tfixture\tgene\t1\t1\t.\t+\t.\tgene_id \"GENE1;\n");
+        require(rejected(malformed_gtf, AnnotationFormat::gtf), "malformed GTF was accepted");
+        require(rejected(gtf_path, AnnotationFormat::gff3),
+                "GTF accepted under an explicit GFF3 format");
+        const std::filesystem::path contradictory_gtf = root / "contradictory.gtf";
+        write_file(contradictory_gtf,
+                   gtf + "chr1\tfixture\ttranscript\t1\t1\t.\t+\t.\tgene_id \"OTHER\"; "
+                         "transcript_id \"exon-parent\"; transcript_type \"protein_coding\";\n");
+        require(rejected(contradictory_gtf, AnnotationFormat::gtf),
+                "GTF duplicate transcript_id with contradictory parent was accepted");
+        const std::filesystem::path truncated_gzip = root / "truncated.gff3.gz";
+        write_gzip(truncated_gzip,
+                   "chr1\tfixture\tgene\t1\t200\t.\t+\t.\tID=GENE1;gene_type=protein_coding\n" +
+                       transcript_row("exon-parent", "GENE1", "ENSG000001.2", "") +
+                       transcript_row("body-parent", "GENE1", "ENSG000001.2", ""));
+        std::filesystem::resize_file(truncated_gzip, std::filesystem::file_size(truncated_gzip) - 6);
+        require(rejected(truncated_gzip, AnnotationFormat::gff3), "truncated gzip was accepted");
+
         require(catalog.authority() == "annotation",
                 "the annotation route did not stamp its authority");
         require(catalog.content_id().rfind("sha256:", 0) == 0 &&
@@ -108,7 +184,7 @@ int main() {
 
         // A reference-only tag must reach the Parent, or the annotation is silently under-tagged
         // wherever CAT dropped the gene's tags on projection.
-        const ParentFact& exon_fact = catalog.parent("exon-parent");
+        const ParentFact exon_fact = catalog.parent("exon-parent");
         require(std::find(exon_fact.raw_categories.begin(), exon_fact.raw_categories.end(),
                           "overlaps_pseudogene") != exon_fact.raw_categories.end(),
                 "a reference gene tag was not inherited through source_gene");
@@ -139,7 +215,7 @@ int main() {
                            transcript_row("body-parent", "exon-parent", "ENSG000001.2", ""));
             const CountFactCatalog derived = CountFactCatalog::from_annotation(
                 path, reference_path, path_ledger, profiles);
-            const ParentFact& body = derived.parent("body-parent");
+            const ParentFact body = derived.parent("body-parent");
             // label_conflict is on the gene row and on neither the transcript rows nor
             // the reference gene, so only the gene-row leg can supply it.
             require(std::find(body.raw_categories.begin(), body.raw_categories.end(),
@@ -205,8 +281,6 @@ int main() {
                 "the derived content id did not change when the reference annotation changed");
 
         CountRuntimeOptions runtime_options;
-        runtime_options.memory_budget_bytes = 1ULL << 20;
-        runtime_options.spill_directory = root / "spill";
         runtime_options.raw_barcode_length = 4;
         runtime_options.raw_umi_length = 4;
         CountRuntime runtime({effective_profile(ProfileId::cr7_v1)}, {"ACGT"},
@@ -224,7 +298,6 @@ int main() {
         output_options.fact_bundle_content_id = catalog.content_id();
         output_options.fact_authority = catalog.authority();
         output_options.threads = 2;
-        output_options.memory_budget_bytes = runtime_options.memory_budget_bytes;
         const CountOutputReceipt receipt =
             write_count_outputs(runtime, count_result, catalog, output_options);
         require(receipt.profile_logical_tables.at("cr7-v1").counts_sha256.size() == 64,

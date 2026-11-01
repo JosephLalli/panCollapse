@@ -37,13 +37,14 @@ int main() {
     const ParentFact parent = parent_fact("sample#hap#Parent");
     const ParentFact same_parent = parent_fact(parent.unique_parent);
     const ParentFact other_parent = parent_fact("other#hap#Parent");
-    const AssignmentCandidateInput a{&parent, 10, EvidenceTier::exon, EvidenceStrand::forward};
-    const AssignmentCandidateInput b{&other_parent, -1, EvidenceTier::body, EvidenceStrand::reverse};
+    const AssignmentCandidateInput a{parent.unique_parent, 10, EvidenceTier::exon, EvidenceStrand::forward};
+    const AssignmentCandidateInput b{other_parent.unique_parent, -1, EvidenceTier::body, EvidenceStrand::reverse};
     expect(key({a, b, a}) == key({b, a, a}), "candidate ordering changed key");
     auto changed = a;
-    changed.parent = &same_parent;
+    changed.unique_parent = same_parent.unique_parent;
+    changed.parent_rank = 123;
     expect(key({a}) == key({changed}), "pointer address entered key");
-    changed.parent = &other_parent;
+    changed.unique_parent = other_parent.unique_parent;
     expect(key({a}) != key({changed}), "Parent identity missing");
     changed = a; changed.score = -1;
     expect(key({a}) != key({changed}), "score missing");
@@ -59,7 +60,8 @@ int main() {
     const ParentFact ab = parent_fact("ab"), c = parent_fact("c");
     const ParentFact first = parent_fact("a"), bc = parent_fact("bc");
     auto x = a, y = a, z = a, w = a;
-    x.parent = &ab; y.parent = &c; z.parent = &first; w.parent = &bc;
+    x.unique_parent = ab.unique_parent; y.unique_parent = c.unique_parent;
+    z.unique_parent = first.unique_parent; w.unique_parent = bc.unique_parent;
     expect(key({x, y}) != key({z, w}), "Parent string lengths not framed");
     return 0;
 }

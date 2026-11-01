@@ -1,6 +1,3386 @@
 # Progress
 
-## CURRENT: whole-genome global-Parent identity repair gate (2026-10-28)
+## CURRENT: R7 full terminal validated; <2h/<300e9-B objective achieved (2026-11-01)
+
+User explicitly reactivated the 66,601,887-group full 10/30 whole-GAMP per-gene
+objective: <2h wall and <300e9 B. R7 authoritative terminal audit at 17:03:05Z
+achieved it: native 6,372.41s (827.59s headroom), kernel HWM 245,153,902,592B
+(54,846,097,408-B headroom), count-memcg peak 128,493,842,432B, and zero
+max/OOM/oomkill/swap/spill. Container/native both exited 0 after full original
+66,601,887-group/166,824,266-record GAMP EOF. Independent Parquet/MEX validation
+and exact R6 four-Parquet/six-MEX byte/decoded/logical/profile/prior parity pass.
+Counts: [R7/full/counts](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_posting_reuse_20261101_nf6RG9/full/counts);
+authority: [full-terminal.json](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_posting_reuse_20261101_nf6RG9/full-terminal.json).
+Tool goal state is complete after root receipt/documentation review. This is not F1,
+biological truth, external CR7 workflow equivalence, release, or causal-speedup proof.
+
+**R4 compact empirical gate (terminal):** Repack exited 0 at 12:20:20Z
+(5,822.268 s real) with 167,968,148,664-B final index. Its queued 1M count and
+validators exited 0 at 12:24:11Z: native wall 200.040151 s (init/read/finalize
+6.694304950/178.824724895/2.478044831), 1M groups/2,502,433 records/982,842
+counts/1,302,814 molecules. Four Parquet/six MEX bytes, logical tables,
+profiles and priors exactly match N (`PARITY_PASSED`). Peak memcg
+126,853,758,976 B, zero OOM/max/swap/spill; 5-s RSS samples are not kernel HWM.
+Final cache was 674,931 entries/296,609 hits/1,009,589,118 charged B (diagnostic
+counter change only). Valid profile: 22,474 samples/60.435917 s/zero loss or
+empty, 0 explicit FastLocate, 97.477% resolver-other/0.049% splice. R4's
+~5,592 groups/s prefix rate is a warning, not a full-run falsifier: warm-cache
+asymptote is unknown and hits include duplicate builder losers.
+
+**R6 prefix passed / full native EOF near-miss:** R6 prefix exited 0/no OOM
+12:38:01.593650971–12:40:55.325512877Z: GNU time 143.57 s (native 143.580467 s;
+init/read/finalize 6.190571497/126.821282846/2.826345579), 7,885.111848 groups/s,
+kernel HWM 77,308,772KiB/79,164,182,528 B, memcg peak 28,207,353,856 B, zero
+max/OOM/swap/spill. Exact N 4-Parquet/6-MEX/logical/profile/prior parity passed
+(982,842 rows/1,302,814 molecules); receipt `R6/first1000000-terminal.json` is
+validated. Root launched the same frozen original-GAMP full at 12:42:36Z:
+`pancollapse-memory-guard-full-20261101-o70tyk` (ID `a3daffbffed697ad2b274767241592c5bc6d832305b5b06a25a031af4f08a04c`, host PID 1071618), 300e9/128 quota, no profiler/input/rule change. At ~220k/28.0s it is live with zero OOM/swap.
+Native completed 0: GNU time 7,305.22s/native 7,305.224792s (2h1m45.22), kernel
+HWM 240,016,211,968B, memcg peak 166,879,653,888B, zero max/OOM/swap/spill.
+EOF has 66,601,887 groups/166,824,266 records. Container exited 0 at 14:48:07Z;
+both independent full Parquet/MEX validations passed and `R6/full-terminal.json`
+is valid. Counts are at `R6/full/counts` (four Parquet 295,286,773 B).
+It misses <2h by 105.22s (~1.46%) while RAM passes; goal is not achieved.
+
+**R7 frozen pre-prefix gate:** R7 implements only read-local `LocalPosting`
+descriptors and exact `has_annotation`, replacing repeated membership varint
+decompression while retaining IDs/support/flags/order (8B/touched posting versus
+old 4B local ID). Annotation-free/repeated-node/body-support two-record/two-
+profile oracle passed; focused 2/2 (.24s), full 174/174 (32.09s), independent
+oracle/eager baseline/goldens unchanged. Frozen
+`pancollapse_posting_reuse_20261101_nf6RG9` holds 93,112,944-B binary and
+495,380-B archive; comparisons and `run-count.sh -n` passed. R7 prefix exited
+0/no OOM (14:59:01–15:01:35Z): GNU time 123.64s/native 123.646394s,
+init/read/finalize 6.025417827/107.214604235/2.642745386, 9,327.087547 groups/s;
+kernel HWM 81,771,417,600B/memcg peak 30,953,394,176B, zero max/OOM/swap/spill.
+Exact N 4-Parquet/6-MEX/logical/profile/prior parity passed at 1M/2,502,433/
+982,842/1,302,814 group/record/count/molecule totals (`PARITY_PASSED`); terminal
+receipt is being written. After root review, launch same original GAMP/R4 index/
+profiles/filters at 300GB/128/no swap/spill, unprofiled GNU time; validators then
+exact full comparison to R6. Prefix rate is not goal proof. No other optimization.
+
+**R6 memory-guard candidate:** Sol proof review accepted an exactness-
+preserving guard for new R6, combining the late-winner changes and guard, not R4:
+retain mapped-reference
+admission; periodic RSS reader disables cache retention permanently and clears
+one shard lock at a time at target minus the existing 10% reserve; leases remain
+valid, then best-effort `malloc_trim`; later pressure clean-stops. Snapshot/
+destroy cache before finalize and guard EOF resident use. No LRU/refill/ceilings,
+model dropping, or policy/profile/count change. It is not an OOM guarantee:
+whole-run RSS/HWM+cgroup peak <300e9, zero OOM/swap/no spill remain required;
+`memory.events:max` may occur through reclaim. R6 focused 8/8 passed 7.22 s and
+full 174/174 passed 31.92 s (session 89139 exit 0). Frozen
+[`R6/RUN.json`](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_memory_guard_20261101_O70tyk/RUN.json)
+records 93,141,152-B binary and 495,153-B source archive; binary/source compares,
+Docker RUN validation, and `run-count.sh -n` passed. Its authorized same-index
+1M job passed above; full measurement is live. R5 remains frozen late-winner-only.
+
+**Read-only performance-review gate:** User authorized twelve distinct reviews
+of direct-index speed/memory, alternate performance approaches, cache hits, and
+empirical comparison with the old same-1M control. All twelve completed, with no
+more than two concurrent children; they authorize neither biology/policy change nor
+review-driven implementation before root synthesis. R4 stays untouched with its
+queued 1M gate; R6 remains under its separately recorded authorization.
+
+**Completed direct-index review synthesis (11:55Z):** Twelve read-only reviews
+are consolidated in [direct-index-performance-review-20261101.md](docs/research/direct-index-performance-review-20261101.md).
+Root reviewed the synthesis: unchanged R4 benchmarking first; if needed, read-local reuse plus
+allocation removal, then measured cache-key work, with structural sharing only
+as fallback. No source/policy change is adopted. R4 remained live without final
+`direct.pci` or count (161,711,487,246-B postings unchanged since 11:49Z; phase
+unknown), so final fit/speed are unmeasured. R6 is now tested/frozen but unlaunched;
+R4/R5 are untouched.
+
+**Pause snapshot (04:29:05Z):** R2 PID 1265651 was live without OOM at
+42M/116,844,907 slots with 397,631,746,048-B partial postings; waiter
+1381666/1381670 and observer 1602210 were recently confirmed. R5 remains
+tested/frozen and unlaunched. The <2h/<300e9-B objective and all gates persist.
+At 04:34:50Z R2 was 44M/116,844,907/no OOM; waiter 1381666/1381670 and observer
+1602210 were live.
+
+**Live wait / admission evidence (04:06:42Z):** R2 remains running at PID
+1265651, 28M/116,844,907 slots, zero OOM. Partial raw postings alone are
+271,496,812,248 B, exceeding the 270e9-B maximum after the unchanged 30e9-B
+count safety reserve, before other reference/resident data. Thus raw V1 cannot
+be admitted under 300GB; queued exact V2 repack is necessary, with final V2
+size still unknown. Detached R4 waiter 1381666/1381670 remained live for five
+minutes. A retained 37-s resource observation in
+`pancollapse_direct_facts_batchfix_20261101_1REM6g/resource-observation-20261101T040409Z.json`
+shows 67.2 CPU cores, 100.5 MB/s writes, 78.1GB anon and clean-file reclaim;
+not a count-speed measurement or evidence of storage-bandwidth saturation.
+N exited 0/no
+OOM at 2026-11-01T01:10:43.120947404Z as the accepted numeric-control evidence:
+four Parquet and six MEX files are byte-identical to G, including both profiles'
+count/molecule tables and identical all-read barcode priors. Full CTest passed
+172/172; peak memory was 149,023,064,064 B. Read processing took 715.320 s
+(~1,398 groups/s), 17.73% slower than G under different concurrent workload;
+this is not an isolated performance comparison. Terminal authority is
+[N/terminal-receipt.json](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/numeric-count-first1000000-t128.vWzYte/terminal-receipt.json).
+Historical receipts are controls; do not infer current job state from prior
+checkpoints. Reactivation changes no policy, remapping, or input contract.
+
+**Historical retry launch:** `pancollapse-direct-index-20261101-batchfix` started at
+2026-11-01T03:19:24.28115287Z, constructor entered `phase=load`; 128 CPUs,
+300,000,000,000-B hard cap and no swap verified. Frozen source/binary, final
+174/174 log, scripts and `RUN.json` are in
+[`pancollapse_direct_facts_batchfix_20261101_1REM6g`](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_direct_facts_batchfix_20261101_1REM6g).
+The host `after-index.sh` continuation waits for success, then runs only the
+frozen 1M count and independent Parquet/MEX plus exact N byte/logical checks.
+No complete direct index, empirical count parity, or speed result yet.
+
+**Historical early retry snapshot:** At 03:33:47Z, verified Docker PID 1265651 remained running. After 194.834-s
+load, index log had reached 8M/116,844,907 graph-node slots; partial posting file
+was about 68 GiB (rounded `ls`). Cgroup current/peak were
+151,776,280,576/151,778,562,048 B, with max/oom zero. This is construction
+progress only. Next authorized sequence: completed direct reference fitting
+<=300GB, exact 1M N parity/resources, optimize if needed, then full same-GAMP
+counts and full-scope validation against the active objective.
+
+**Historical separate-pilot reconciliation (2026-11-01):** R2 remains the unmodified
+frozen batch-fix builder; at 03:47:30Z it was 17M/116,844,907 slots, partial
+postings 157,543,858,176 B, cgroup current/peak 240,284,389,376/
+240,287,301,632 B, max/oom zero; count has not started. The missing turn-scoped
+waiter was restored without restarting index: detached bash PID 1297730/PPID 1,
+SID 1297730 and live `docker wait` 1297737; R2 `RUN` records recovery. New R3
+candidate `pancollapse_compact_assignment_key_20261101_TN29f2` is frozen/prepared
+only: compact typed field visitor/size pass/canonical unsigned varint key omits
+unused fields, no per-record/Subpath serialization, and preserves scorer read
+fields/profiles/score/UMI. Full 174/174 passed 30.79 s; real parity/speed pending.
+Sorted background output completed but is opaque-payload receipts/totals only, not
+multiset proof or adopted count path. The old separate R2/R3 1M-pilot wording is
+superseded by the consolidated R4 gate below.
+
+**Exact-storage feasibility checkpoint (2026-11-01):** At 03:51:32Z R2 remained
+live, frozen binary/source unchanged, `phase=nodes` 19M/116,844,907, no counts;
+restored detached waiter PIDs 1297730/1297737 had remained live 14 minutes. R3
+compact varint signature is bounded-test accepted (174/174, 30.79 s), real data
+pending. Next authorized task is exact storage-size feasibility and, if needed,
+compact read-only representation—engineering only, not a biological/policy
+decision or relaxed planner. Existing 16MiB-prefix compression receipt and
+`storage-feasibility.json` are indicative prefix evidence only; do not rerun
+experiments. Active objective remains unmet.
+
+**Compact V2/repack empirical prelaunch checkpoint (2026-11-01):** Exact V2
+codec/repack is bounded-test accepted: PostingView, direct index V1/V2 body
+factoring and resolver range iteration; nonbody nonzero/conflicting body support
+fails publication. Profiles/scoring/UMI unchanged. Full 174/174 passed 31.46 s
+(`build/compact-direct-index-ctest.log` 351/410), focused C++ 3/3 2.00 s. Root
+CLI/repack and native verification cover canonical/no-overwrite/invalid/count
+equality. Frozen R4 `pancollapse_compact_direct_facts_20261101_FAuuqd` has
+93,109,696-B binary, 566,500-B archive, logs/RUN/repack/count scripts, unlaunched.
+
+R2 at 24M/116,844,907 has 237,611,110,572-B partial postings, not final size.
+Its memory limit now includes file cache: last max 20/oom 0/oomkill 0, anon
+77.9GB/file 215.5GB—not all heap. After review replace only host waiter
+1297730/1297737, then R2-success -> exact R4 repack <=300GB -> one combined 1M
+exact-N parity/resources gate, consolidating R2/R3 pilots. Only then assess rate
+and full original-GAMP run under active target. No whole launch/fit/speed claim.
+
+**Current queued continuation (2026-11-01):** After checkpoint review only the
+old host waiter 1297730/1297737 was terminated; native R2 PID 1265651 was not
+stopped. Detached R4 continuation bash 1381666 (PPID 1, SID 1381666) and docker
+wait 1381670 were verified live. R2/R3/R4 RUN records now route automatically:
+R2 success -> V2 repack -> one frozen 1M exact-N gate, with no automatic full
+launch. Final index/count remain pending; active objective is not met.
+
+**R4 caller-profile prelaunch checkpoint (2026-11-01):** At 04:07:45Z R2 was
+live at 29M slots; queued R4 waiter 1381666/1381670 remained confirmed. Existing
+P is the terminal exact-N 1M control with valid 60-s/3-Hz DWARF, 22,090 zero-
+loss/empty samples and RI-node/splice/resolver-other 59.31/5.81/31.64%; it is
+retained, not duplicated. To diagnose remaining direct-counter cost only if R4
+is slow, root may prepare one fail-open external 60-s, low-frequency caller
+capture on R4 first-1M using existing setup, capped profiler 8GB/4CPU (the
+accepted P configuration), no host
+sysctl/binary change/extra read run. Full objective timing stays unprofiled;
+captured prefix rates are profiled, nonisolated evidence only. Profiles, biology,
+inputs, and counter matrices remain frozen. No full raw-count admission: 271GB
+exceeds 270GB proof. Root review precedes installation.
+
+**Late-winner hotpath candidate checkpoint (2026-11-01):** R4 remains the frozen
+174/174 control; its queued repack/1M exact-N gate and optional caller capture
+are unchanged. Optional profiling helpers (8 tests), mock fixes, and pinned-image
+perf/Python preflight passed; observer 1602210 (PPID 1/SID 1602210, 04:17:35Z)
+waits only for R4 count, separately from 1381666/1381670 and R2 PID 1265651; no
+capture occurred. Sol completed the proof and root reviewed minimal edits to
+`src/node_score_resolver.cpp` and `tests/vg/node_score_dp_test.cpp`: lazy
+WinnerKey creation omits only no-score keys, retaining scored missing-policy
+winners and exact ties/negative scores/support. Build exited 0; focused 2/2
+passed 0.20 s and full 174/174 passed 31.22 s (`build/late-winner-{build,
+focused-ctest,ctest}.log`). Separate frozen R5
+`pancollapse_late_winners_20261101_wc5G9s` holds its 93,081,344-B binary,
+566,996-B source archive, RUN/logs; eager oracles and R4 remain unchanged. Real
+R5 parity/speed are unmeasured and no R5 job/script exists: use it only after R4
+rate/profile establishes need. R2 is now 40M/116,844,907 nodes/no OOM. Objective
+unmet.
+
+Direct-facts custom-index implementation is complete and bounded-test accepted:
+graph-specific node length/membership, numeric ready-model metadata, physical
+splice targets and directed ownership persisted in an immutable read-ready count
+source. XG/GBWT/RI are compiler inputs and remain external/unchanged; no path
+positions/steps/global occurrence arrays. Full-reference compilation and empirical
+1M parity remain pending.
+Numeric engine's bounded 1M parity gate is accepted; this is not whole-performance
+achievement; its earlier paused-goal state is historical and does not meet the
+reactivated whole objective.
+
+**A2 full-reference build failure / retry gate (2026-11-01):** A2 exited 1/no
+OOM at 2026-11-01T03:12:31.792628943Z after 314.924-s wall/198.368-s load, at
+last 1M graph-node slots (not reads): `worker ordered-batch payload exceeds
+memory budget`. Peak was 132,390,883,328 B under 300e9 B, with all memory max/
+oom/oom_kill zero and swap 0. RAII removed incomplete regenerable temporary
+posting payloads; no index published, input/control changed, or count started;
+`after-index.sh` correctly exited 1. Evidence is
+`R/pancollapse_direct_facts_20261101_UKcX1N/{index.log,index.time.txt,index-resources.log,continuation.log}`.
+Sol's fix is bounded adaptive/flush batching replacing fixed 256 items, preserving
+targets/facts; no cap raise/spill/hash/policy change. Next: regression/full suite,
+freeze retry, full compile at 300e9 B/no swap/128 cores, then 1M N parity only on
+success. This is not whole production promotion.
+
+**Batch-fix retry acceptance checkpoint (2026-11-01):** Fixed compiler full
+174/174 passed 30.92 s (`build/direct-facts-batch-fix-ctest.log`, lines 351/410);
+`direct_count_compile_test` regression passed 3.11 s (line 110); build log
+`build/direct-facts-batch-fix-build.log`. Fixed 256-result queue is replaced by
+ordered waves: at most one completed result per actual OpenMP worker, stable
+ascending serial commit; Writer/candidate budgets unchanged, remaining memory
+rebalanced to one-result scratch/retention. The 48-B cap regression fits a node
+but not queued dense results and yields byte-identical serial artifact. CLI,
+profiles, biological facts unchanged; barrier overhead is residual measured risk.
+Frozen retry root is `pancollapse_direct_facts_batchfix_20261101_1REM6g`; A2
+failure root remains preserved. No job is launched. After root review, run same
+full compile at 300e9 B/no swap/128 CPUs; `after-index.sh` launches frozen 1M
+count and N byte/logical Parquet/MEX validation only on success.
+
+**Historical direct-reference build launch:** container
+`pancollapse-direct-index-20261101-ukcx1n-a2` started at
+2026-11-01T03:07:16.644025201Z with 128 CPUs and a hard 300,000,000,000-B
+cap/no swap. Constructor completed loading in 198.368 s and entered
+`phase=nodes`; this is not a completed index.
+Frozen binary/source and `index.log`, `index.time.txt`, `RUN.json` are in the
+direct-facts result root linked below. First wrapper attempt exited 127 before
+construction because the image lacks `/usr/bin/time`; retry uses Bash timing,
+no new dependency. Next: quantify complete index size/resources, then frozen
+1M count and exact N comparison. `after-index.sh` is waiting on successful
+compiler exit and will launch the frozen 1M count (same cap/threads), independent
+Parquet/MEX validation, and byte/logical N comparison automatically. Its
+`continuation.log` and `RUN.json` record this engineering gate. No whole-count
+restart is part of that script.
+At 03:12:15Z the builder had completed 1,000,000/116,844,907 graph-node ID
+slots (999,999 present nodes), with 5,500,393,992 B of partial posting payload.
+Cgroup current/peak were 84,096,843,776/132,390,883,328 B, zero OOM events.
+These are reference-construction metrics, not read throughput or an estimate
+of complete-index size.
+
+**Historical direct implementation-in-progress checkpoint:** `direct_count_compile.{hpp,cpp}` then
+contains bounded ordered parallel construction, ready model/node facts, and
+physical/directed splice facts. `Source::node_view` and the scorer's immutable
+posting spans/local-ID sidecars are implemented. Count CLI/runtime now target
+the direct reader only; native queries are a test-only oracle. Storage
+`direct_count_index.cpp` was being replaced after review rejected the initial
+in-memory payload copy; the integrated build was then not yet accepted. Focused
+resolver/DP tests passed, and the assignment-only memory planner's standalone
+test passed. New storage/compiler tests and migrated count fixtures were pending
+the completed reader/writer. No full-reference build or new 1M count had started.
+Artifacts/continuation inputs are recorded in
+[`RUN.json`](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_direct_facts_20261101_UKcX1N/RUN.json).
+
+One external caller-attributed profile of unchanged frozen N is terminal and
+accepted for measurement; it is not a speedup, redesign, or whole-goal result.
+
+**P terminal caller-attribution checkpoint (2026-11-01):** P passed profile and
+exact N parity: exit 0/no OOM; 1M/2,502,433 records; 982,842 count and 1,302,814
+molecule rows; four Parquet/six MEX byte plus decoded/logical/CB-prior parity,
+with no changed manifest counters. Its nonisolated wall/read time was
+654.467462/425.698263286 s. Valid 60.370597-s, 3-Hz DWARF capture had 22,090
+samples, zero lost/empty, 99.9894% RI-like caller attribution: inclusive splice
+5.8126%, node-only 59.3119%, resolver-other 31.6388%, other 3.2368%. This does
+not include inlined masks/DAG state effects, infer counterfactual speedup, or
+authorize production/index change. Next is reporting measured cost only.
+
+**Direct-facts index implementation checkpoint (2026-11-01):** This phase
+authorizes bounded implementation and acceptance testing only. Preserve count
+algorithm, profiles, barcode/UMI behavior, and output; no input hashes or count
+spill. N/P remain 1M controls; speed and <2h/<300GB whole performance are
+unproven. Sol accepted semantics but warned raw FastLocate occurrence cost and
+unknown complete-index size/build time. Build direct index only after bounded
+acceptance; no whole launch until parity/resources support it.
+
+**Direct-facts bounded acceptance / full-reference prebuild checkpoint
+(2026-11-01):** `direct_count_index.{hpp,cpp}` provides streamed numeric shared
+lists/mmap reader; `direct_count_compile.{hpp,cpp}` bounded ordered parallel
+compile. Runtime is direct-only: no XG/GBWT/RI/receipt loading; immutable scorer
+spans/local-ID sidecars and assignment-only cache planning. Final 174/174 passed
+31.83 s (`build/direct-facts-ctest.log`, total line 410), focused 12/12 8.18 s
+(`build/direct-facts-focused.log`), build log `build/direct-facts-build.log`.
+The initial four old UMI PYTHONPATH misses were rerun inside Docker with existing
+PYTHONPATH, no install; final all passed. Frozen count hashes, thread/profile
+parity 1--128, serial/4 byte-identical compile, fact-oracle tests and hidden
+graph-input count test pass. Root `pancollapse_direct_facts_20261101_UKcX1N`
+records inputs; no empirical job yet. Next: full compile <=128 threads under
+300e9-B/no-swap cap, quantify size/resources, then frozen-1M exact N comparison.
+No whole launch/speed/F1/full-genome claim.
+
+**Historical N ready/profile snapshot checkpoint (2026-11-01):** N native ready in
+238.36 s (index 10.0791, XG 14.3376, RI 77.9083, GBWT 227.785; combined index
+load 232.472). At 00:58:34Z it was live at ~90,771 groups/90.005 read seconds,
+with 144,729,862,144-B peak; parity was then pending. External flat profile
+`N/cpu-live-flat.jdqg24` passed: helper `56571969...` exited 0/no OOM,
+30-s/49-Hz `cpu-clock:u`, no stacks, ~165K samples, zero loss, record/report 0,
+report stderr 0. Self snapshot: select 20.51%, locateNext 12.16%, packed-get
+primary 11.46%, resolver 10.18%, node-add-path 9.22%, path-row 5.20%, model
+2.32%, model-ids 2.06%. Do not sum shared helpers into exclusive stages.
+Profile overhead plus W/sorter concurrency prevents isolated speedup claims.
+
+**Historical N matched-window performance checkpoint (2026-11-01):**
+`N/cpu-live-flat.jdqg24/runtime-cost-checkpoint.json` records 165,127 all-symbol
+samples; 2,741 named ZSTD samples, including compression 1.6599%. On matched
+first 300k groups, G was 204.721 s (~1,465.409/s) and N 249.291 s
+(~1,203.413/s), 17.8787% lower—not halved. Old complete-run versus new cold-
+prefix averaging was misleading. Approximate 100k--300k 5-s samples show G
+125.726 mean CPUs/N 113.117; CPU seconds G 15,087.106/N 17,080.740. Host has
+128 physical/256 logical CPUs; live Docker snapshot N 10800.69%, W 12031.13%,
+sorter 123.10%. Do not attribute this only to contention or exclude regression.
+Rank/select, FastLocate and packed access remain distinct from generic ZSTD; no
+index/cache choice follows. N was live at 400k/320.04 read s with parity pending
+at that snapshot; the accepted terminal result above supersedes its live state.
+
+The completed reviews support only the implementation boundary recorded in the
+final D110 entry; root review is required before edits.
+
+### Analysis handoff: bounded independent whole-genome comparison design (2026-11-01)
+
+The whole-genome native-count objective is complete, not a new biological
+conclusion: R7 counted the real PBMC1k v3 GAMP to EOF (66,601,887 read groups,
+166,824,266 records) in 6,372.41 s with kernel HWM 245,153,902,592 B. The
+terminal receipt records exit 0, no OOM/swap/spill, independent Parquet and MEX
+readers passed, and exact R6 four-Parquet/six-MEX byte, decoded/logical-table,
+profile-contract, and barcode-prior parity. The frozen `cr7-v1` and
+`pansc-strict-v1` outputs, source archive, binary, receipts, and profiles are
+the comparison inputs; this is not read-level F1, biological truth, external
+Cell Ranger whole-workflow equivalence, or a linear-arm result.
+
+User authorized a separate analysis environment at
+`/mnt/ssd/lalli/pancollapse-wg-analysis-20261101` (not yet created), containing
+only a roughly 335-MB copy of the validated count outputs plus receipts, with
+its own Docker environment. Do not copy GAMPs or indexes, change PanCollapse
+source/optimizations, tune annotation or counting policy, make cell-filtering
+decisions, run heavy analysis, or begin a new linear alignment. The older HG002
+simulations remain distinct evidence from these current real PBMC1k v3 counts.
+
+The next authorized action is a bounded initializer and comparison-design
+record: establish the independent directory and provenance-bound count/receipt
+copies, then specify a conservative comparison against a linear result only
+when an equivalently frozen input and counter contract exist. The unresolved
+question is what matched linear dataset/workflow, feature namespace, cell set,
+and comparison metrics can support that design; no current record establishes
+their match. Preserve the distinction between `cr7-v1` profile semantics and
+external Cell Ranger equivalence.
+
+## Historical checkpoint: approved Stage 6 performance implementation; whole count stopped (2026-10-31)
+
+The user amends the goal to full same-GAMP per-gene counts in under two hours
+wall time and under 300 GB RAM, and directs stopping the current run to diagnose
+its performance. Root sent SIGTERM to whole count PID 7 at 16:33:45 UTC, then
+stopped its remaining wrapper container. Docker confirms exit 137/no OOM at
+`2026-10-31T16:34:24.640829452Z` (user stop, not a memory failure), recorded in
+`RUN.json`. Last measured whole milestone was
+1,236,704 groups in 4890.05 s, 406,490,640,384-byte peak and
+391,276,007,424-byte pre-stop current cgroup memory, with max/oom zero. No
+final EOF or counts exist. The observed rate is about 253 groups/s versus about
+9,250 groups/s required for two hours (~37x gap). These are measurements, not a
+diagnosis. The subsequent user approval authorizes semantics-preserving
+implementation and bounded tests; a whole restart still requires supporting
+performance/correctness evidence. No extra large-input hashing is authorized.
+The Stage 3 control independently reached genuine EOF (25,000
+records/10,000 groups), exit 0/no OOM at `2026-10-31T16:37:50.15274514Z`.
+Processing/wall/user/system were 13672.3/13842.887/43214.267/306.462 s, with
+14,004 count and 14,095 molecule rows. Its resolver route/model/state totals
+match Stage 4 expectation. Existing-file three-way comparison passed
+(`first10000.three-way-byte-parity.json`): Stage 3 versus Stage 4 and Stage 3
+versus Stage 5 have byte-identical four Parquet tables and six compressed MEX
+files, equal both-profile definitions/logical tables/global table logical hashes,
+and equal scientific summary counters except `assignment_cache_` and
+`aggregate_spill_`. Stage 3's independent reader was not rerun; Stage 4/5 were
+already independently validated. This proves only the genuine-EOF 10k existing
+outputs, not full genome, F1, or release. All containers remain stopped. The
+user approved a new semantics-preserving performance phase at 16:49 UTC:
+consequential design/proof review of alias pre-deduplication, shared immutable
+graph facts, and DP factorization, then bounded implementation/tests. This
+changes no biology (D105 no ordered containment; D107 wrong-way splice veto;
+raw Parent exon/body separation), frozen profile/barcode/UMI/output invariant,
+or no-BAM/no-spill/no-hash/<=128-core boundary. Existing three-way 10k parity
+is the baseline; a whole count may follow only if bounded synthetic/real
+heavy-tail evidence supports <2-h wall and <300-GB RAM. No 37x promise is made.
+New production runs are capped at 300,000,000,000 bytes/no swap; existing frozen
+artifacts and 500-GB historical receipts are preserved.
+
+Stage 6 alias/cache work is implemented after parent review and Sol bounded
+architecture/proof acceptance, with no biological-policy change. Focused 3/3
+native-query/resolver/cache tests passed in 1.02 s and full 198/198 passed in
+31.92 s (`build/ctest-alias-cache-full.log`); frozen binary/source/receipt are
+`panCollapse-alias-cache`, `source-alias-cache.tar.gz`, and
+`ctest-alias-cache-full.log`. Conservative keys (policy plus optional fixed
+support ID) preserve malformed-source faults; per-sink E/P/B vectors cache once
+with logical multiplicity retained. Shared immutable leaf singleflight has
+8+8-GiB source bounds and checked lease/charge/cleanup diagnostics. The
+authorized same-10k gate is live in `pancollapse-native-alias-cache-first10000-20261031`
+(`310171b9a5f62a5d12d3f3cf2f7873a7795ff751bf3aa6492e24308d8ef654a8`),
+started 17:11:14.932 UTC under 300 GB/no swap/128 CPUs; native ready was
+164.257 s and at 600 s it was 9,997/10,000 groups, 8.8315B states, and
+150,791,712,768-byte peak. It is a gate, not a performance claim. The frozen
+1M-QNAME source prefix exists (2,502,433 records, 465,121,668 bytes) but has not
+run; no whole launch is authorized before 10k and larger-fixture evidence. The
+mapper command used `-M10`, which caps records rather than represented GAMP DAG
+routes; counting traverses existing alignments without remapping or
+full-reference-walk containment. Next authorized work is read-only review of
+minimal exact GAMP-branch computation before container-only optimization; no
+top-K/hard cap/score pruning, biological/profile change, or unsupported speedup
+claim is authorized. Sealed source/statistics record 167.66-s ready time,
+
+**Route-scoring clarification:** The user describes wrong-way-splice exclusion,
+per-alternative node-score transcript exon/body tally, and argmax; D091 agrees
+selection is max over (route, transcript), never a sum across mutually exclusive
+alternatives. Compact `RouteTally` max-prefix DP is distinct from richer exact
+Ex50/support-state DP; the latter was previously overstated as scientifically
+necessary. Frozen CR7/custom parity remains unchanged. No cap, pruning, or new
+counting mode is authorized. The pending user choice is whether whole counts use
+a separately named node-score argmax mode with frozen profiles retained
+separately, or exact frozen CR7/custom parity. Stage 6 binary/gate is unchanged.
+`first10000.route-complexity.json` reports 25k records/10k groups/max 10 records,
+340 records with >1000 structural routes, maximum 14,875,194,015,048,794,112
+routes and 44,989 subpaths; structural routes are not distinct biological
+alignments. `inspect_gamp_routes.py` passed four toy assertions; no production
+change or hash was made.
+
+**CountOutcome performance API:** Sol conditionally approves, under the existing
+performance authorization, a typed CountOutcome-only API (terminal, barcode
+correction eligibility, UMI-filter reachability, genes) consumed only by
+prepared-count/cache; full `resolve()` facts/reasons/oracles remain unchanged.
+Prepared count currently discards facts/reasons and runtime counters do not use
+them. Outcome DP may merge only the specified reduced state while retaining exact
+body-support sets, anchor, last-node/end, splice/wrong flags, alias, and policy;
+same-key higher score dominates only when final count outcomes agree for both
+frozen profiles. No score-window/strand/tier/body/nesting rule changes. A
+conservative checked no-graph score certificate otherwise falls back unchanged
+to full resolve. Reasons/facts/coordinates are not exposed by the new API, so
+their internal work/order metrics are not preserved claims; consumed outcomes,
+final counters, and tables must match. Focused/full, adversarial outcome parity,
+and same-prefix EOF gates are required. Stage 6 benchmark binary/source remains
+immutable and live (~1380 s, 9,997 groups, 150,791,712,768-byte peak); no full
+launch or speedup claim is authorized.
+
+**Authorized scoring replacement:** User supersedes the CountOutcome-only
+proposal for default native scoring. For each candidate: correct library strand,
+veto known wrong-direction splice alternatives, credit existing VG per-node
+scores once to transcript exon/body memberships, never add complete GAMP
+alternatives, classify each transcript/branch E=100%, P=50--<100%, B=<50% with
+gene-body support, then retain per-class best scores/ties across routes/records
+for downstream assignment and CB/UMI. D091 remains max over (route, transcript),
+with no ordered-reference-walk containment or per-route body-support-subset
+enumeration. Default native output must identify `node-score-v1`; frozen profile
+definitions are not edited in place and legacy full resolve remains a frozen
+oracle, not a claimed scientific-parity baseline. Whole-count goal is paused.
+
+Known design-review pitfalls: official CR7 behavior uses STAR near-best/window
+and per-splice-segment >=50% semantics; STARsolo Ex50 uses strict >50% and can
+let antisense E veto outrank sense P/B. The user-selected whole-branch >=50%
+and early strand discard can differ. Do not silently import those extras or
+recalibrate windows. Three prefix maxima alone are unsound at merges; compact
+margin/best-score envelopes are required. Parent review must settle evidence/
+version identity before implementation; no new full test or run is authorized.
+
+**Node-score clarifications accepted before coding:** Retain argmax and admit
+within one additional mismatch inclusively: D068's +1/-4 means a pool-local
+five-VG-point window, not literal one STAR point. Score both sense and antisense;
+antisense exon evidence is a veto, superseding early sense discard. The separate
+NodeScoreResolver has six independent E/P/B-by-orientation pools, per-transcript
+max/ties, then the inclusive five-point window within each pool only (never the
+old global cross-pool score window). Complete alignment routes, not exclusive
+branch sums, are scored; P remains whole-route >=50%. Per-splice-segment CR7 is
+requested expansion only, not replacement.
+
+Sparse envelope keys are endpoint, exon margin/all-exonic, body seen, strand
+margin, valid-orientation mask, and aligned state--not support sets. Exact ties
+merge Parent provenance/support units from retained winning aliases. Node scores
+credit actual mapped segments once, not reference-path multiplicity; placement
+score remains separate and alone includes connections. Legacy full resolve and
+`node-score-v1` manifest identity remain. New gene assignments do not claim old
+parity. Complete potential path node sets are the unit; prefixes share work only.
+No production fatal biological-validity checks are authorized; flat per-node
+scorer certification is a reported pitfall, not default read rejection.
+
+**Raw alignment-alternative cutoff:** User overrides deduplication: count all
+complete alignment alternatives encoded in GAMP, duplicates included and summed
+across records per read; use it as the cheap first filter. The concluded 10k
+dedup fixture (166/10,000 or 1.66%, zero unknown) is retained as evidence but
+is not the target metric. Prior raw structural-route 167/10,000 (1.67%) is the
+relevant prior exact-10k receipt. Native simple scanner
+`R/inspect_gamp_alignment_counts.cpp` is requested to produce exact `cpp_int`
+histogram percentiles and >1000 drop fraction, with no rescoring, node/gene/index
+work. Stage 6 pause receipt persists; development is running only for this
+diagnostic. Whole goal remains paused; no biological policy, cap implementation,
+or count restart is authorized.
+
+**Raw-alternative diagnostic complete:** `total-alignment-diagnostic.validation.json`
+independently validates raw complete routes per QNAME (duplicates included, no
+rescoring/dedup): toy real GAMP 7 records/6 groups histogram {0:1,1:1,2:3,4:1};
+10k 25k records has 167 >1000 (1.67%); first 1M has 2,502,433 records,
+17,617 >1000 (1.7617%), and 19,787 zero. Nearest-rank P99/P99.9/P99.99 are
+6912/59,719,688/334,430,208,000; literal low P1/P0.1/P0.01 are zero. Root's
+independent Python recomputation agrees; `cpp_int` avoided overflow (maximum
+15,303,008,032,705,444,785). The 1M scan took 60.2414 s; 333,632-KiB RSS is a
+snapshot, not peak. No full 66.6M rescan or whole count occurred. Recommended
+cheap guard is now authorized for bounded implementation: raw total complete
+GAMP routes (duplicates included, summed records/QNAME) capped at default
+64,000,000; strict greater drops the whole read before graph/annotation queries,
+with no enumeration/dedup/rescoring. Proposed
+`--max-alignments-per-read N` defaults to 64,000,000 and 0 disables, pending
+parent CLI validation. Preserve global barcode prior over all valid groups.
+This does not resume whole count or change a scientific profile. Required tests
+cover capped overflow arithmetic, branches/connections/parallel/sources/
+multirecords, equality N retained/N+1 dropped, no graph query on reject,
+barcode-prior retention, and CLI/default/manifest/counters.
+
+**Completed tunable raw-alignment cutoff checkpoint (2026-10-31):** The bounded
+implementation and focused verification are complete. `src/gamp_alignment_complexity.hpp`
+uses O(subpaths+edges) saturating capped arithmetic to count complete GAMP DAG
+routes, including duplicates and all records with the same QNAME. Default
+`--max-alignments-per-read 64000000` drops a read only when its total is strictly
+greater; explicit `0` disables the cutoff. After the valid-barcode prior, the
+guard runs before graph lookup, caches, or assignment in both prepared/native
+and legacy direct-count paths. Each retained complete alignment remains
+separately scored and classified; shared piece/prefix work may be reused, but
+mutually exclusive alternatives are never summed. Rejections are terminal
+`unassigned_high_complexity` with reason bit `1<<18`; summary and manifest record
+the parameter and dropped counters. `convert` is unchanged. Legacy
+compatibility-in/out requires explicit `0`, because its schema cannot represent
+a dropped read; no schema expansion was made. The simplified node-score scorer
+is not implemented, and this checkpoint claims neither improved performance nor
+scientific parity.
+
+Build succeeded (`build/build-alignment-cutoff.log`); focused CTest passed 10/10
+(`build/ctest-alignment-cutoff-focused.log`); and full CTest passed 200/200 in
+31.14 s (`build/ctest-alignment-cutoff-full.log`, exit 0). The three
+mixed-configuration parity fixes set both comparison arms to explicit `0`
+(cutoff disabled), retaining all semantic/output comparisons. The first-1M helper receipt
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/cutoff-guard-first1000000.validation.json`
+reports 2,502,433 records/1,000,000 read groups, 982 drops above 64,000,000
+(0.0982%), 17,617 above 1,000, and 57.3979 s wall time. It is a non-random
+prefix, not full-genome evidence. Its exact histogram records 990,090 reads and
+35,251,126 alternatives at <=7,000; 8,928 reads and 21,981,204,583 alternatives
+at 7,001..64,000,000; and 22,016,455,709 retained alternatives. Thus the
+0.8928% tail accounts for 99.839887% of retained alternatives, not measured
+runtime. Earlier pending cutoff wording is superseded by this completed
+implementation checkpoint. The whole-count goal remains paused; no production
+launch is authorized.
+
+**Superseded scientific-phase checkpoint (2026-10-31):** The prior
+current-binary legacy-resolver 10k authorization is superseded by the user's
+explicit simplified per-alignment scorer requirement; no run launched.
+
+**Scientific-phase checkpoint correction — simplified scorer first
+(2026-10-31):** The requested one bounded 10k count must use the enabled 64M
+cutoff and simplified per-alignment scorer. The current tested binary has the
+cutoff only and cannot fulfill the test. Implement and correctness-review that
+scorer first; no old-resolver test is authorized. Then one count may use existing
+`R/first10000.gamp` (25,000 records/10,000 QNAME groups/8,506,683 bytes),
+unchanged native.pci/XG/GBWT/RI, `cr7-v1` plus `pansc-strict-v1`, 128 threads,
+300,000,000,000-byte cap/no swap, and no BAM/spill/hash/remap/index build.
+Fresh empty `R/cutoff-first10000-t128.gVysNL` may be reused after implementation.
+Whole counts remain paused.
+
+**Simplified scorer implementation and bounded-test gate (2026-10-31):**
+`NodeScoreResolver` is implemented as complete-route explicit-stack DFS with
+read-local node facts, per-piece sparse tallies, and push/pop prefix reuse;
+there is no sequence realignment, ordered reference walk, or subset-state DP.
+Node scores use existing flat VG edit scoring; E/P/B uses consumed reference
+bases, including deletions. Maxima are per transcript/pool with only exact-tied
+alias policy/support payloads, then inclusive five-point independent windows.
+Known wrong-direction splices veto candidates without an endpoint-containment
+gate. Six-pool ranking and the existing downstream profile-specific Gene
+fallback are separate; CR7 has no such fallback. All-vetoed shadow evaluation
+preserves molecule-stage eligibility without restoring gene calls.
+`--assignment-scoring node-score-v1` explicitly selects this engine; the legacy
+default remains available as the frozen oracle during validation. Output records
+the algorithm/window. Final build passed (`build/build-node-score-final.log`),
+and full CTest passed 201/201 in 31.43 s (`build/ctest-node-score-full.log`).
+
+**Authorized bounded structural diagnostic (2026-10-31):** The user authorizes
+read-only inspection of existing first-10k and first-1M GAMP only, not a
+production filter/rescue/argmax change. A standalone degree/route-count group
+diagnostic will report outer-record histograms conditional on per-record
+complexity >7,000, >1M, and >64M; nonempty remaining-record counts after
+removal; and totals checked against 25,000 records/10,000 groups and 2,502,433
+records/1,000,000 groups. No remap, hash, graph load, or full scan is allowed.
+Validated raw-sum drops remain 14 (10k) and 982 (1M). Preserve the current 10k
+container and frozen binary; 9,989/10,000 at 510.007 read seconds is not EOF.
+Smaller surviving records do not prove winning-gene safety because a discarded
+record can contain the best or competitive gene. Whole count remains paused;
+parent review precedes execution.
+
+**Authorized minimum-record-complexity rescan (2026-10-31):** The per-read
+sum histogram cannot answer minimum record-route-count percentiles. The user
+authorizes `R/inspect_gamp_record_complexity.cpp` to rescan existing first-10k
+and first-1M GAMP only, reporting per-read minimum nonempty record complexity
+(zero when all records are zero), literal minimum over all records to expose
+zero-sibling effects, weighted nearest-rank percentiles on the same 1M
+denominator, and zero/mixed-zero counts. Validate input records/groups and
+known summed-drop counts (14/982). No graph/remap/hash/filter/production change
+is authorized. Root may compile standalone in the existing dev image, without
+shared Ninja, in isolated 1--2-core/2-GiB diagnostic containers; the production
+10k test remains untouched.
+
+**Minimum-record-complexity diagnostic complete (2026-10-31):** Standalone
+compilation reused known CMake link flags inside DEV (no Ninja); DEV is stopped
+and the count producer is unchanged. Toy 9-record/7-group checks passed:
+min-any {0:2,1:2,2:3}, min-nonempty {0:1,1:2,2:4}, zero-only 1, mixed 1.
+Receipts `R/first10000.min-record-routes.json` and
+`R/first1000000.min-record-routes.json` validate 25,000/10,000 and
+2,502,433/1,000,000 records/groups plus raw-sum >64M/>1000 counts 14/167 and
+982/17,617. The 1M scan took 57.1735 s in an isolated 2-CPU/2-GiB/no-swap
+container. Both minimum histograms: zero-only 19,787, mixed 0; weighted
+nearest-rank P50/P90/P95/P99/P99.5/P99.9/P99.99/P99.999/max =
+1/4/8/64/160/9216/1990656/2388787200/149593924085760; strict-above counts =
+447441/85651/42006/8659/4978/980/98/10/0. Min >64M is 39/1M. Of 982 raw-sum
+failures, 943 have a <=64M nonempty record and 39 do not. Records >7k affect
+9,447 reads (6,055 with ten records, 1,352 with 1--2; 8,332 with a <=7k
+sibling); >64M records affect 960 (711 with ten), while 22 additional raw-sum
+failures lack an individual >64M record. This supersedes the older failed-attempt
+wording. Minimum record complexity does not establish a safe winning or
+competing gene and authorizes no policy change.
+
+**Authorized first-1M sibling-winner diagnostic plan (2026-10-31):** Before
+execution, analyze only
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/first1000000.gamp`.
+For reads whose least-complex GAMP record has 9,000--10,000 complete routes
+inclusive, report the fraction whose argmax-scored alignment occurs in a
+more-complex sibling record. Keep two results distinct: cheaply exact per-record
+maximum VG alignment score via DAG DP, and transcript-aware `node-score-v1`
+argmax. For each, report ties separately from complex-only winners; neither
+proves a safe rescue or policy change. This is a bounded structural/scoring
+diagnostic, not a production count. The current 10k node-score/cutoff gate stays
+untouched and running; whole count remains paused.
+
+**First-1M sibling VG-score diagnostic complete (2026-10-31):**
+`R/sibling-vg-score.validation.json` PASS validates the bounded global
+source-to-sink VG-score diagnostic. The 9,000--10,000 minimum-record cohort has
+43 reads/45 records: 42 single-record and one three-record read. The latter's
+records are 9,140 -> 51, 121,440 -> 46, and 922,200 -> 60, yielding one
+complex-only winner (1/43 = 2.32558%; 1/1 with a complex sibling), gap 9, and
+zero ties. All 43 pass the 64M summed-route guard; inferred starts are zero.
+The 1M scan took 57.925 s in a 2-CPU/2-GiB container. Annotation-aware
+`node-score-v1` comparison was not implemented or launched and remains pending.
+This diagnostic intentionally uses global source-to-sink score; vg's default
+`optimal_alignment_score` is local subpath-to-subpath DP. Normal VG ranking can
+use DAG DP without route enumeration, whereas current `node-score-v1` enumerates
+routes. The existing 10k benchmark is untouched and whole count remains paused.
+
+**Authorized exact sparse node-score max-DP implementation phase (2026-10-31):**
+Reconciled on `fix/whole-genome-count-repair-20261028` at `327b048`; existing
+dirty state is preserved. User authorizes replacing `node-score-v1` complete-route
+DFS with sparse exact max-DP. Preserve every E/P/B-by-strand pool and its
+inclusive five-point window, raw-model coherence, directed-splice masks and last
+covered endpoint, projected alias/evidence identity, body-support metadata and
+separate body-fallback score, then the same assignment/CB/UMI/output behavior.
+No new biology, ordered containment, spill, remap, or production launch is
+authorized. Existing exact counters/oracle and live 10k gate remain historical/
+live verification, not altered by this authorization. Required next evidence is
+bounded DP tests followed by the same 10k gate before any larger test; whole
+count remains paused.
+
+**Pre-real-10k sparse-DP checkpoint (2026-10-31):** Final sparse DP is 439
+lines with a frozen 354-line oracle. `NodeScoreExecution` test controls cover
+automatic, force-sparse, and enumerate-oracle modes; exact keys retain
+independent A/G maxima, same-TX operation grouping, support/alias restoration,
+fixed native-body support skipper state/payload, and metrics for represented
+routes, DP states/transitions, max frontier, groups, and offset conflicts. Sol
+conditionally accepted the design without a blocking flaw. Expanded tests pass:
+256 seeded small DAG full-facts/results three-mode comparisons, adverse cases,
+and a >=2^32-route DP-only case with <1,000 states. Full CTest passed 202/202
+in 31.05 s with `PYTHONPATH=/mnt/ssd/lalli/.local/lib/python3.11/site-packages`
+(`build/ctest-node-score-dp-full.log`); the first full attempt's `umi_tools`
+import environment failure required no production-code change.
+
+Frozen binary/source archive, copied CTest receipt, and runner are ready at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/node-score-dp-first10000-t128.UxhZc8`.
+The then-next authorized phase was pending launch, not live: same
+`first10000.gamp` (25,000 records), both profiles, 64M cutoff, 128 threads,
+300,000,000,000-byte/no-swap, no BAM/spill/hash, Parquet+MEX, independent
+validation, and baseline table/logical/byte/scientific-counter comparison only
+after `cutoff-first10000-t128.gVysNL` reaches EOF. That original remains at
+9,999 groups after >3,000 s. Whole launch remains paused.
+
+**Sparse-DP same-10k terminal result (2026-10-31):**
+`pancollapse-node-score-dp-first10000-20261031` launched at
+`2026-10-31T19:43:41.682094185Z` (container
+`6599e6ed92b8b5439b8d19b541e9f31e97263331eee3019e7cf22e89d1686211`) with
+300,000,000,000-byte memory and memory+swap limits (no swap) and 128,000,000,000
+NanoCPUs. It reached EOF: 25,000 records/10,000 groups, 14 cutoff drops,
+13,904 count rows, and 13,995 molecules; `validation.json` passed. Native count
+exit was 0. Manifest initialization/read/processing were 154.724650670/
+202.183747006/202.281111332 s; shell wall was 377.946674 s including cleanup,
+or about 49.46 read groups/s on the inclusive 10k denominator. Cgroup peak was
+166,680,592,384 bytes with no OOM; sampled RSS was 176,101,588,992 bytes.
+The wrapper exited 127 because post-count validation invoked bare `python3` not
+on PATH; outputs were already published, frozen runner is unchanged, and the
+independent validator reran via explicit
+`/mnt/ssd/lalli/.linuxbrew/opt/python@3.11/bin/python3.11` in a separate
+2-CPU/2-GiB/no-swap Docker container with exit 0. The original explicit
+enumerator baseline remains live at 9,999 groups after >3,600 s, so table/logical/
+byte/scientific-counter equality is pending. Full CTest remains 202/202 and DP
+differential facts/results match the oracle on 256 seeded small DAGs plus adverse
+fixtures. No CR7/legacy F1, two-hour-genome, or promotion claim follows. Pending
+cross-TX grouping status is superseded by the next checkpoint. Whole count
+remains paused.
+
+**Pre-real-10k final cross-TX quotient checkpoint (2026-10-31):** The exact
+quotient in `src/node_score_resolver.cpp` is implemented and Sol final review
+passed without correction. It preserves complete-operation/fixed-support/full
+sparse per-local-edge two-bit-mask grouping, raw TX/policy/support/winner
+restoration per alias, force-sparse singleton, and original enumerator. A pure
+performance guard skips cross-edge closure when all piece deltas are empty,
+preserving route/offset telemetry and outputs. Focused passed 1/1 in 0.20 s and
+full passed 202/202 in 32.57 s (`build/ctest-node-score-behavior-full.log`),
+including 64 cross-TX seeded cases atop 256 existing: absent-vs-mask3,
+fixed-vs-variable support, bridge veto, exact different policy/support
+restoration, and group reduction. Frozen binary/source/logs/runner/receipt are
+at `/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/node-score-behavior-first10000-t128.gISKSl`.
+Launch is pending, not live: same 10k, profiles, 64M cutoff, 128 threads, 300 GB
+no swap, existing indexes, no BAM/spill/hash/remap/index build; independent
+validation and automatic ten-file byte/logical/scientific-counter comparison
+against completed first-DP output are required. The old enumerator remains live.
+Comparator receipts are future `R/node-score-enumerator-independent-validation.json`
+and `R/node-score-dp-vs-enumerator.parity.json`; neither is passing evidence.
+Whole genome remains paused.
+
+**Cross-TX quotient same-10k terminal gate (2026-10-31):**
+`pancollapse-node-score-behavior-first10000-20261031` started at
+`2026-10-31T20:00:51.074088999Z` (container
+`416becaaf21aa5160bd02c0d48a54194513d1e382e05ca5c6f9a4c93c4563eae`) with
+verified 300,000,000,000-byte memory and memory+swap limits and
+128,000,000,000 NanoCPUs. It exited 0/no OOM at `2026-10-31T20:05:57.313310042Z`
+after EOF on 25,000 records/10,000 groups: 14 drops, 13,904 count rows, and
+13,995 molecules. Independent reader passed; all ten outputs are byte-identical
+to completed first-DP output with equal profile definitions, logical identities,
+and scientific counters (cache work excluded). No F1, CR7/legacy, or production
+claim follows. Init/read/processing/wall were 150.430731581/128.025707080/
+128.138611337/303.977775 s; read rate 78.1093 groups/s. Sampled RSS/cgroup peak
+were 167,081,734,144/157,636,481,024 bytes, no OOM or spill. Model groups and DP
+states were 158,583 and 1,258,500,451 versus first-DP 8,784,273 and
+4,376,860,251 (55.39x/3.48x fewer); count phase was 1.58x faster, while ~150-s
+initialization is unchanged. Raw-model transfer work remains 629,485,930, so a
+two-hour genome target is unproven. Full 202/202 and 320 seeded small-DAG
+differentials/goldens pass. The original enumerator remains live at 9,999 groups
+after >4,530 s; the background comparator awaits EOF, not full-real oracle
+parity. Next safe work is larger-fixture/performance evidence after its own
+checkpoint; whole genome remains stopped.
+
+User redirected to per-read percentile cutoffs: reuse
+`R/first1000000.total-alignments.json`, whose metric already sums all raw DAG
+routes across each QNAME's records. No new scan is needed. Weighted nearest-rank
+P50/P90/P95/P99/P99.5/P99.9/P99.99/P99.999/max are
+3/24/67/6912/118672/59719688/334430208000/681661459881772/
+15303008032705444785, over exactly 1M groups and 2,502,433 records.
+The separate conditional-record diagnostic did not run (isolated compile
+environment failures before input open); its source exists but no result receipt
+does. Do not claim a conditional complex-read record distribution is measured.
+The authorized one-10k test is now launch-ready at
+`R/cutoff-first10000-t128.gVysNL/run.sh`, explicitly selecting node-score-v1,
+64,000,000 cutoff, both profiles, 128 threads and 300 GB/no swap. This is not a
+whole-count resumption or an old-assignment parity claim.
+
+The bounded count launched at `2026-10-31T18:47:25.587391629Z` in
+`pancollapse-node-score-cutoff-first10000-20261031`
+(`b75cf2019b406bcf588daef45127c1be35edd0d391a9c80ce59c207e4b557b69`).
+The test root contains its copied executable, exact `run.sh`, terminal CTest
+log, `run-receipt.json`, count log and five-second resource samples. Sol's final
+bounded review found no remaining correctness blocker; it explicitly did not
+approve whole-genome production or old-assignment parity. The build container
+was stopped once idle. Counting/output validation and throughput remain pending.
+
+Latest bounded-test milestone: 9,987/10,000 QNAME groups completed at 300.004 s
+of read processing (~33.3 input groups/s, provisional; 13 high-complexity reads
+remain). Initialization was 155.803 s; observed cgroup peak is 132,202,708,992
+bytes, no OOM. The early 9,118/30-s rate (~304/s) is not final throughput.
+Existing exact fixture histogram predicts 14 above-cap reads and 239,882,441
+retained alternatives; the filter does not make the retained tail cheap.
+There is no per-alignment/per-read sink: count/resource logs total 30,908 bytes
+at this milestone (118 count-log lines/17,817 bytes and 97 resource lines/13,091
+bytes). Large log numbers are aggregate counters, not serialized alignments.
+Continue this same frozen 10k run to EOF and independent output validation;
+do not change its cutoff, expand the fixture, or launch whole counts.
+about 124 busy cores and >99.5% CPU user, 105.08M native queries/95.43B
+occurrences, 5.684B raw-model visits, and 537.51B DP state cells in per-model/
+behavior `std::map<StateKey,State>` traversal. Actual collector visits are
+431,860,084,428 (=1,995,995,637,646 raw logical minus
+1,564,135,553,218 counter-only avoided), comprising 428,975,326,656 memo hits
+plus 2,884,757,772 materializations: 99.332% rediscover existing candidates
+after alias/profile expansion. Whole-signature cache hit rate was 18.9% at its
+512-MiB bound. Near-ready cgroup memory was 73--76 GB versus 406.49-GB peak;
+exact heap/CPU attribution is unmeasured. No remedy, semantic change, or
+implementation is authorized by this diagnosis.
+
+Stage 5 A/B/C is implemented and parent-reviewed against frozen Stage 4. The
+cache now charges its full string key plus approximate map/control/bucket and
+result payload globally within 512 MiB, rather than charging values alone;
+legacy insertion-only default, outside-lock builders, full equality, and
+observations are unchanged. Focused `native_count_query_test` passed 1/1 in
+1.00 s and full 198/198 passed in 32.40 s
+(`build/ctest-cached-inline-full.log`, copied as `ctest-cached-inline-full.log`
+to the run root). Native CLI legacy parity passed finite duplicate-evidence,
+different-CB/UMI-quality, featureless, wrong-strand, and uncorrectable cases;
+headers cover full-key mutations, support semantics, concurrency, collision,
+oversize, and failures. Frozen artifacts are `panCollapse-cached-inline`
+(114,174,464 bytes) and `source-cached-inline.tar.gz`.
+
+The same-prefix 128-thread Stage 5 real-10k gate began at 14:28 UTC in
+`pancollapse-native-cached-inline-first10000-20261031`
+(`173f144717edcef1ff01a227163f9ca4a8936ab5a37fccbc13b29eabfbf4f30c`),
+with existing native.pci/XG/GBWT/RI, same profiles, 500 GB/no swap; index load
+took 4.28836 s. It reached genuine EOF (25,000 records/10,000 groups), exit
+0/no OOM at `2026-10-31T15:24:07.078856015Z`; independent reader passed
+(`cached-inline-first10000-t128.validation.json`). All four Parquet tables,
+logical hashes, MEX, and scientific counters exactly match Stage 4
+(`first10000.cached-inline-vs-transfer-parity.json`): 14,004 count and 14,095
+molecule rows; ready/read/final 159.204247955/3141.699891474/0.465537699 s,
+wall 3318.905 s, CPU 13121.952 s, system 247.774 s, peak 132,201,291,776 bytes.
+Cache recorded 9,382 entries, 618 hits, zero uncached, and 159,451,941 charged
+bytes; resulting work-counter reduction is actual permitted hit work. Stage 3
+remains live at 9,999 groups after about 9300 s without EOF. Stage 4 is now a genuine 10k EOF: 25,000 records/10,000 groups, exit 0/no
+OOM at `2026-10-31T14:51:30.834648311Z`; independent reader validation passed
+(`transfer-first10000-t128.validation.json`) with 14,004 count and 14,095
+molecule rows, ready/read/final 154.653820861/4997.695011896/0.810682403 s,
+wall 5171.601 s, CPU 18636.597 s, and 132,201,127,936-byte peak. It is evidence
+only until Stage 3/4/5 exact comparison. No whole count, F1, or release result
+is established.
+
+After parent review and fresh preflight, frozen Stage 5 full count launched at
+`2026-10-31T15:09:26.107895372Z` in
+`pancollapse-native-whole-cached-inline-20261031`
+(`7648d97ab46b21c9cbd18c68b5b4830550a0ae8b29d40db4c2d37355311251a6`),
+host init PID 1230154. It uses frozen `panCollapse-cached-inline`/source,
+unchanged `run-count-only.sh`, native.pci/XG/GBWT/RI/full GAMP, 128 threads,
+500-GB memory and memory-plus-swap/no-swap limits, default Parquet/memory-only
+output, and no BAM/spill/hash. Preflight observed MemAvailable 691,667,886,080
+bytes (>=660 GB), 256 CPUs/no swap, 11,916,846,014,464-byte disk, and absent
+destination/staging; control PID/executables were unchanged. Ordinary index/XG
+loads took 4.87111/6.76435 s; RI/GBWT took 38.0166/158.238 s and pre-read
+native queries were zero. It has streamed 230,095 groups at 750.008 s
+(`2026-10-31T15:24:53Z`), with about 279-GB cgroup peak/no OOM and host
+MemAvailable about 503 GB after the Stage 5 control freed. Resource sampling is
+active (`whole-cached-inline.resources.tsv`).
+**Historical live-monitor milestone:** At `2026-10-31T16:31:10Z`, the full container was genuinely live at
+1,200,000/66,601,887 groups after 4734.65 s (PID 7, 128 threads, 500 GB/no
+swap). Latest cgroup memory values are 390,104,215,552 bytes current and
+406,490,640,384 bytes peak; all `memory.events` max/oom/oom_kill are zero, and
+host MemAvailable is 394,150,000 KiB. This is not EOF, finalization, or
+scientific acceptance. Stage 3 control remains live at 9,999 groups after
+13260.1 s on one active CPU core, with no EOF. The Stage 4/5 exact 10k receipt
+is therefore only partial of the three-way gate. The batch-streaming 65,536-row
+`validate_counts.py` is reviewed ready for full EOF. The only stopped unused
+container was idle developer `3d21f8a16391` at 15:33:50 UTC (tail process only;
+no files deleted); the required full and old-parity controls remain active.
+Restart that developer container only for validation, then stop it again. Only
+the full count and required Stage 3 control are active. The user update was sent
+at 16:31 UTC (the earlier 16:11 marker was prepared, not sent); next update is
+not before 17:01 UTC unless an exception occurs.
+
+`counts/` is PROVISIONAL_UNACCEPTED: do not publish, interpret, or use it until
+the exact Stage 3/4/5 10k and independent full-output gates pass. Stop first on
+parity mismatch, source fix, OOM/limit pressure, or MemAvailable approaching
+100 GB. A read-only memory audit finds NativeSource TLS caches clear per group
+and fixed references; read-proportional completed-name plus exact/deferred-UMI
+aggregates and DP/allocator high-water are plausible RSS sources, not proof of
+a leak. No source fix, semantics, or new experiment is authorized. No scientific
+acceptance or whole-genome completion is claimed.
+
+**Historical Stage 4 implementation/early-progress note:** Stage 4 read-local transfer and terminal projection passed focused 1/1 in
+0.91 s and full 198/198 in 31.06 s; frozen binary/source/receipt are
+`panCollapse-transfer`, `source-transfer.tar.gz`, and `ctest-transfer-full.log`.
+Its 128-thread 10k control is at 9,997 groups after 1320 s versus frozen Stage
+3's 9,997 at 3630 s, with the same completed-model/route/state-cell/logical-
+emission/retained totals at that milestone and 132-GB peak. Neither has EOF or
+output parity, and whole count is not restarted. Source review confirms the
+original fixed-reference assignment cache is bypassed by
+`prepared_count.cpp:258` (`resolver.resolve`) and `main.cpp:3160`; its legacy
+256-shard/655,360-entry cache remains unused, native cache metrics are zero,
+and TLS node/edge caches clear per group.
+
+Root authorizes bounded A/B/C implementation, not gate or whole-launch
+acceptance. A restores the fixed-run/profile successful-final-assignment cache
+before Source queries, with a full serialized read-evidence key (record bounds,
+starts/sequence lengths, subpath Position/Edit/score/next/connections; no
+QNAME, contents, or quality), the reusable sharded cache capped at 512 MiB and
+655,360 entries, full equality, outside-lock builds, and no disk/CLI. B changes
+numeric support storage to inline `small_vector<uint32,1>` flat set and inlines
+numeric-memo vectors while preserving exact ordered values. C uses compact
+automatic-map `try_emplace` and successor `lower_bound` with existing full-key
+and strict score-only maximum behavior; checked-add remains first. Observations
+always execute on hits and `begin_read_group` remains first; all-raw,
+forced-generic, and raw-serial remain unchanged. Source/binary, focused/full
+tests, exact complete-10k output gates, and the no-EOF Stage 3/4 controls remain
+distinct; cache work metrics may decrease only for actual saved work. A bounded
+detached GDB snapshot confirms map find/iteration and set-clone allocation, not
+percentages.
+
+Stage 3 implements full-literal, per-profile four-pool candidate interning and
+success-only numeric memoization in the automatic native route
+(`stable_unique_memoized`); legacy `all_raw` is unchanged. Sol gives conditional
+source acceptance. The final all-15-override and novel-profile suite passed
+198/198 in 30.80 s (`build/ctest-native-interned-final.log`). The 16-thread real-100
+control exited 0/no OOM at `2026-10-31T12:46:32.549458304Z` and exactly matches
+frozen-100 in Parquet, MEX, scientific counters, and logical hashes
+(`first100.interned-parity.json`): read 1.545567871 s, ready 144.149925717 s,
+final 0.043175297 s, 156 count and 156 molecule rows. Its independent reader
+passed (`interned-first100-t16.validation.json`), with sampled max RSS
+131,736,555,520 bytes and cgroup peak 132,202,790,912 bytes. The 128-thread interned 10k control
+`pancollapse-native-interned-first10000-20261031`
+(`ff854b5a7742bb5972f2edb331ad04dca3da37851555a9879268db5a046cf655`) is live:
+at 90 s, 9,981/10,000 groups and 128-GB RSS, with no EOF yet. A compact
+raw-model-serial 10k 16-thread diagnostic ran as
+`pancollapse-native-interned-raw-serial-first10000-20261031`
+(`66fd5937483da7e0c7dea4638993fe6b5368a7999ff14fa47d1d0c9ed97d6a8b`),
+and was stopped incomplete after the explicit internal-count oracle amendment:
+SIGTERM at 13:12:56 UTC, exit 143/no OOM at 13:13:05.029 UTC, wall 1319.282 s,
+sampled peak RSS 131,596,333,056 bytes. It produced no count outputs. The
+prior grouped-jemalloc 10k attempt exited 143/not OOM at
+`2026-10-31T12:20:36.087636348Z` after 307.687 s and RSS 377,611,792,384 bytes.
+No whole-genome count, raw-serial 10k oracle parity, Python/F1, or release
+result is established. For a provisional internal both-profile count only, the
+accepted oracle is complete frozen Stage 3 automatic 10k EOF, frozen with its
+binary/input-prefix manifest and payload validation/index identity/profiles/
+config. Stage 4 must independently reach the same true 10k EOF and match all
+four Parquet tables, logical hashes, MEX, scientific terminal/CB/UMI counters,
+and route/model/state-cell totals while staying below 500 GB and operationally
+viable; only query/memo/materialization and timing/RSS metrics may differ. This
+does not waive raw 10k, Python/F1, or release certification, and accepts a
+residual latent Stage-3 grouping-risk anchored only by frozen real-100 and
+all-raw unit tests. No other large pilot is required. After these gates,
+`run-count-only.sh` may launch a provisional internal count using the reusable
+9.77-GB index and XG/GBWT/RI under 500 GB/no swap/up-to-128 threads,
+memory-only default-Parquet output, no spill, BAM, or hash.
+
+The strict 10k interned control fits at about 120--132 GB but remains
+computationally tail-bound (9,987 groups at 390 s, about 1.4 billion state
+cells, 4.54 billion raw terminal emissions, and 24.4 million retained). Sol has
+accepted a source proof for a minimal read-local subpath-transfer delta cache
+and sink-local stable-unique terminal projection. Root reviewed this checkpoint
+and authorized bounded implementation at 13:09 UTC; code and new gates are
+not yet accepted. Both retain all-raw/forced-generic/raw-serial traversal as
+oracle, raw pairs/facts/emission multiplicity and biological/profile policy.
+The required tests cover orientation, node-end/same-node/body-edge, empty/
+insertion/repeat/support-union, multi-sink/score/unknown-edge/source-fault,
+and collision paths, with raw facts, compact facts/full results, and state-cell
+counts compared to frozen Stage 3. Full 198 and complete 10k output comparison
+remain mandatory before any whole-genome launch.
+
+Stage 2 now executes one independent read-local behavior group at a time,
+preserving every raw-model candidate and original sink/model/StateKey order.
+The old all-model map remains the forced small-fixture oracle; a separate
+raw-model-serial control disables grouping and the chain fast path. Complete
+ordered facts/results match for automatic, raw-serial and forced hash-collision
+execution, including fixed/mixed support, D107, multiple records/sinks/sources,
+bridges, scores and single-fault errors. GBWT metadata-clear API equivalence
+also passes. Consequential source inspection found no semantic blocker.
+The complete Docker suite passed 198/198 in 30.24 s
+(`build/ctest-native-serial-group-full.log`), and the restored automatic build
+passed the focused seven-test closure in 5.72 s.
+
+The run root freezes `panCollapse-serial-groups` and
+`panCollapse-raw-model-serial` (112,283,952 bytes each), their distinct source
+archives, and `ctest-serial-group-full.log`. The raw-serial binary was made by
+temporarily selecting that resolver in the prepared counter constructor;
+production source was restored to automatic and rebuilt. No public test flag
+or default policy was added. A frozen 100-group actual-EOF baseline has
+completed and passed independent Parquet/counter validation (209 records,
+156 count rows and 156 molecule rows across both profiles, no OOM).
+Its 100 groups retain exactly the source protobuf payloads. Optimized and
+raw-serial 100-group controls finished in independent output paths; their
+parity passed: all four Parquet tables, logical hashes, MEX content
+and scientific counters match the frozen baseline exactly
+(`first100.stage2-parity.json`). Both new controls exited 0 without OOM and
+passed independent reader checks. Their sampled peak RSS was about 131.9 GB;
+the optimized generic state-cell count was 23,323 versus 7,218,810 for the
+ungrouped raw-serial control. This is a small-real-prefix observation, not a
+sustained whole-genome speed claim. The strict 10k raw-serial control was
+SIGTERM-stopped at 12:14:11 UTC as RSS reached about 409 GB and completion
+stalled at 3863 groups. It exited 143/OOM false at 12:14:59.802 UTC after
+530.260 s; sampled peak RSS was 443,453,325,312 bytes and cgroup peak
+435,976,323,072 bytes. No EOF or 10k oracle output exists. The grouped
+16-thread jemalloc diagnostic was also SIGTERM-stopped at 12:19:45 UTC before
+the cap; that pending-exit wording is historical. Its sampled heap estimates
+255,375 MB total, with `emit_exact_candidate`/`resolve_one_serial_group`
+167,655 MB (~66%), `candidate_for` 27,632 MB, `flush` 5,568 MB, and node
+membership below 250 MB. These are not exact RSS, but locate pressure in
+terminal candidate buffering rather than DP node cache. The exact frozen-100
+and full unit/integration passes stand, but the intended 10k oracle-parity gate
+is not satisfied. There are still no whole-genome outputs.
+
+The next technical direction, now accepted by consequential review and root
+after this documentation checkpoint, is early stable interning of structurally literal-identical
+`AssignmentCandidate` values in four separate allowed/vetoed exact/fallback
+pools per profile. It must retain a minimum canonical
+(record,sink,raw-model,StateKey-emission) coordinate and final-sort order because
+generation is noncanonical. Default retention remains `all_raw`; compact facts
+are native-production opt-in only. Raw pair IDs and source facts remain unchanged;
+`all_raw` retains literal fact multiplicity, while compact returned facts must
+equal the canonical stable-unique projection. Every result/reason, CB/UMI,
+profile result and output remains exact: no Parent geometry or
+policy merge, state-key quotient, lower-score pruning, or hit cap. Required
+tests compare full results plus stable unique-fact projection across old
+all-model/raw-serial/group modes, typed overrides, hash collisions, pools, and
+ordering, followed by full CTest, frozen-100, and real-10k resource gates.
+Original 10k oracle parity remains unmet.
+
+The same review accepts a resolve-local successful-materialization memo keyed
+by profile/pool, policy ID, score, tier, strand and body-support ID set only for
+body tier. A new key must first materialize/validate the full candidate and
+enter the literal interner; a repeated identical numeric key can reuse that
+entry and update its minimum canonical coordinate. Different policy IDs must
+materialize independently before any full-literal merge. Source and effective
+profiles stay immutable; no memo is shared across reads. Both basic interning
+and memoized interning require exact stable-unique facts and complete-result
+comparison against all-raw oracles. StateKey count-quotient/max-score collapse
+was rejected because it can erase a score-window-pruned reason.
+
+The final native-query binary passed all 198/198 CTest checks in 31.03 s
+(`build/ctest-native-full-final.log`). The repaired focused gate passed 12/12
+in 6.40 s (`build/ctest-native-focused-repaired.log`), including exact biological
+tables, MEX, logical hashes, terminal and barcode-stage counters at
+1/2/4/8/16/128 threads, joint/separate profiles and a reverse-strand derived
+profile. The 1000-alias fixture retained 1001 raw models and matched legacy;
+its native four-group read phase was 0.00711 s (toy-only, not a whole-genome
+throughput estimate). No native query runs during preload. The source-level
+D107 bridge and terminal/barcode provenance issues are fixed without changing
+frozen assignment policy.
+
+New run root:
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/`.
+It freezes the accepted 111,622,752-byte binary/source/test receipts and builds PCANBND1
+from the existing PCI3 plus GBWT metadata only, then attempted to count the unchanged
+66,601,887-group GAMP with XG/GBWT/existing RI, both profiles, 128 threads,
+500,000,000,000-byte/no-swap limit, no count spill or BAM, and no extra input
+hash pass. Whole-genome fit, reader EOF and final counts remain unproven.
+
+The metadata index completed at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/index.receipt.json`:
+9,765,357,968 bytes, 190,240,849 paths, 95,130,819 raw pairs, 1749.71 s
+reported/1771.748 s process wall, 183.38-GB cgroup peak, and no path steps.
+The first count loaded ordinary-parallel index/XG/RI/GBWT in 4.37089/14.6753/
+95.8872/176.179 s, was ready in 181.525 s with zero query preload, then took
+7.81606 s for its first 1k groups and 70.7681 s for 10k. It was stopped by
+SIGTERM at 11:08:59 UTC because cgroup use reached 476,584,603,648 bytes
+(RSS 460,924,900 kB) approaching the 500-GB cap; Docker exited 143 at
+11:10:07 UTC, OOM false. `count.time.txt` records 627.091 s overall. There is no
+EOF or output. The safe index is reusable. This observation does not prove a
+memory leak: WorkerCache cleanup, transient models/state/candidates, and 128
+glibc arenas remain plausible pressure sources. An allocator A/B is diagnostic
+only if needed; a copied host jemalloc 5.3 passed image load/profiling-option
+smokes and is now being used only for the bounded allocator diagnostic below.
+
+The frozen 128-thread strict `first10000.gamp` control—not the earlier
+unordered 10k completion milestone—also reached the cap and was SIGTERM-stopped
+at 11:21:11 UTC (last anonymous RSS 453,770,848 kB, cgroup 498,153,754,624,
+peak 499,999,997,952, OOM 0, `memory.events:max` 3223, 39 threads remaining);
+it exited 143 at 11:22:08.815 UTC after 592.294 s. There is no EOF or output.
+The native index is unchanged and safe. This does not establish a root cause.
+A frozen plain 16-thread strict control, container
+`pancollapse-native-prefix-control16-20261031`, began about 11:25:14 UTC but
+also failed before EOF: exit 137/OOM true at 11:35:51.869 UTC, cgroup peak
+499,999,997,952 bytes, sampled process RSS 507,377,152,000 bytes (including
+shared file mappings), and 637.201 s overall. This is still not a root-cause
+diagnosis. Frozen binary plus jemalloc 5.3 at 16 threads, with bounded sampled
+heap profiles, started at 11:36:02 UTC as
+`pancollapse-native-prefix-jemalloc16-20261031`; its label/receipts are
+`frozen-jemalloc-first10000-t16`. It also failed before EOF, exit 137/OOM true
+at 11:45:19.492 UTC, with cgroup peak 499,999,997,952 bytes. The allocator is
+diagnostic, not promoted. Its sampled live heap identifies resolver state
+propagation as major pressure (41,456.2 MB cumulative in the first analyzed
+sample, versus 912 MB candidate construction), and redundant GBWT metadata
+as 42,240 MB. These are sampled allocation estimates, not exact RSS. The
+profiles and `heap-frozen-i1.txt` remain in the run root.
+
+Stage 1 (unique-chain fast path, flat model sort/unique, binary D107 lookups,
+model hoisting, and stats) has focused 1/1 and 3/3 passes and 198/198 complete
+CTest passes in 60.57 s (`build/ctest-native-linear-full.log`). Its frozen
+binary/source are `panCollapse-linear`/`source-linear.tar.gz` in the run root;
+Stage 1 is not real-data resource qualified. The approved next computational
+work groups per-alignment DP only
+where full effective node membership/presence/flags, reachable effective
+oriented transitions, D107 behavior, and fixed support status agree; all raw
+pairs/facts/emission order/profile rules remain and generic DP is forced oracle
+for mixed support labels. Exact oracle comparisons must cover specified
+fixed/overlap/mixed support, policy/transcript/edge/D107, branch/merge,
+empty/insertion, raw-duplicate, and hash-collision cases. Require full CTest,
+exact frozen 16-thread prefix outputs/counters, and a resource gate before any
+full restart. jemalloc 5.3 is an optional smoke-tested diagnostic, not adopted.
+The follow-up consequential review accepts processing independent raw-model
+or behavior-group DPs one at a time, retaining the original State transition
+and strict-greater score dominance. Per-sink/profile allowed and vetoed
+buffers must restore sink/raw-model/StateKey fact order. Keep the old all-model
+map as the small-fixture oracle and add a raw-model-serial control for the
+real prefix. This removes simultaneous model-state storage without deleting
+raw facts or changing biological rules; multiply-corrupt-input exception
+ordering is not promised. Native loading now also releases redundant GBWT
+name metadata after numeric identity checks; an API before/after query test
+and full rebuild remain required. No whole-genome restart is authorized by
+unit passes alone.
+
+**Stopped predecessor (historical):** after the seven-byte boundary/raw-ZSTD and complete fixture
+byte comparison passed, the 104,928,704-byte slab binary passed 195/195 CTest
+checks in 27.04 s. Run root
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_node_slabs_count_20261031_iVn7rR/`
+launched its index container at `2026-10-31T06:12:28.764761604Z` but was stopped
+at `2026-10-31T08:15:15.87979019Z`, exit 143 and not OOM; PID 157285 is gone.
+Terminal scan state was 104,448/16,469,090 targets, 18,972,832/95,110,030
+Parents, 45,633,563,883/224,984,793,940 streamed steps, 22,589,770,903 encoded
+bytes, 22,817,013,760 allocated bytes, and 184,861,290,496-byte peak RSS. No
+`counting.pci`, GAMP processing, or counts exist. The 195/195 and fixture-byte
+receipts are implementation-only historical evidence, not whole-genome
+completion.
+
+The user approves a load-ready, prebound numeric annotation object used with
+XG, transcript GBWT, and the existing RI. It is custom annotation/metadata
+only, not the 225-billion-step path index. Count must load or mmap it, attach
+the native references, and begin GAMP processing without string joins,
+metadata/path/node prepasses, `prepare_paths`, FastLocate construction,
+geometry building, or global warmup. Persist ready raw exon/body pairs and
+policy/support facts; native GBWT/RI are limited to touched-node and local-edge
+queries. D105 and D107, frozen profile/barcode/UMI/output contracts, and the
+per-gene goal remain unchanged. The unproven PCANCOUNT2 cross-Parent geometry
+merge is excluded from this route. Implementation and its parity-corner/direct
+native-query tests are next; then a new full suite and performance fanout gate.
+No whole-genome launch occurs before those gates.
+
+**D110 implementation checkpoint:** branch
+`fix/whole-genome-count-repair-20261028` is at `327b048ce874` with preserved
+dirty state. New native index/reference, CLI/runtime, resolver/shared-source,
+and focused verifier work implements PCANBND1 metadata-only compilation from
+raw Parent exon-by-body pairs with CSR and a feature catalog; it does not walk
+paths/nodes or use the PCANCOUNT2 cross-Parent geometry merge. The prepared
+counter loads the native object with XG/GBWT/RI and no GFF/ledger parse,
+reference joins, or count prepass. Trusted PCI3 reading skips the whole-payload
+SHA while strict legacy validation remains default; the current native route
+trusts existing RI receipt sizes/prior hashes. The FastLocate sequence-ID versus
+packed-SA issue is fixed. The D107 empty-subpath Gene-fallback leak has a
+source-level fix: carry the last reference-consuming endpoint through empty or
+insertion-only subpaths over `next` and `connection` links. A combined Docker
+build passed; the six focused codec/query/direction/runtime/index tests passed
+in 0.91 s (`build/ctest-native-basics.log`). The follow-up rebuild also passed.
+The expanded focused gate passed 11/12 tests but failed native CLI terminal
+counter parity (`build/ctest-native-focused.log`): all four Parquet tables,
+logical hashes and MEX matched the nine-read legacy fixture; one antisense
+read became `unassigned_no_evidence` instead of `unassigned_opposite_strand`.
+Removing a wrong-way candidate also erased its barcode-stage eligibility.
+A resolver-local pre-veto diagnostic evaluation is being implemented, without
+allowing rejected candidates into returned facts or counts and without changing
+the frozen assignment policy. The consequential review accepts that mechanism
+and the empty-subpath fix. Integration/full-suite gates remain pending. Before an immutable new native index/count launch, run
+focused codec/query/direct-parity checks at 1,2,4,8,16,128 threads, the
+1000-alias fanout case (1001 expected), and the complete existing CTest suite.
+The active goal is both-profile outputs for 66,601,887 GAMP groups, not a
+scientific parity or performance claim. No new run root exists; production is
+stopped.
+
+**Read-only architecture evidence (2026-10-31):** Native FastLocate nodeDA
+exposes numeric oriented path IDs with visit multiplicity, and its two-node
+find/locate exposes oriented adjacency IDs; neither API encodes gene, exon, or
+body-policy semantics. The existing RI (44,433,079,158 bytes), GBWT
+(44,562,796,448 bytes), and XG (5,560,818,652 bytes) are present; no hashes
+were taken. Local GBZ load invokes named-path LF-walk caching, whereas normal
+XG+GBWT+RI deserialize/attach does not; this is observed behavior only, not a
+selected route. The current PCANCOUNT2 model equality (`same_model`) can merge
+different raw exon Parents with the same full exon geometry and then combine
+body fragments/supports. Legacy D105 code retains raw exon-by-body pairs within
+Parent. Their observational equivalence is unproven, and the 195 small
+fixtures do not cover that counterexample; a regression fixture is required
+before any future promotion. No whole-genome output exists, so this does not
+establish a wrong count. Production remains stopped pending validation gates.
+Continuing progress updates are every 30 minutes unless directly answering or
+stopping a job.
+
+**Historical compact-construction milestone, 2026-10-31T05:55:12Z:** source loading,
+path binding, and temporary edge ranking completed. The source has 16,469,090
+canonical targets and 224,984,793,940 path steps. The compact scanner has
+processed 1,745,056 linked Parent groups / 4,164,805,763 steps, retaining
+1,946,002,334 encoded payload bytes. RSS is 155,355,648,000 bytes, below the
+176,450,789,376-byte initialization peak. No index publication or GAMP counting
+yet; final fit and elapsed time remain unproven. The old expanded attempt had
+already reached 339 GB by 4.75 billion steps. Independent streaming output
+validator `validate_counts.py` in the current run root passes on the existing
+nine-read fixture; it has not validated whole-genome counts that do not yet exist.
+
+The prior production attempt remains stopped. Container
+`pancollapse-intronic-fragment-count-20261031-jFlfrm-r1` stopped at
+`2026-10-31T01:38:02.955258791Z`, exit 143 and not OOM. A live Docker check
+confirmed that attempt stopped. Its final log remained in path-catalog
+initialization, with no GAMP processing or final counts. Preserve the existing
+inputs, compiled index, frozen binary and run files. D105's containment removal
+remains active. The user now authorizes implementation and tests for a
+graph-specific prepared numeric node-counting index, directly queried while
+streaming reads. It moves reference parsing, path binding, catalog, model, and
+junction preparation offline; prepared counting loads no GFF, ledger, XG,
+GBWT, RI, DNA sequence, or full graph walk. Preserve transcript-specific
+exon/intron evidence, strand, scores, splice support, and profile/barcode/UMI
+rules. D105 has no ordered-containment requirement, and D107 remains a hard
+wrong-way splice-candidate exclusion.
+
+**Historical v1 prepared-path acceptance (2026-10-31):** the 102,781,736-byte binary
+passed all 195/195 CTest checks in 26.39 s; receipt:
+`build/ctest-prepared-final.log`. Focused codec, scoring, and directed-junction
+checks passed, as did the nine-read Parquet/MEX logical-count and molecule
+parity fixture at 1/4 threads and joint/separate profiles. This is validation
+of the prepared path, not whole-genome fit, reader EOF, final counts, or
+production completion. Source remains branch
+`fix/whole-genome-count-repair-20261028` at `327b048...`, with 77 preserved
+dirty paths.
+
+**Resource redesign gate (observed first attempt):** run root
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_node_count_20261031_5gyam1/`
+contains the frozen binary, source archive, 195-test receipt, and index-then-count
+script. Container `pancollapse-node-count-20261031-5gyam1`
+(`80e9ad2d80a5e01062556f285bc110338c5739c85df7cd0b10666e6ffcf4a059`)
+was stopped at `2026-10-31T05:01:53.714Z`, exit 143 and not OOM, during
+whole-genome PCANCOUNT1 construction. It reached 339 GB peak RSS by 2,400,000
+of 95,110,030 linked groups. No completed index or read count exists.
+
+The accepted engineering repair is construction-time compaction, not a
+biological-policy change: target-local compilation, deterministic per-target
+sample-support dictionary pre-encoding, shared 256-node/64-edge bitmap blocks
+with ZSTD rows, and at most 32 live geometry workers even when `--threads 128`
+is passed. Only selected annotation-edge keys are persisted; graph-edge ranks
+are temporary compiler state, and GBWT-only transitions receive deterministic
+lexical overflow ranks before publication.
+It preserves model and distinct scoring IDs plus D105/D107 semantics.
+
+**Historical PCANCOUNT2 acceptance and first launch:** the final 104,884,760-byte binary
+passed all 195 CTest checks in 26.72 s; receipt
+`build/ctest-prepared-blocks-release.log` is copied to
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_node_blocks_count_20261031_rywaxM/ctest.log`.
+This includes count/molecule/MEX parity, the missing-edge fixture, and byte-identical
+1/4-thread index construction. It validates the prepared implementation, not
+whole-genome fit, reader EOF, or output counts. Container
+`pancollapse-node-blocks-count-20261031-rywaxm`
+(`82dafdc8202706d92f80220ce7446420fdeff5eb85ac82501a10062df71fdbc3`)
+launched at `2026-10-31T05:19:29.175716381Z` but was stopped at
+`2026-10-31T06:06:23.480629105Z`, exit 143 and not OOM. Terminal construction
+statistics were 9,205,174,225 steps/225 billion, 3,936,680 Parents, and
+4,613,383,674 encoded payload bytes; peak RSS was 176,450,789,376 bytes
+(~176 GB). Count never started. This is not an observed final-fit failure:
+review found a credible late `std::vector` payload reallocation that can double
+memory beyond the cap despite projected final fit.
+
+The accepted allocator-only repair is `EncodedBuffer`: append once into 256-MiB
+RAM slabs, then stream used regions into the same flat PCANCOUNT2 encoded
+section. It changes neither reader, on-disk format, policy, nor I/O/spill
+contract. The seven-byte-boundary raw/ZSTD checks passed; the complete fixture
+byte comparison passed between
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_node_blocks_count_20261031_rywaxM/fixture-pre-slab.pci` and
+`build/tests/vg/xg/prepared_count_work/run-5csmbeu8/prepared-node-count.pci`.
+The final 104,928,704-byte slab binary passed 195/195 CTest checks in 27.04 s
+(`build/ctest-prepared-slabs-final.log`).
+
+**Historical slab launch:** frozen binary, source, receipt, validator, RUN.json,
+and script are in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_node_slabs_count_20261031_iVn7rR/`.
+Container `pancollapse-node-slabs-count-20261031-ivn7rr`
+(`a2a1822eb7103bead95a2cefc029af7c5d6b40d90b3b75d13ce96cea241ce83a`)
+started `2026-10-31T06:12:28.764761604Z`; index PID 157285 was live at about
+07:25:15Z. The 32-worker scan reached 50,176/16,469,090 targets,
+9,106,292/95,110,030 Parents, 1,086,946 models, 9,989,293 scoring classes, and
+22,604,198,100/224,984,793,940 streamed source steps (about 10% of source
+steps, not the whole job). It retained 11,158,835,735 encoded bytes in
+11,274,289,152 allocated slab bytes; RSS was 166,767,640 KiB (~170.8 GB), with
+all memory.events counters zero at 07:24:19Z. The frozen
+500,000,000,000-byte/no-swap/128-CPU/32-geometry-worker,
+no-count-spill index-to-count script retains both profiles and the expected
+66,601,887 GAMP groups. This container was later stopped at 08:15:15Z before
+index publication or count. No index is published and no count has started; final
+fit, reader EOF, and output results are unproven. The stopped attempt was
+compiling from PCANIDX3
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_prepared_reference_count_20261030_7jj7q9/reference.pci`,
+`joint_prepared_24_20261017/joint/joint.xg`, and
+`joint_transcript_gbz_20261028_repair/joint/joint.transcripts.gbwt` under
+500,000,000,000 bytes/no swap/128 threads. Then count the existing
+`mpmap_pbmc1k_v3_20261027T122300Z/attempt5/full/alignments.gamp` (expected
+66,601,887 groups) with `/mnt/ssd/lalli/3M-february-2018.txt` and both
+`cr7-v1`/`pansc-strict-v1` profiles under the same cap, 128 threads, and no
+disk spill. No RI compiler is used. No whole-genome index publication, count,
+reader EOF, fit, or output result is yet established.
+
+Before a whole-genome index build, small fixtures and read-lookup goldens must
+pass. The whole-genome build may then use existing inputs under a 500-GB no-swap
+cap in a named, recorded container, with operational updates retained. D108 now
+authorizes the conditional next stages: after the prepared index works and the
+specified validation gate passes, build the whole-genome index at 500 GB with no
+swap, then run the whole-genome count at 500 GB/no swap/128 threads and no disk
+spill. The production goal is active; the first node-index attempt exposed a
+construction-memory blocker that is being repaired. The
+following run milestones are historical, not current-running status.
+
+**Milestone, 2026-10-31T01:13Z:** reference loading and sparse path coordinates
+completed. `selected_path_positions` took 1525.94 s for 190,240,849 paths and
+224,984,793,940 path steps, with 3,801,283,990 checkpoints and 15,205,135,960
+coordinate payload bytes. `ledger_path_handles` then passed in 34.9733 s.
+The run is now preparing the path catalog; PID 3586664 had RSS 233,843,048 KiB
+(~223.0 GiB) at 01:13:03Z. This is startup progress, not GAMP processing,
+successful exact-parent geometry, whole-genome fit, or final counts.
+
+PCANIDX3 embeds the repaired ledger and fact catalog and loads reference/XG/GBWT+RI
+in three owned branches. The published PCI remains
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_prepared_reference_count_20261030_7jj7q9/reference.pci`
+(40,929,379,277 bytes) and the existing RI is reused. These establish prepared
+startup only, not a completed count.
+
+**Terminal failure checkpoint:** at about `2026-10-30T21:39:50Z`,
+`pancollapse-prepared-count-20261030-7jj7q9` exited 1, not OOM, before GAMP or
+output. Terminal error: `genefull_ex50pas cannot establish body/exon orientation`
+for linked paths
+`chr19::panSCbody1_c9d010286f5911382668f6fe055ae707550636e675a81168114a9c1ac8764113_R1`
+and `chr19::HG00128_ha_T0269130_R1`. Index loading, bindings, lengths, and path
+catalog completed; failure is in exact-parent geometry before an
+`exact_parent_models` completion receipt. `count.time.txt` records exit 1, wall
+1:14:46, peak RSS 289,479,060 KiB (~276.1 GiB), and zero swaps.
+
+**Diagnosis (observed):** the retained read-only root
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_orientation_diagnosis_20261030_030HFr/`
+contains `walks.tsv`, `original-gff-parent.tsv`, `original-gff-query.log`, and
+`source-fragments.*`. The failing body fragment has 68 unique nodes and shares
+zero with the exon’s 62 nodes; its sibling body fragments share 30 and 32 nodes,
+respectively, in the same orientation. The original CAT GFF3 reports three
+`HG00128_ha_T0269130` exons totaling 712 bp; the failing 642-bp body interval is
+entirely intronic. This does not prove bad linkage. It does establish that the
+runtime’s shared-node-only orientation inference cannot handle this valid
+fragmented-body case.
+
+**Implemented repair:** `ExactOrientationBasis` now uses `IntrinsicBody` only when
+the linked body/exon pair has zero shared nodes. Such a candidate is B-only and
+its `GD` is computed from the emitted body walk. Existing `SharedSame`,
+`SharedOpposite`, repeated-occurrence, and ambiguous mixed-parity behavior remain
+unchanged. This is a software correction to the recovered v0.8 source contract
+(`e047b07`), not a new biological overlap requirement, eligibility, or filter.
+
+**Provenance accepted by review:** archived `004333prepare_chromosome.sh` passed
+chr19 `final/retained_exons_and_bodies.gff3` from `004277` to
+`candidate/mpmap_index_chromosome_v2.sh`; both layers are GFF `exon` features,
+retain their strand, and use the same pinned `vg rna`. Archived `004314` guide and
+`004317` ledger evidence were restored. No sequence reconstruction or full-file
+hash was performed.
+
+**Acceptance:** `build/disjoint-body-regression-ctest.log` records 190/190 CTest
+passes in 25.78 s. `disjoint_body_exact_orientation` dynamically checks disjoint
+plus/minus body walks, both profiles at 1/4 threads, shared-opposite preservation,
+and mixed shared-node failure; the frozen prior binary fails the intended
+`cannot establish body/exon orientation` error. The test is registered in
+`tests/vg/CMakeLists.txt` and can be run as `ctest --test-dir build -R
+disjoint_body_exact_orientation --output-on-failure`.
+
+**Live launch:** the repaired launcher started
+`pancollapse-intronic-fragment-count-20261031-jFlfrm-r1` at
+`2026-10-31T00:37:41.339941051Z` (17:37 PDT) in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_intronic_fragment_count_20261031_jFlfrm/`.
+Docker verifies Memory and MemorySwap at 500,000,000,000 bytes and NanoCpus at
+128,000,000,000. It reuses PCI/RI with both profiles; no BAM, spill, remap, or
+full-file hash is authorized. `count.log` exists and reference initialization is
+ongoing. Zero reads have been processed, and neither fit nor final RSS/count/output
+is established; `count.time.txt` and reader EOF 66,601,887 remain future evidence.
+
+The initial non-`r1` container exited 126 before panCollapse because its launcher
+passed an extraneous `/bin/bash` argument; it is retained and did not open GAMP.
+The repaired launcher uses the image and script with bash as entrypoint. Final full
+CTest is 190/190 in 25.78 s at `build/disjoint-body-regression-ctest.log`, copied
+to the run root as `ctest.log`; the 25.37-s initial receipt is retained as
+`ctest-initial.log`. Monitor reference initialization, then the reader through
+completion under the existing authority.
+
+All dated operational updates below are retained historical milestones, not
+current-running status.
+
+The conditionally approved/refined architecture is PCANIDX3: a self-contained
+runtime ledger plus fact catalog, lexical shared dictionary, 64-byte identity
+rows with Parent rank, 8-byte Parent representative records, and serialized
+canonical/qualified/normalized/escaped/original maps. It uses linear Parent
+validation, direct `FrozenFlatMapSortedBuilder`, bulk fixed I/O, and inline
+checksums only (no V3 verification reread). Three owned-result
+`std::launch::async` branches load reference, XG, and GBWT then RI; join all
+before existing crosschecks, with `--threads < 3` retaining the serial baseline.
+Legacy V2 APIs remain; count uses V3 without TSV parsing, normal indexing writes
+V3, and `--from-annotation-index` upgrades V2 once from the corrected ledger.
+
+Final implementation review accepted PCANIDX3 and the post-release embedded
+provenance-lifetime fix. `ctest` records 188/188 passing in 23.56 s. New V3
+parity covers all three load branches at 1/4 threads, files/counters/read
+assignments/RAD, TSV removal, and legacy V2 byte identity. Two earlier test
+failures (fixture baseline authority and truncation expectation) were corrected
+without weakening exact comparison. This remains bounded validation, not a
+whole-genome performance/fit claim.
+
+The frozen pre-production root is
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_prepared_reference_count_20261030_7jj7q9/`;
+it retains the tested binary, build/CTest logs, RI binding, and
+`index.sh`/`launch-index.sh`/`count.sh`/`launch-count.sh`/`restart-after-index.sh`.
+The pre-production checkpoint was reviewed and the authorized index container
+`pancollapse-prepared-index-20261030-7jj7q9` started at
+`2026-10-30T18:27:46.588311157Z` (11:27 PDT). It runs with verified
+500,000,000,000-byte memory and matching memory-plus-swap limits (no swap), 128
+cores, and read-only mounted GNU `/usr/bin/time -v`, which records peak RSS in
+`index.time.txt` (and later `count.time.txt`). It upgrades prior
+`DkAAtB/reference/annotation.pci` with its corrected ledger using
+`index --from-annotation-index OLD_V2 --path-identity-ledger TSV --threads 128
+--out reference.pci`. It performs no GFF reparse, RI rebuild, or extra SHA
+verification pass; TSV is a one-time input parse, and the V3 writer atomically
+publishes with inline checksum. `index.log` is active; no new index is published
+and no count has started. Only after index exit 0 will host supervisor session
+59300 launch
+`pancollapse-prepared-count-20261030-7jj7q9`, using V3 without TSV and the same
+GAMP/XG/GBWT/RI/whitelist paths. Both stages retain 500,000,000,000 bytes/no
+swap/128 cores/both profiles; mounted native `/usr/bin/time` records peak RSS.
+Expected reader EOF remains 66,601,887 input read groups. Index construction and
+monitoring are active; count is running. The corrected prior DkAAtB
+`RUN.json` now records its stop exit 143. The next authorized task is monitoring
+the index and conditional count through completion, diagnosing failures as needed.
+
+**Index-build milestone, 2026-10-30T19:49Z:** the one-time TSV read, cross-row
+validation, and compaction completed for all 190,240,849 rows; existing PCANIDX2
+facts also loaded and validated successfully. `index.log` is in `binary_write`
+(190,240,849 Parents), collecting the shared string dictionary before parallel
+lexical sorting and fixed-record serialization. Native PID 3037317 was active
+with VmRSS 170,644,716 KiB (~162.7 GiB) and VmHWM 170,698,396 KiB; the 500-GB
+no-swap cap is unchanged. These are live observations, not final timing/RSS
+receipts: native GNU time output is pending index exit. No V3 had then been
+published, no count had started, and GAMP remained untouched at that checkpoint.
+
+**Live update, 2026-10-30T19:57:39Z:** container
+`pancollapse-prepared-index-20261030-7jj7q9` remains running and not OOM. Shared
+dictionary collection finished with 489,252,881 string references; the log stage
+is `identity_dictionary_sort`, with parallel sort launched (129 total threads),
+and the writer is canonicalizing. Do not infer sort completion from a sleeping
+worker pool. VmRSS is 175,577,128 KiB (~167.4 GiB), VmHWM 179,215,400 KiB
+(~170.9 GiB), and the 500,000,000,000-byte cap is unchanged. No V3 index had
+then been published and no count had started.
+
+**Publication milestone:** PCANIDX3 was atomically published at
+`2026-10-30T20:22:32.302287029Z` as
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_prepared_reference_count_20261030_7jj7q9/reference.pci`
+(40,929,379,277 bytes; `stat` verified at 20:22:50Z). The index container remains
+running in native destructor cleanup, so it has no exit/time receipt or flushed
+stdout yet; supervisor 59300 is still waiting for exit 0. PID 3037317 RSS was
+161,159,892 KiB at 20:22:50Z, falling after final write. At that publication
+checkpoint, terminal build success and count start were still unconfirmed.
+
+**Terminal index / current count gate:** at 2026-10-30T20:25Z the index container
+exited 0, not OOM. `index.stdout` JSON reports 190,240,849 Parents, 265,064 genes,
+and 40,929,379,277 bytes; `index.time.txt` records wall 1:57:11, peak RSS
+179,215,400 KiB (~170.9 GiB), zero swaps, exit 0. Supervisor 59300 then completed
+0 and started `pancollapse-prepared-count-20261030-7jj7q9` at
+`2026-10-30T20:24:58.75885233Z`. Docker limits are verified: Memory and
+MemorySwap 500,000,000,000, NanoCpus 128,000,000,000. `count.log` records
+`reference_load_parallel branches=3`, `prepared_annotation_index_begin`,
+`xg_deserialize_begin`, and `gbwt_deserialize_begin`; XG completed in 13.4924 s.
+By 20:25:20 the compiled dictionary had loaded 90M entries, with no TSV flag.
+PID 3170470 remains in reference initialization. No GAMP processing, whole-genome
+fit, final output, or count completion is established. The next authorized task
+is monitor this count through completion and diagnose any failure without new
+scientific claims.
+
+**Prepared-count startup milestone, 2026-10-30T20:32:27Z:** prepared annotation
+index deserialization completed in 442.225 s, loading 190,240,849 Parents and
+190,240,849 embedded ledger rows. Parallel owners also completed XG in 13.4924 s,
+GBWT in 222.931 s, then RI in 98.9993 s; their overlap is intentional and all
+three joined successfully. No TSV parse occurred. PID 3170470 was running and
+not OOM at VmRSS 193,390,372 KiB (~184.4 GiB). Graph/path compatibility
+initialization, GAMP/read processing, and terminal count/output validation remain
+pending; `RUN.json` retains the measured timings.
+
+**Reference-initialization update, 2026-10-30T20:57:55Z:** serial name binding
+transitioned to 128-core position preparation by 20:46:40 (129 threads, about
+12,800% CPU). PID 3170470 remains not OOM at VmRSS 232,359,584 KiB (~221.6 GiB)
+under the unchanged 500-GB cap. GAMP processing has not started.
+
+**Read-only architecture clarification:** PCANIDX3 is annotation-prepared, not a
+complete graph-prepared reference: repeated graph binding/geometry remains the
+startup gap. A graph-bound numeric projection is possible while preserving exact
+semantics only with occurrence coordinates, model links, and junction ownership;
+it is proposed future work, not authorization for implementation, a stop, or a
+biological-policy change. Existing native RI receipts/header give a maximum
+physical node ID of 116,844,906 (not actual node count), bidirectional GBWT size
+474,167,531,502 including 760,920,122 endmarkers, and 380,460,061 metadata paths.
+The ledger selects 190,240,849 paths, but selected steps cannot be inferred by
+ratio. Conditional 16-byte-posting CSR offsets at 1/4/10 associations per
+addressable ID are 2.80/8.41/19.63 GiB for a deduplicated category layer only,
+not a full-index forecast; all-forward occurrence expansion is
+236,703,305,690 × 16 = 3.787 TB. Selected volume and deduplication remain
+unknown, so no tens-of-GB full-size promise is supported. Continue current count
+monitoring unchanged.
+
+**Selected-path geometry milestone, 2026-10-30T20:59:11Z:** `count.log` records
+`selected_path_coordinates` for 190,240,849 paths: 224,984,793,940 steps,
+3,801,283,990 checkpoints, 15,205,135,960 coordinate bytes, and zero wide paths;
+it completed in 1446.72 s. `ledger_path_handles` completed all 190,240,849 paths
+in 29.7063 s. Thus selected bindings and length checks passed with no mismatch.
+RSS is 234,185,140 KiB (~223.3 GiB), running and not OOM. Path catalog and exact
+geometry remain before GAMP; no read counting is claimed.
+
+The 224.985-billion selected-step count is now measured, not inferred from a path
+ratio. A 16-byte-per-occurrence expansion of that measured volume is
+3.59975670304 TB. This does not make a shared gene/category layer terabyte-scale:
+its deduplication is unmeasured. The 15.205-GB coordinate payload is checkpoints
+only, not the complete reference or all path descriptors. `RUN.json` retains the
+measured metrics.
+
+**Path-catalog milestone, 2026-10-30T21:29:15Z:** production-1 path catalog
+completed all 190,240,849 relevant paths in 1793.76 s (29m54s), including
+fallback classification in 245.137 s; it records 4,122,279 fallback-only Parents
+and 23,439 fallback genes. All catalog paths are ready. The run is now in exact
+geometry setup, with no `exact_parent_models` milestone and no GAMP processing
+yet. RSS is 257,874,236 KiB (~245.9 GiB), running and not OOM. `RUN.json`
+retains path-catalog metrics. This quantifies the remaining graph-prepared cache
+gap only; it authorizes no new implementation.
+
+The first prefix-only preflight, container
+`pancollapse-ledger-name-repair-20261030-Dfwj5y`, exited 1 without OOM at the
+first `HG00097` chr2 row (about 101 million rows processed). It did not publish
+a reference or start counting. Retain its original run-root evidence at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_name_repair_count_20261030_Dfwj5y/`.
+
+The succeeding metadata-only diagnostic (`metadata-inspection.txt` in that run
+root) establishes two distinct metadata cases: ID 47621561 phase 1 has native
+`HG00097#1#HG00097_ha_T0037310_R1#0`, while its forced `REFERENCE` spelling lacks
+`#0`; ID 52589685 is a distinct phase-2 case. All 7,458,390 non-generic records
+are actual `HAP` records with count 0 and lie in chr2 by the recorded ranges.
+This explains the prefix-only preflight failure; it is not repair success.
+
+The revised metadata-derived legacy-alias utility passed bounded review with its
+collision, owner, and reuse guards. `ctest.log` records 188/188 passing in
+23.76 s, and `git diff --check` passed. The expected repair output is
+190,240,849 rows, 7,458,390 legacy rewrites, and 87,702,873,062 bytes.
+
+The active repair root is
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_name_count_20261030_DkAAtB/`.
+Its initial same-root container exited 126 from an entrypoint-argument error
+before work; it is retained, and the wrapper was corrected. Replacement container
+`pancollapse-native-name-repair-20261030-DkAAtB-r1` exited 0 without OOM.
+Published `reference/repair.json` confirms 190,240,849 rows, 7,458,390 rewritten
+(all chr2), 182,782,459 unchanged, 87,702,873,062 bytes, and
+`non_name_bytes_preserved: true`; Docker wall time was 1068.03 s. Its required
+inline old-ledger SHA receipt matches the original PCI; new ledger SHA-256 is
+`44c4c62d8fd7f79d51ba7d18d1f0349df962cd38d596d3f463b387c79f5faa7d` and PCI
+SHA-256 is `736f928c2084d5c6923f019aa5d587a566eb441e79a3776449a74c8b28a8043a`.
+
+**Historical stopped attempt:** supervisor exec session 51043 finished 0 and launched
+`pancollapse-native-name-count-20261030-DkAAtB` at
+`2026-10-30T17:53:19.121568821Z` (10:53 PDT), under verified
+500,000,000,000-byte memory and matching memory-plus-swap limits (no swap), with
+128 cores. It did not reach GAMP processing or final counts; the user-directed
+stop above supersedes continued monitoring of this attempt.
+
+**Historical live checkpoints:** at 2026-10-30T17:58Z, `identity_ledger_load`
+reached 23 million rows in 298.7 s with process RSS about 16 GiB at 20 million
+rows; before the stop request it reached 34 million rows in 446.7 s at about
+25.8 GiB RSS. These are reference-initialization observations only, not GAMP
+processing, counted-read progress, resource-fit evidence, or output completion.
+
+**Reader-EOF denominator:** existing mapper receipts at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/mpmap_pbmc1k_v3_20261027T122300Z/attempt5/full/`
+give 66,601,887 input reads/pairs (`input_stats.json`: L001 33,436,697 + L002
+33,165,190). `COMPLETE.json` records complete status, both FASTQ EOFs verified,
+zero exit, and a 30,326,279,277-byte GAMP; `process_receipt.json` records mapper
+and producer exit 0, while `stderr.log` ends `Mapping finished. Mapped 66601887 reads`.
+The native `input_read_groups` target is therefore 66,601,887 pending reader EOF.
+Serialized alignment-record count is not independently known and must not be
+conflated with this denominator. Stale `full/.progress.json` cutoffs are superseded.
+
+The completed RI remains valid with the unchanged GBWT and is used through its
+trusted-receipt flag; no RI regeneration or extra SHA passes occurred. The
+188/188 CTest result in 23.76 s remains the bounded acceptance receipt.
+The active root retains `ctest.log`, `CI_ACCEPTED.json`, scripts, `repair.log`,
+and current `r-index-binding.json`. Avoid extra file hashes; use only the
+PCANIDX2-required inline bindings and fast lookup hash. Repair and any eventual
+count retain both profiles, 128 cores, and the 500,000,000,000-byte hard memory
+and memory-plus-swap limits (no swap). The first prefix-only failed root remains
+distinct and retained. The next authorized task is monitoring and diagnosing any
+failure without biological-policy change; this establishes neither whole-genome
+fit, parity, count completion, nor published counts.
+
+**Documentation checkpoint — next performance phase (2026-10-31):** Reconciled
+on dirty `fix/whole-genome-count-repair-20261028` at
+`327b048ce8747c83fe20c9f75074cc4ee77b1312`. The active goal is unchanged:
+same-GAMP whole-genome per-gene counts in under two hours wall time and under
+300 GB RAM. The completed cross-TX quotient 10k gate is evidence of exact
+node-score behavior and a bounded benchmark, not goal completion: its terminal
+receipt, validation, and parity records are in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/node-score-behavior-first10000-t128.gISKSl/`.
+It reached EOF on all 25,000 records/10,000 groups with 14 cutoff drops;
+`validation.json` passed and `parity.json` records ten files byte-identical to
+the first-DP result. Count read time was 128.025707080 s (78.1093 groups/s),
+initialization 150.430731581 s, and runner wall 303.977775 s; sampled RSS/cgroup
+peak were 167,081,734,144/157,636,481,024 bytes. It used 158,583 model groups,
+1,258,500,451 DP states, and 629,485,930 raw-model transfers. The 55.39x
+model-group and 3.48x state reductions and 1.58x count-phase improvement versus
+first-DP do not establish a two-hour full-input rate or a <300-GB whole-input
+fit. It claims neither legacy/CR7 truth parity nor altered biology.
+
+Accepted invariants remain exact node-score semantics, D105/D107, frozen
+profiles/barcode/UMI/output behavior, 64M raw-alternative cutoff, no spill,
+hash, remap, or index expansion, and the 128-core/300-GB/no-swap boundary.
+The whole count remains stopped. The old explicit enumerator
+`pancollapse-node-score-cutoff-first10000-20261031` and its parity watcher were
+confirmed live at this checkpoint; they are observational only and do not turn
+the new result into full-real oracle parity. Current code implements the exact
+DAG scorer and cross-TX quotient. The next proposal, not yet approved, is an
+exact semantics-preserving optimization of raw-model/node-transfer construction
+and/or further exact DAG factorization; parallel review will settle its mechanism.
+Only focused/full tests and then larger-fixture performance evidence are next;
+there is no production or whole-count launch authorization.
+
+**Pre-O3-benchmark authority checkpoint (2026-10-31):** Sol approved only the
+bounded implementation mechanism: immutable edge-only `NativeQueryMode` (with
+no lazy node scoring), fixed-support specialization, and early read-local
+node-membership/splice-mask quotienting before piece-by-raw-model expansion.
+Mixed-support cases remain singletons and raw aliases restore before downstream
+handling. This changes no policy, cutoff, profile, output, or biological
+semantics. The worker is editing the native edge-only source and root is
+implementing the early quotient; these structural changes are not in the O3
+snapshot and are not benchmark authority yet.
+
+The user additionally authorized an O3-only target CMake change if measurement
+helps: the count target's final flags are O3, with no fast-math, while Debug is
+unchanged. The O3-only binary, source archive, and full-test log are frozen at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/node-score-o3-first10000-t128.A5MNAe/`.
+Full CTest passed 202/202 in 31.58 s. The authorized next gate is one same-10k
+A/B benchmark using the existing GAMP fixture, both profiles, 300-GB/no-swap
+cap, 128 threads, and existing indexes, with an independent reader and ten-file
+byte/logical/scientific-counter comparison against the O2 behavior root before
+interpreting performance. It has not launched. Keep O3 only on measured
+improvement; it establishes neither the two-hour target nor a whole-count
+launch.
+
+**Pre-structural-10k checkpoint and O3 terminal result (2026-10-31):** The
+O3-only control in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/node-score-o3-first10000-t128.A5MNAe/`
+reached terminal PASS: its independent reader passed and all ten files are
+byte-identical to O2. `terminal-receipt.json`, timing, CPU, and parity receipts
+record 129.682-s read time and 2720.94-s CPU, versus O2's 128.026 s and
+2758.87 s; this is no clear improvement. O2 is restored as the default CMake
+configuration and O3 artifacts remain preserved.
+
+The structural candidate is frozen and tested, but unlaunched, at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/node-score-early-membership-first10000-t128.JwNFph/`.
+It uses the control's O3 compiler flags and passed full CTest 202/202 in 31.41 s
+and focused 3/3, including 320 seeded cases plus new mixed/multi-record,
+second-quotient, and cache-lifetime fixtures; Sol final review found no critical
+bug. It constructs full read-local node-incidence/splice-mask classes before
+Delta/Op, omits fixed-support vectors, leaves mixed support singleton, restores
+raw aliases, retains the second Op quotient, eagerly builds node scoring, and
+uses edge-only `NativeQueryMode` to skip unused edge postings. Legacy `lazy_edge`
+remains exact and lease-safe. Metrics distinguish actual model visits from raw
+model transfers and report membership groups and edge-model builds. The next
+authorized gate is the same 10k at 128 threads/300 GB/no swap with unchanged
+indexes/profiles/64M cutoff/output and no hash/spill/remap, then independent
+reading and ten-file byte/logical/scientific-counter comparison to the O3
+control. No structural benchmark has launched; the whole goal and larger-fixture
+evidence remain pending. A prospective fixed/none vector-frontier score-storage
+experiment (exact sort+max; mixed generic) is approved for later investigation,
+not implemented and not a speed claim.
+
+**Early-membership terminal benchmark; CompactScoreFrontier pending
+(2026-10-31):** The structural benchmark at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/node-score-early-membership-first10000-t128.JwNFph/`
+exited 0/no OOM at `2026-10-31T20:39:52.465535056Z`. `validation.json` passed
+10,000 groups with 13,904 count and 13,995 molecule rows; `parity.json` reports
+all ten files, scientific counters, and logical definitions byte-equal to the
+O3 control. Manifest init/read/processing were 146.854756294/78.422407757/
+78.486712665 s; runner wall was 237.103126 s, CPU 1589.931948 s, cgroup peak
+132,202,778,624 bytes, and sampled RSS maximum 132,463,898,624 bytes. It reports
+29,791,873 actual model visits versus 629,606,801 raw-model transfers, zero
+edge-model builds, and 1,258,506,306 DP states. Compared with O3's 129.68213154-s
+read and 2720.935242-s CPU, this is 1.65x read-wall and 1.71x CPU on 10k only;
+it does not prove whole-genome two-hour or <300-GB performance.
+
+`CompactScoreFrontier` is prelaunch-gate ready. For fixed/zero support it uses
+vectors with exact sorting and componentwise maxima over independent
+annotation/Gene objectives, preserving the full `StateKey` and generic step;
+mixed support retains the map and `force_map` is a test control. The initial
+new-test build failed only on a mixed-type initializer; that historical receipt
+is retained. The corrected retry build exited 0, focused CTest passed 4/4 in
+1.36 s (`build/ctest-node-score-compact-frontier-focused.log`), and full CTest
+passed 203/203 in 32.18 s (`build/ctest-node-score-compact-frontier-full.log`).
+The O2 binary, source archive (`source-vector.tar.gz`), and both logs are frozen
+at `R/node-score-vector-first10000-t128.jfIkiW/`; `build.ninja:655-659` verifies
+default O2 flags. `terminal-receipt.json` now exists for E.
+
+The next gate is unlaunched: same 10k, 128 threads, 300 GB/no swap, both
+profiles, 64M cutoff, unchanged inputs/indexes/MEX, no spill/hash/remap, then
+independent reading and ten-file byte/logical/scientific-counter parity against
+both E and the O2 control. No profile, biology, or approximate-pruning change is
+authorized. After that, require 1M performance evidence; whole count requires
+supported fit and throughput. Reverse-DAG suffix-bound balancing remains
+unimplemented: Sol's proof is conditional, and a final bound alone cannot retain
+the checked-overflow contract, so defer it pending measured need.
+
+**Vector same-10k gate live (2026-10-31):** This supersedes only the preceding
+unlaunched status. `pancollapse-node-score-vector-first10000-20261031`
+(`59fe443bc40227e93585062d59b99db984c9453c847481dbed1eea4a8dd3dc19`) started
+at `2026-10-31T20:41:58.387715404Z` from
+`R/node-score-vector-first10000-t128.jfIkiW/`. `launch-receipt.json` records
+300,000,000,000-byte memory and memory+swap limits, 128,000,000,000 NanoCPUs,
+and no network. `count.log` has begun four concurrent load branches only; there
+is no ready/count/parity result. No whole launch is authorized. Next is EOF,
+reader/parity/resource/performance validation, then a larger 1M gate only if
+appropriate; the <2-hour/<300-GB whole goal remains unmet.
+
+**Vector 10k terminal; prepared 1M profiled gate (2026-10-31):** This
+supersedes only the preceding live status. The vector 10k run exited 0/no OOM at
+`2026-10-31T20:45:29.460668780Z`; its reader passed, `terminal-receipt.json` is
+persisted, and both `parity-early-membership.json` and `parity-o2-control.json`
+report all ten files, scientific counters, and definitions byte-equal. Init/read/
+processing were 148.532392104/48.117434958/48.181194519 s; CPU was 1515.247936 s,
+cgroup peak 132,201,652,224 bytes, and sampled RSS 132,021,186,560 bytes. This
+is about 1.63x read-wall faster than E but only 4.7% lower CPU, so it does not
+support a two-hour full-input inference.
+
+The prepared root is `R/node-score-vector-first1000000-t128.TzO6UH/`, with the
+frozen binary and source referenced relative to the 10k source archive, run
+receipt, and bash-syntax-checked runner for
+the existing 465,121,668-byte first-1M GAMP (2,502,433 records/1,000,000 groups;
+expected 982 cutoff drops). It retains both profiles, 64M cutoff, 128 threads,
+300 GB/no swap, MEX/indexes, and no hash/spool/remap. Sol approved external
+gprofng 2.45 clock profiling across all target worker threads only (10-ms
+sampling, 10,800-s recording cap, no I/O/heap/sync/per-read tracing);
+collector/dispatcher source confirms the
+cap closes profiling rather than counting. Correct relocation environment and a
+collector/symbolized-display smoke receipt are recorded; count PID identity is
+verified before RSS sampling and all processes are cgroup-bounded. Profiled
+timing is not a clean benchmark. After review, launch this 1M gate, monitor EOF/
+memory/performance, and independently validate counts plus profile header/sample
+warnings/symbols. No full launch is authorized until feasibility is supported.
+
+**Vector 1M profiled gate live (2026-10-31):** This supersedes only the prepared
+unlaunched status. `pancollapse-node-score-vector-first1000000-20261031`
+(`9e3398436ff6317580c8c155170cd7cbcf4fed74771b98cb06c61fbec7188556`) started
+at `2026-10-31T20:47:43.684753337Z` from
+`R/node-score-vector-first1000000-t128.TzO6UH/`. Inspection confirms
+300,000,000,000-byte memory and memory+swap limits, 128,000,000,000 NanoCPUs,
+and no network; `launch-receipt.json` records them. Native PID 7 command and
+executable were checked; collector profile/log XML exist and four load branches
+have started, but no counts are ready. Next is 1M EOF, profile attribution,
+output/MEX independent validation, and resource/performance evidence. No profile
+or biological change and no whole launch are authorized; the 66.6M <2-hour/
+<300-GB goal remains unmet.
+
+**Pre-exact-cache/index-validation implementation checkpoint (2026-10-31):**
+The frozen live 1M run is unaffected and at 100,000 groups reached 195.179 s
+(about 512 groups/s). Its 8-GiB node cache records 1,100,159 builds/985,911
+evictions/367,691 hits; its 8-GiB edge cache 4,325,307/2,750,543/1,944,385;
+active leases are 2.26 GB. Early open-profile snapshots
+`R/early-cpu-functions.txt` and `R/early-cpu-calltree.txt` total 2835.1 sampled
+CPU-s, with self time: `sdsl::select` 18.77%, `FastLocate::locateNext` 9.85%,
+`Index::path_row` 8.25%, and `Index::model_ids` 8.01%. They include startup and
+are partial, not final or phase-additive attribution. `profiling-notes.json`
+records an expected SIGPROF mask warning and no initial errors; closed-profile
+quality remains pending. The golden 10k MEX validator passed; 1M MEX validation
+waits for EOF.
+
+Sol approved two exact, test-gated mechanisms, with no implementation started:
+(A) a 512-MiB shared immutable canonical physical-pair `SpliceEvidence` cache,
+including negative/same-node cases, leases/charges, unchanged directional owners,
+and lock order splice -> node/edge -> index (the existing bounded reference
+cache does hold its shard factory lock); (B) one atomic byte per actual
+`Impl.path_count` row with separate path-valid/model-refs-valid bits, acquire
+load/release fetch-or only after complete successful checks, while concurrent
+first checks may duplicate. Bounds/provenance/span checks remain per call; no
+scan, hash, format/profiling-policy, or budget increase is authorized. Required
+evidence is malformed/retry/concurrency/lease/eviction coverage plus existing
+320-oracle/full-203 tests, then exact 10k parity. Flat builder vectors, DP
+saturation, larger caches, and reverse-DAG work remain deferred. The whole goal
+is still unmet and no whole launch is authorized.
+
+**Exact-cache/index-validation prelaunch readiness (2026-10-31):** Both approved
+mechanisms are implemented; Sol's final read-only review found no blocker subject
+to the existing gates. Combined build exited 0; focused CTest passed 5/5 in
+1.23 s (`build/ctest-static-splice-validation-focused.log`) and full passed
+203/203 in 33.11 s (`build/ctest-static-splice-validation-full.log`). Coverage
+includes concurrent validation, malformed/retry/late-bad-model-ref and
+foreign/move/zero index cases, plus canonical negative/same-node splice cache,
+singleflight leased spans, failed retry/no partial publish, reset/direction, and
+tiny generic-cache eviction. No source budget API was added.
+
+Frozen binary/source/logs and runner are at
+`R/node-score-static-cache-first10000-t128.pLa3n0/`; `run-native-count-gate.sh`
+passed `bash -n`. The same 10k correctness/resource gate is ready but unlaunched:
+128 threads, 300 GB/no swap, both profiles, 64M cutoff, existing indexes, no
+hash/spill/remap, independent reader and new MEX validation, plus ten-file parity
+against vector 10k and O2. The live 1M profiled control remains unmodified at
+320k groups/609.241 s (about 525/s), peak about 132 GB. Concurrent-gate results
+will not be a clean speed comparison; atomic-byte allocation/RSS must be
+measured. Node/edge warm-cache caps remain 8 GiB. No biological/profile/API
+change or whole-launch authority follows.
+
+**Static-cache same-10k gate live (2026-10-31):** This supersedes only the
+preceding unlaunched status. `pancollapse-node-score-static-cache-first10000-20261031`
+(`897ead8beab5428f67741f67a67f0f886a3c1375a5f3d94a4493a25bc3389cf3`) started
+at `2026-10-31T21:02:24.658520064Z` from
+`R/node-score-static-cache-first10000-t128.pLa3n0/`. Inspection confirms
+300,000,000,000-byte memory and memory+swap limits, 128,000,000,000 NanoCPUs,
+and no network; `launch-receipt.json` records them. Four load branches started.
+The frozen 1M control remains live at 390k groups/736.37 s (about 530/s), about
+132-GB peak, and no OOM. Next evidence is 10k EOF, reader/MEX validation and
+two ten-file parities, plus 1M EOF, closed-profile quality, and format validation.
+No full count is authorized.
+
+A future node-64-GiB/edge-16-GiB/assignment-8-GiB configuration under the same
+300-GB cap is read-only feasibility review with Sol only—not implemented or
+authorized as default. Current node/edge 8-GiB and assignment 512-MiB caps are
+unchanged. No scientific or policy change; the <2-hour/<300-GB goal is unmet.
+
+**Static-cache 10k terminal and next exact phase checkpoint (2026-10-31):**
+`node-score-static-cache-first10000-t128.pLa3n0` exited 0/no OOM at
+`2026-10-31T21:06:16.673302741Z`. It completed 25,000 records/10,000 groups
+with 14 drops, 13,904 counts, and 13,995 molecules; independent counts/MEX
+validation and both ten-file byte parities versus vector `jfIkiW` and O2
+`gISKSl` passed. Receipt: `terminal-receipt.json`. Manifest init/read/processing
+were 156.313917758/58.028528258/58.082092723 s; CPU usage was 2,151,175,835 us
+and cgroup peak 132,392,271,872 bytes, no spill. Concurrent frozen vector 1M
+`node-score-vector-first1000000-t128.TzO6UH` remains live (582,995 at 1110 s), so
+this is not a clean speed comparison. Full tests passed 203/203. The accepted
+next exact technical phase is node-score-only NodeEvidence slimming: retain exact
+metadata score_count, postings, and sorted-unique body transcript IDs; discard
+raw hits/scoring vectors; reconstruct node_scoring lazily only on explicit
+request; leave full mode unchanged. Sol conditionally requires metadata/
+multiplicity/span/lifetime/concurrency/retry tests; production node-score never
+requests node_scoring. Diagnostic query/cache counts may change, science may not.
+Experimental 64/16/4/0.5-GiB node/edge/assignment/splice caps are feasibility
+only under the same 300-GB hard cap, not defaults or proven fit; retain the
+655,360-entry assignment cap. Freeze a candidate binary after slim tests, restore
+normal source defaults, then run one isolated 1M parity/resource gate after M
+EOF. No extra mandatory 10k pilot, full launch, or <2h/<300GB claim is authorized.
+
+**Prelaunch 1M slim-wide checkpoint (2026-10-31):** Frozen, unlaunched candidate
+root is
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/node-score-slim-wide-first1000000-t128.GwhDPE`
+with `panCollapse`, `source-slim-wide.tar.gz`, `run-receipt.json`, `run.sh`, and
+`ctest-slim-node-evidence-{focused,full}.log`; new scorer sources are
+`src/node_score_resolver.{cpp,hpp}` and `src/node_score_oracle.cpp`. Normal slim
+tests passed focused 5/5 (1.22 s) and full 203/203 (32.14 s); experimental caps
+passed focused 5/5 and full 203/203 (32.87 s). Normal defaults were restored and
+rebuilt at node/edge/assignment 8/8/0.5 GiB. The frozen candidate alone uses
+64/16/4/0.5 GiB node/edge/assignment/splice caches, 655,360 assignment entries,
+300 GB/no swap/128 cores. Slimming retains exact `score_count`, postings, and
+sorted-unique body IDs; it reconstructs `node_scoring` lazily only on explicit
+request, which production node-score never makes. Unique body capacity and the
+original interleaved overflow-check order are preserved.
+
+Sol found no blocker (including the stated failure-test limitation) and accepts
+one isolated 1M gate, not another 10k pilot. It cannot launch yet: control
+`node-score-vector-first1000000-t128.TzO6UH` is live at 870k/1645.92 s, no OOM,
+about 132-GB cgroup/137-GB RSS; its native EOF, independent MEX/record
+(2,502,433)/982-drop validation, and closed-profile quality are pending. On
+terminal pass, launch one isolated candidate gate, record resources, and require
+all-ten-file/scientific parity. The old enumerator 10k control is not whole
+production. No 66,601,887-group count, <2h/<300GB proof, or whole launch exists.
+
+**Vector 1M terminal and slim-wide launch readiness (2026-10-31):**
+`node-score-vector-first1000000-t128.TzO6UH` exited 0/no OOM at
+`2026-10-31T21:23:02.08623378Z`: native EOF 2,502,433 records/1,000,000 groups,
+982 drops, 982,842 count rows, and 1,302,814 molecules. Both validation and MEX
+validation passed (29,788 barcodes/20,621 features; CR7/custom NNZ
+480,803/502,039). Init/read/processing/finalize/native-wall were
+149.469227426/1918.133442001/1920.488174038/2.354732067/2090.459025 s; CPU use
+131,680,755,620 us, cgroup peak 133,257,510,912 bytes, sampled RSS max
+141,840,748,544 bytes across 418 samples, all OOM/max counters zero, no spill.
+`terminal-receipt.json` records the result. Profile header reports no errors and
+only the previously explained SIGPROF-mask warning; no timer/dispatcher/lost-
+packet/unwind warnings. Exclusive functions prioritize native reference/cache
+work (select 18.96%, locateNext 9.74%, path_row 8.54%, model_ids 8.32%), not a
+clean unprofiled speed, F1, or full-goal claim.
+
+Prerequisites now pass to launch exactly one isolated frozen slim-wide 1M gate
+at `node-score-slim-wide-first1000000-t128.GwhDPE`, under 300 GB/no swap/128
+cores, then monitor EOF, byte/scientific parity, and resources. Root must verify
+actual container limits and record launch receipt. This does not authorize a
+whole count; the 66,601,887-group <2h/<300GB goal remains unmet.
+
+**Slim-wide isolated 1M gate live (2026-10-31):** Root launched
+`pancollapse-node-score-slim-wide-first1000000-20261031` at
+`2026-10-31T21:24:33.681372597Z` (container
+`a81d3879ea37f0ffaf575b09e5983beece73a3e472008fb1cfc2dccd15d5ecfe`). Its
+`launch-receipt.json` records actual 300,000,000,000-byte memory and
+memory+swap limits, 128,000,000,000 NanoCPUs, network none, and exact image ID;
+Docker verified native PID 8/host 3320043 command and executable. Four parallel
+reference branches started; index/XG loaded in 5.04916/6.91632 s and GBWT/RI was
+pending at last inspection. No EOF, counts, parity, or resource gate is yet
+established; whole count is not launched. Main next work is monitoring C
+throughput/cache churn/EOF/exact 1M parity under 300 GB. A separate EdgeEvidence
+slimming proposal is read-only and unaccepted: production could retain only
+canonical transcript exon-direction/body presences while a legacy getter lazily
+requeries raw Parent hits. C is unchanged; no full-speed or F1 claim follows.
+
+**Pre-implementation EdgeEvidence checkpoint (2026-10-31):** C remains live and
+unchanged (92,823 groups/150.002 s, about 619/s). Partial cold observations are
+node cache 24,145,165,576 B/812,909 builds/0 evictions; edge cache cap
+17,179,869,184 B/resident 17,161,571,192 B/3,672,024 builds/10,476 hits/
+551,738 evictions; splice 115,985,252 B/921,362 builds/536,920 hits/0 evictions;
+sampled RSS 135,713,783,808 B. They are not whole-feasibility evidence; eviction
+does not prove repeated FastLocate because splice caching bypasses most leaf-query
+reuse, though raw edge Parent IDs create capacity pressure.
+
+Sol conditionally approves, and root accepts, exact node-score-only EdgeEvidence
+slimming before a second-level raw cache. Retain sorted-unique
+`{canonical_transcript,uint32_flags}` with exon-forward, exon-reverse, and body
+presence; splice/junction must reduce exactly those bits. Full mode keeps raw
+hits/eager postings. Legacy node-score `Source::edge` first uses canonical
+evidence, then requeries raw hits outside the cache lock, builds identical
+checked model postings locally, and leases/publishes. Query diagnostics may
+change only for the explicit getter; production does not call it. Required tests
+cover full/slim order/flags, duplicate Parents, both directions, body veto,
+negative/all orientations, lifetime/reset/concurrency, and failed-model-ref
+retries. No index format, biology, score, or worker budget changes. Only
+`native_count_reference.cpp/.hpp` and `native_count_query_test` are authorized;
+root alone runs Ninja. No extra 10k pilot; a later frozen 1M candidate requires
+exact C completion and new 203-test success plus a fresh checkpoint. Whole count
+and <2h/<300GB feasibility remain absent.
+
+**Node-compression/locality reconciliation (2026-10-31):** Fresh Docker poll
+finds C and the old enumerator 10k control both still running with verified
+300,000,000,000-byte memory/memory+swap and 128,000,000,000 NanoCPU limits; no
+terminal claim is made. C's latest count milestone is 790,000 groups at 985.452
+read seconds. Latest C resource sample is 199,106,256,896-byte RSS,
+189,827,350,528-byte cgroup peak; no OOM is observed. C remains immutable and
+EOF/parity pending.
+
+The root-resolved worker helper is low-level POD codec only; prepared wrappers,
+file validation, 31-bit limit/errors, and level-3 writer behavior remain unchanged.
+The NodeCompression authorization stands. Sol separately approves only a later
+read-only locality experiment: opt-in, no position sort/default, anchored at
+32,768 complete QNAME groups/256 MiB window and globally capped at 65,536/512 MiB
+including workers; no code is authorized. Current per-UMI counts are integer
+aggregates by (profile, CB, gene, UMI) after per-QNAME assignment. Same-CB/UMI
+reads cannot be discarded absent gene evidence/support; the exact graph-signature
+cache is already safe. Whole count and <2h/<300GB feasibility remain absent.
+
+**C live/provenance checkpoint (2026-10-31):** One fresh poll finds C still
+running (no exit/EOF/validator/parity receipt). Latest sampled RSS/cgroup peak
+are 200,757,465,088/191,563,079,680 bytes; no OOM is observed. Do not infer a
+terminal result from the near-EOF milestone. NodeCompression native code and
+4,096-fanout tests are written, but TerraMax repairs, robust-test work, and a
+4-MiB encoder trim remain pre-build; no new build started. Continue only the
+approved same-fixture optimization path. Provenance caveat: tracked same-GAMP
+path attempt 5/full directory records Oct-27 stat mtime and
+`process_receipt.completed_utc=2026-10-27T17:35:27`, despite later 10/30 goal
+wording; it must not substitute for this input, and root will flag the mismatch
+before any whole launch. This is frozen node-score baseline evidence only, not a
+biological or Cell Ranger parity claim.
+
+**C slim-wide 1M terminal gate (2026-10-31):** Docker exited 0/no OOM at
+`2026-10-31T21:49:11.934653515Z`. Native EOF completed 2,502,433 records/
+1,000,000 groups with 982 drops, 982,842 counts, and 1,302,814 molecules.
+Independent count and MEX validations passed; `parity.json` independently
+confirms all ten output files byte-identical with equal scientific counters.
+Manifest init/read/processing/finalize were 154.522569225/1264.504138590/
+1266.863654962/2.359516433 s. `resources.tsv`/`cpu.stat` give cgroup peak
+192,385,966,080 bytes and CPU use 82,515,471,681 us. Assignment cache was
+655,360 entries, 286,517 hits, 712,501 misses, 57,141 uncached, and
+2,875,590,906 charged bytes. `terminal-receipt.json` records this frozen
+node-score baseline result only—not Cell Ranger parity, F1, or whole feasibility.
+NodeCompression helper/robust tests are still pre-build. Sol accepts raw typed
+fallback for small/no improvement and ZSTD only for worker decode; the 4-MiB
+encoder trim remains. A new candidate requires those tests and a fresh checkpoint.
+Preserve the 10/30-goal versus Oct-27-recorded-input provenance caveat.
+
+**Prelaunch D node-compression 1M checkpoint (2026-10-31):** Frozen, unlaunched
+D is
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_native_query_count_20261031_LkMGA0/node-score-compressed-first1000000-t128.zvlqnP`,
+containing immutable `panCollapse` (120,690,672 B), `source-compressed-wide.tar.gz`
+(575,880 B), `run.sh`, `run-receipt.json`, and
+`ctest-{normal,wide}-{focused,full}.log`. Sol approved implementation/storage/
+concurrency including typed raw fallback. Normal focused/full passed 10/10 and
+204/204 in 31.89 s; same-C wide focused/full passed 10/10 and 204/204 in 31.38 s.
+Source defaults are restored to node/edge/assignment 8/8/0.5 GiB; root's
+restored-default build/focused check is still running and must pass before launch.
+
+D alone uses C's 64/16/4/0.5-GiB node/edge/assignment/splice caps, 655,360
+assignment entries, 128 threads, 300 GB/no swap, network none, both profiles,
+`node-score-v1`, and 64M cutoff. It adds canonical edge summary and lossless
+node POD ZSTD-1/raw fallback with once-per-worker/group decode, strong publish,
+and 4-MiB encoder trim; full legacy getters and prepared level-3 byte compatibility
+remain unchanged. No biology, per-alignment scoring, CB/UMI, policy, spill,
+spool, or input-hash change exists. Its script independently validates counts/MEX
+and all-ten-file/scientific parity against C and profiled M. After root reviews
+the restored build, exactly one isolated D 1M gate is authorized—then limits,
+native PID, EOF, parity, and resources must be recorded. The future 8M-entry
+assignment-cap experiment and locality opt-in are not in D. Preserve the same
+Oct-27-recorded-input versus 10/30-goal caveat; whole count and <2h/<300GB proof
+remain absent.
+
+**Pre-implementation node-posting compression checkpoint (2026-10-31):** C is
+live and immutable at 550,000 groups/705.927 s (about 779/s): node 64-GiB
+resident 68,698,509,904 B/3.524M builds/1,229,290 evictions; edge 16-GiB
+11.925M evictions; splice 473.6 MB/0 evictions; sampled RSS 194,051,293,184 B,
+no OOM. These are partial observations, not whole feasibility; C EOF/parity is
+pending. EdgeSlim is implemented only in the worktree
+`src/native_count_reference.cpp` and `tests/vg/native_count_query_test.cpp`;
+after comparator/corrupt-copy fixture repair before load, focused 5/5 (1.27 s)
+and full 203/203 (32.27 s) passed (`build/ctest-edge-summary-{focused,full}.log`)
+and Sol found no blocker. Full and node-score preserve science; canonical edges
+retain only E-forward/E-reverse/body presence and the legacy getter exactly
+reconstructs checked raw postings. It is not in C.
+
+Accepted next technical phase: lossless in-memory raw-or-ZSTD-level-1 numeric
+posting payload in node-score, retaining uncompressed NodeRecord count/body IDs;
+decode worker-local once per node/group outside cache lock and publish only after
+exact count/size/sorted-field validation plus lease accounting; reset clears it.
+Full mode remains eager; no model-ID/gene/Parent collapse, 2-GiB restriction,
+format/CLI change, or cap increase. Reuse `decode_rows` in `count_reference.cpp`
+and raw/ZSTD selection in `count_reference_builder.cpp`; retain wrapper, 31-bit/
+raw-payload flags, and prepared writer level-3 exactly; native uses level 1 and
+fresh selected payload bytes avoid compressBound capacity. Authorized worker
+files are `src/pod_row_codec.hpp`, `src/count_reference.cpp`,
+`src/count_reference_builder.cpp`, `src/native_count_reference.cpp`,
+`tests/vg/native_count_query_test.cpp`, `tests/vg/pod_row_codec_test.cpp`, and
+`tests/vg/CMakeLists.txt`; root alone runs Ninja. Required tests cover raw/
+compressed/empty/size/truncation/corruption/high IDs/sorted posts/getter reuse/
+reset decode without FastLocate/lifetime/concurrency/rollback. Node compression
+ratio/CPU benefit is unmeasured. Producer emission is read-group, not position,
+ordered; locality batching is read-only architecture evaluation only. Future
+candidate launch still requires C terminal exact parity, new full tests, and a
+fresh checkpoint. Whole count and <2h/<300GB proof remain absent.
+
+**D launch and old enumerator terminal reconciliation (2026-10-31):** Root
+launched D at `2026-10-31T21:55:51.499119795Z` as
+`pancollapse-node-score-compressed-first1000000-20261031` (container
+`1f3e71b622a195c0750430abcb42ce62cc4eee9f10c8273a57a95c0ce24a4073`).
+`launch-receipt.json` records actual 300,000,000,000-byte memory/memory+swap
+(no swap), 128 CPUs (128,000,000,000 NanoCPUs), network none, image ID, and verified native PID 8/host
+3461347 command/executable. Restored-default build session 55946 exited 0 and
+focused passed 10/10 in 1.35 s (`ctest-default-restored-focused.log`); branch
+head remains `327b048` with normal 8/8/0.5-GiB defaults. Index/XG took
+5.0188/7.21022 s; GBWT/RI was pending at last poll. D has no EOF claim.
+
+Old B is terminal, not live: Docker exited 127/no OOM at
+`2026-10-31T21:45:50.925503247Z` because frozen wrapper post-validation used
+bare Python, while `timing.tsv` records native count exit 0 after 25,000
+records/10,000 groups, 14 drops, 13,904 counts, and 13,995 molecules. Existing
+watcher exited 0; explicit-Python B count/MEX validations and
+enumerator-versus-DP `node-score-dp-vs-enumerator.parity.json` passed all ten
+files/scientific counters. B `terminal-receipt.json` records the native/wrapper
+distinction and 132,202,708,992-byte cgroup peak. This is 10k output parity only,
+not F1 or CR7/Cell Ranger parity. D monitoring remains the safe next task; whole
+66.6M <2h/<300GB goal remains unmet.
+
+**Pre-implementation per-key singleflight checkpoint (2026-10-31):** Frozen D
+remains live after about 90k groups/148.093 read seconds, no OOM; its EOF/parity
+is still required before any future candidate. Read-only receipts
+`cache-wait-diagnostic-receipt.json`, `thread-wait-snapshot-{1,2}.tsv`,
+`cache-lock-layout-check.tsv`, and `cache-wait-attribution.json` attribute 86/134
+and 67/134 advancing-read-phase threads to exact node/edge/splice shard mutex
+words (six other futexes each). Object base was read only for the three known
+cache budgets (24 bytes); all waits are offsets 8/12 in actual shard mutexes.
+Observer was network-none, PID-namespace/SYSPTRACE, with no attach, signal,
+pause, profiler, or large hash. Current `get_or_build` holds shard exclusivity
+through FastLocate/nested splice/node/edge builds; this satisfies Sol's acceptance
+condition, but speedup and unrelated-versus-same-key fraction are unmeasured.
+
+Approved scope is only `src/bounded_reference_cache.hpp` and
+`tests/vg/bounded_reference_cache_test.cpp`: brief shard-lock flight install/join;
+owner build and waiter waits outside all shard locks; atomic ready/FIFO/accounting
+publication under shard lock before wake; one immutable same-key builder; error
+fanout/retry; and oversized one-flight uncached behavior. Preserve the three-cache
+acyclic dependency, capacity/hash/biology/scoring/profile/CB/UMI/locality, and
+cumulative stats; define an explicit post-join production contract. Required
+tests are same-shard different keys, same key, shared exception/clean retry,
+oversized joins, and existing FIFO/lease/byte bounds. Root alone runs Ninja;
+implementation has not started. The future 8M-entry cap experiment is separate
+and must not combine here. Whole goal remains unmet.
+
+**Ongoing per-key phase update (2026-10-31):** Root reviewed the checkpoint and
+assigned Sol only header/focused-test implementation; no code result is claimed.
+Accepted `hits` semantics are diagnostic-only: increment for ready returns and
+in-flight joins at join time, including failed flights, with no scientific-counter
+or new public-counter change. Deterministic tests require N-1 wait hits before
+owner release plus bounded timeout cleanup. D remains immutable/live at 250,000
+groups/350.581 s, sampled RSS 126,236,172,288 B, no OOM. Matched 220k evidence:
+C/D read 313.674/313.449 s, node 49,247,789,088/13,335,578,885 B, edge
+17,157,766,328/5,455,473,800 B, and both about 1.636M node builds. C/D edge
+evictions are 4,305,615/0 but both edge queries about 7.45M: memory savings only,
+not speed or repeated-query proof. D parity remains pending. Native init was
+already complete after loading; no extra hash. The future 8M entry-cap experiment
+remains separate after D/E, neither implemented. Whole goal remains unmet.
+
+**Background sort and UMI-design checkpoint (2026-10-31):** The user authorizes
+two bounded next tasks. First, inspect and, only after feasibility confirmation,
+run a background position-sorted GAMP preparation on the preserved original
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/mpmap_pbmc1k_v3_20261027T122300Z/attempt5/full/alignments.gamp`.
+The sort must preserve complete QNAME groups—every alternate record remains
+together; it cannot treat records independently. Local `vg gamsort` source
+supports GAM/GAF, not GAMP, so actual combined-vg support remains under
+inspection and no sort is launched or implied. Second, analyze potential early
+UMI-deduplication speed savings only. It does not authorize a frozen counting
+policy, biology, scoring, CB/UMI, or output change. Compressed D remains live;
+keyflight wide focused/full tests have terminal 0 and root is reviewing/staging.
+Whole-goal feasibility remains unmet.
+
+**D terminal / E prelaunch checkpoint (2026-10-31):** D exited 0/no OOM at
+`2026-10-31T22:18:39.626954194Z` under actual 300-GB memory/no-swap limits.
+It reached native EOF with 2,502,433 records/1M groups, 982 drops, 982,842
+counts, and 1,302,814 molecules. Independent count/MEX validation and both
+all-ten-byte/scientific parities (`parity.json` versus C and
+`parity-vs-vector.json`) passed. Read/init/native-wall were 1087.0224/164.0927/
+1348.4599 s; cgroup peak was 158,858,080,256 B. `terminal-receipt.json` records
+the frozen node-score baseline result only, not F1, Cell Ranger, or whole-goal
+evidence.
+
+Frozen unlaunched E is `node-score-keyflight-first1000000-t128.KrM8LH`, differing
+from D only by per-key flight. Its binary/source archive and runner are frozen;
+focused/full tests passed 6/6 and 204/204, 100-cache repeats and TSAN/ASLR-off
+passed, and normal 8/8-GiB plus 0.5-GiB assignment defaults were restored with
+focused pass. E uses D parameters and must establish expected byte/scientific
+parity, but is not launched. The 10k sort adapter round trip passed exactly in
+`build/gamp-sort-check.C3cWqR`; final guard/toy tests continue and no full sort
+is launched. UMI grouping is already required and implemented as exact
+(profile, CB, feature, PackedUMI) aggregation after per-QNAME assignment, final
+CB correction/1MM/cross-gene handling; analysis concerns upstream computational
+reuse, not a missing count stage or policy change.
+
+**E/sort/UMI live-state correction (2026-10-31):** The prior E wording is
+superseded: at that checkpoint only E binary/source/logs were frozen; its
+`run.sh` and `run-receipt.json` were created and frozen afterward. E is now live
+as `pancollapse-node-score-keyflight-first1000000-20261031` (container
+`042b057de24529656193368c2fa27280e45bdd7edbea6aba1cadaf4a28a44a37`), started
+22:23:52.566 UTC, with Docker 300,000,000,000-B/no-swap/128-CPU limits and
+cgroup `memory.max=299999997952`, `memory.swap.max=0`, `cpu.max=12800000 100000`.
+It is loading indexes; no EOF/parity claim exists.
+
+Background sort attempt 2 is live after the first attempt exited 126 from an
+ENTRYPOINT double-bash before input use. It uses explicit entrypoint,
+4 OMP threads/6-CPU quota/32-GiB no-swap cap; pack passed 1M reads/2,502,433
+records/4,370,496,823 payload bytes. Output
+`R/position-sorted-gamp.KhGLHP/position-sorted.gamp` is not published until
+pipeline counters pass; final toy/empty/10k guards passed and malformed input is
+rejected while unknown field 101 is preserved. Frozen UMI diagnostic
+`R/umi-reuse-first1000000.NAojV1` is live in a 16-GiB/2-CPU container: 10k
+groups/records/drop counters passed; 1M is pending. Exact raw UMI families are
+not safe representative-read assignment. E timing is confounded by shared sort
+storage and the 2-CPU diagnostic: establish parity first, not isolated A/B speed.
+
+**UMI diagnostic terminal / E-sort live update (2026-10-31):**
+`R/umi-reuse-first1000000.NAojV1` exited 0/no OOM at 22:25:09.307 UTC with
+`memory.peak=3466788864`; `validation.json` passed 10k and 1M. Its
+`first1000000.json` has 1M valid reads, 899,427 raw families, 100,573 repeated-
+family reads, 999,018 eligible after 982 drops, 89,896 multi-read families,
+37,856 mixed full-graph signatures, 5,447 same-sequence CB/UMI mixed families,
+709,598 distinct graphs, and 938,970 distinct family+signature pairs. Identity
+redundancy is 60,048 (6.0107%) within UMI family versus 289,420 (28.9704%)
+globally. Sol's exact D-cache algebra finds 54,238 distinct unretained plus
+2,903 repeated uncached entries: capacity-only additional-reuse ceiling 0.2906%
+eligible, with actual reuse unknown because hits can be loser builds. This is
+fixture-only theoretical redundancy, not speedup, safe representative-read
+assignment, or biology/policy evidence. Diagnostic-only helpers are
+`scripts/gamp_sort_envelope.cpp`, `scripts/gamp_umi_reuse.cpp`, and their CMake
+targets; runtime count UMI handling is unchanged.
+
+E completed initial loading in 152.925 s (native GBWT/RI/XG/index
+146.852/32.157/6.851/4.815 s) and its latest count log has no EOF. Sort pack is
+live at 3M groups/7,508,995 records/12,961,427,041 bytes, unpublished. Exact next
+task is monitoring E terminal parity and sort completion/counters; no full-genome
+count or goal claim exists.
+
+**Reference-query hot-path analysis checkpoint (2026-10-31):** The unchanged
+whole goal is 66,601,887 groups in <2 h and <300 GB memory; after initialization
+it needs about 9,500 groups/s and is not met. E is fixed running to EOF/parity,
+not restarted for a poll timeout: verified 50,000 groups/49.3897 read seconds
+(about 1,012/s), initialization 152.925 s, live/no OOM. Sort remains live at 3M
+groups. The authorized next phase is bounded analysis of existing M gprofng
+evidence: `FastLocate::locateNext` 36.22% inclusive/9.74% self,
+`Index::path_row` 8.54% self, `model_ids` 8.32% self, and `build_node` 34.23%
+inclusive/4.94% self. Investigate exact direct numeric model/path-row lookup and
+duplicate path-model work only. No annotation biology, containment rule, startup
+reference preprocessing, heuristic cap, or patch is authorized before Sol and
+root review. No new experiment or hash is authorized.
+
+**Pre-implementation distinct-document node-builder checkpoint (2026-10-31):**
+Sol approved one coherent node-score-only change, accepted by root but not yet
+implemented. `path_row` is already direct mmap `uint32[gbwt_path]` with
+380,460,061 entries/190,240,849 rows and model IDs CSR. New node-score query
+would use `FastLocate::find/locate` unique sequence IDs while retaining
+state-size raw-occurrence statistics; sort/reduce annotated row+orientation,
+call `model_ids` once per row, then flat-vector sort/reduce raw
+pair/record-ID/flags/support conflict and score count by distinct row. Full legacy
+mode and lazy `node_scoring` raw requery remain unchanged. No index format,
+startup join, biology, approximation cutoff, or avoidance of per-occurrence
+FastLocate cost is authorized. Required evidence: repeated node/path/both
+orientations, exon+body pair, unannotated paths/supports/malformed bounds,
+full-vs-node-score getter parity, full 204 suite, all-ten-file/scientific parity
+versus E, and 300-GB cap. It is not expected to provide 9x speed alone: old
+profile bounds metadata plus builder are about 22% self, so the goal remains
+unmet. E stays immutable to EOF and sort stays background.
+
+**Read-only legacy-work audit checkpoint (2026-10-31):** User requests a
+simplification audit, beginning with a legacy visit-count map that node-score
+scoring may not use. Root may scan the active count/node-score path for obsolete
+executed work and retained structures versus legacy-only/convert code, recording
+exact callers, consumers, and cost bounds. This is not authorization to remove
+counting rules or code: CR7/custom scientific branches are not presumed legacy,
+and no broader implementation follows. The next authorized action is an audit
+report, not a purge. The already-approved distinct-document worker continues only
+in `native_count_reference.cpp` and `native_count_query_test.cpp`; its work must
+not be reverted. E and the background sort continue unchanged.
+
+**Production-surface retirement checkpoint (2026-10-31):** User explicitly
+overrides prior legacy preservation: production is `index` plus native `count`;
+everything else is default-off or deleted, recoverable through Git if needed.
+Plan retirement of convert, BAM/reference-walk assignment, compatibility replay,
+raw-GFF count, and old Ex50 resolver routes rather than retaining new legacy
+flags or active branches. This does not retire frozen biological profile, CB/UMI,
+node-score, or directed-splice rules. Safeguard dirty/untracked work outside the
+production surface before deletion (existing R snapshots assist); no commit or
+reset. Active index/count tests and parity goldens remain, with frozen binaries
+as external comparators. The bounded node-builder worker finishes its patch and
+full-mode parity first; root then coordinates deletion. E/sort runners remain
+unchanged until a tested replacement. Next authorized task is Sol's bounded
+extraction/removal architecture with caller/dependency checks—not a mass purge.
+No release/restart is authorized; whole-goal feasibility remains unmet.
+
+**Converter-preservation correction (2026-10-31):** User supersedes converter
+deletion only. Supported production commands are `index` and native `count`;
+`convert` remains as a third, explicitly **deprecated** BAM-conversion command.
+It is not a new legacy flag or a supported production count path. Retirement
+continues to target obsolete count engines, compatibility replay, and
+count-startup reference-walk work, without biological-rule change. The node-builder
+worker has finished its two owned files pending root review/build; E and sort
+continue. Next architecture review is minimal actual count-legacy deletion while
+preserving deprecated `convert`.
+
+**E terminal / F-freeze and purge sequencing checkpoint (2026-10-31):** E
+native count exited 0: `timing.tsv` spans 950.123016 s, manifest initialization/
+read are 156.876415759/705.031969301 s, and cgroup peak is 158,946,189,312 B.
+Independent count/MEX validation and both all-ten-file/scientific parities passed.
+`terminal-receipt.json` records one-million-read frozen node-score evidence only,
+not a whole-genome/F1/Cell Ranger timing claim. Background sort remains live at
+9M packed groups.
+
+The distinct-document node patch finished; root removed temporary reduce-vector/
+dead checks. A stale reverse+body fixture expectation was repaired to exact
+F2/R1 and F1/R0; focused repair passed 5/5 and full 205 is running in root's
+session. Deprecated-convert help/warning/README and `convert_deprecation.cmake`
+test pass; no obsolete count code is removed yet. Pre-purge safeguard
+`R/pre-count-legacy-purge.DfQFWi` holds HEAD/status JSON, tracked patch, and
+complete 4.7-MB source/tests/docs/scripts archive without a new hash. After F
+freeze, Sol's accepted plan is to extract shared projection/ResolvedAssignment,
+then remove legacy CountReferenceResolver/rawcount/compatibility/expanded-index
+production routes while retaining deprecated BAM `convert`, active profiles,
+CB/UMI/splice rules, and goldens. Do not mix the hot-path F comparison with this
+later purge until freeze and normal restore. Whole <2h/<300GB goal remains unmet.
+
+**F distinct-document 1M prelaunch checkpoint (2026-10-31):** Frozen F is
+`R/node-score-distinct-doc-first1000000-t128.GEL63B` with binary and
+`source-distinct-doc-wide.tar.gz`. Normal and wide focused tests passed 5/5 and
+full suites 205/205. Logs retain the initial stale fixture assertion and missing
+`umi_tools` Python-path failures; corrected complete runs passed with no disabled
+tests. Source defaults are restored to node/edge 8/8 GiB and assignment 512 MiB;
+root rebuild/focused session 69481 remains pending. F is unlaunched and changes
+only distinct-document node construction; convert-label changes are non-counting.
+
+F uses E's 64/16/4-GiB experimental capacities, 128 threads, 300e9-byte/no-swap
+cap, same 1M input, two profiles, node-score, 64M cutoff, and independent output/
+ten-file parity gates. E terminal parity passed. Background sort remains live
+(last 12M groups), so F timing is not isolated A/B evidence. After restored-
+default success and review, the next authorized action is F launch. Broader count
+purge stays separate after this freeze; third `convert` stays deprecated and kept.
+
+**F launch / native-only cleanup checkpoint (2026-10-31):** Restored-default
+focused tests passed 5/5. F launched from its frozen binary/source as container
+`pancollapse-node-score-distinct-doc-first1000000-20261031`
+(`4be03058dab99db2a14c3771efa3000d06285a23a89feaad806dbd5ae0a4ad17`).
+Verified cgroup limits: memory 299,999,997,952 B, swap 0, CPU quota 128 cores.
+Native PID 8 is loading references; no count result or F parity yet. The separate
+background sort remains live. Native-only cleanup now begins in disjoint owned
+files, after the freeze: shared policy projection/prepared runner and CLI route
+retirement. The third `convert` command and its BAM behavior remain deprecated,
+not deleted. No frozen profile or biological rules change.
+
+**Current cleanup/research gate (2026-10-31):** The whole-GAMP goal remains
+66,601,887 read groups in <2 h and <300e9 B; it is unmet and no whole count is
+launched. E is terminal one-million-read evidence only:
+`R/node-score-keyflight-first1000000-t128.KrM8LH/terminal-receipt.json` records
+native exit 0, 950.123016-s wall, 705.031969301-s read time, 158,946,189,312-B
+peak, and passed independent count/MEX plus both ten-file/scientific-counter
+parities. F remains a separate frozen distinct-document comparison at
+`R/node-score-distinct-doc-first1000000-t128.GEL63B`, live under
+299,999,997,952 B/no swap/128 cores; the latest read-only observation is
+320,000 completed groups at 228.906 s, with terminal completion/parity pending.
+The
+position-sort container remains live; `R/position-sorted-gamp.KhGLHP/pack.jsonl`
+last records 17M packed groups, with no final output.
+
+Pre-cleanup means code removal only, never data or biological filtering. The
+implemented cleanup is NativeSource+NodeScore-only prepared count with verbatim
+shared metadata projection extraction; the main worker is physically deleting
+entangled unreachable count/replay branches while preserving converter behavior.
+Root migrated integration tests to fixed pre-refactor node-score fixture
+expectations and retained converter tests. No build/test has yet covered this
+refactor; its component build exposed only a missing explicit vg protobuf include
+(fixed) and a stale native bool in `prepared_count` (root fixing). Root must run
+the full suite after source freeze. `convert`
+remains deprecated, while obsolete count engines are deleted rather than hidden
+behind flags. Dirty/untracked pre-purge material is safeguarded outside
+production at `R/pre-count-legacy-purge.DfQFWi`, with no hash/reset/commit.
+
+After refactor verification and F parity, a bounded read-only native-lookup-cost
+profile may be reviewed for exact runtime optimization; it authorizes neither an
+algorithm nor biology change. Before any UMI decision, research/review
+evidence-aware pangenome UMI-family inference, consensus/representative
+selection, locus+CB+UMI grouping versus post-gene counting, and current
+implementation. Do not frame UMI dedup as randomly selecting a read. This is a
+research gate only, authorizing no UMI algorithm, grouping, or biological-policy
+change pending root review.
+
+**Component validation / UMI timing evidence (2026-10-31):** Shared projection,
+native query, node-score resolver and DP differential tests passed 4/4 after
+fixing the explicit protobuf include and stale native-only progress guard.
+The pruned native-query test then passed again after restoring its shared
+PathRecord fixture helper. Obsolete expanded builder/resolver source files and
+resolver-only tests are removed, recoverable from the pre-purge archive; the
+converter-only main extraction is still in progress and full-suite validation
+remains pending.
+
+The user asks whether family inference, deduplication/correction and consensus
+belong before counting or alignment, not whether to choose a random read.
+Verified `mpmap_pbmc1k_v3_20261027T122300Z/attempt5/full/command.json`,
+`input_stats.json` and `code/prepare_10x_whole_genome_mpmap.py:186`: preparation
+copied raw 16-base CB, 12-base UMI and quality bytes into QNAME and emitted every
+R2 unchanged. All 66,601,887 pairs entered mpmap individually; no prealignment
+family grouping, deduplication or consensus occurred. Current native runtime
+does molecular aggregation/error correction after graph assignment. A research
+agent consulted primary Cell Ranger 7.2, UMI-tools, Alevin/alevin-fry and BUS
+sources; timing/design interpretation is ongoing, with no new UMI rule adopted.
+
+**Native-only refactor verification / next implementation gate (2026-10-31):**
+Root's full refactor build and remaining 168 tests passed in 27.12 s
+(`build/ctest-native-only-full.log`); `native_count_verify`,
+`convert_deprecation`, and `count_cli_surface` also passed. Immutable snapshot
+`R/native-only-refactor-check.SYZ2ls` contains `panCollapse`,
+`source-native-only.tar.gz`, logs, and `receipt.json`, which records 168/168,
+unchanged node-score/frozen profiles, and no recomputed hashes. Main is about
+4,880 lines with no active old count/replay branch; expanded builder/resolver
+sources are physically deleted, while RAD/BAM `convert` remains. The new binary
+has not had a 1M benchmark; the whole goal remains unmet.
+
+Sol/root accepted the exact ordinary-body witness accelerator as the next
+authorized implementation, distinct from CLI removal and UMI science. For valid
+trusted native inputs, current splice semantics are `E intersect C minus B`:
+empty `C`, or witnessed `C` subset `B`, proves an empty splice-target set;
+otherwise use the complete existing fallback. A raw-SA scan receives a global
+target-scaled budget `max(256, 4*C)` capped at 4096; it is only an accelerator,
+never a read/evidence drop. Resume prefix/full RI cursor behavior must avoid
+rescanning on fallback and preserve thread-local synchronous edge-cache building
+and splice per-key singleflight. Local GBWT `FastLocate` find/unpack/locateNext
+APIs were checked. Incidental malformed-RI tail detection may be skipped only in
+the bounded shortcut; no new full-scan validation, hash, CLI mode, biological
+profile, or UMI resolver is authorized. Test-only probe limits 0/1 may force
+fallback. Worker scope is native cpp/hpp/query tests; root owns prepared-count
+stat printing and assignment-cache width. Keep 8/8-GiB source caches and 512-MiB
+assignment cache until patch tests pass; then use tested F 64/16/4-GiB capacities
+for 1M/whole operations under the unchanged external 300-GB cap. Required gate:
+full 168 plus forced-probe cases before the changed-binary 1M benchmark;
+1M ten-file/scientific parity versus F and resource/throughput evidence before
+a whole-GAMP launch.
+
+The Alevin clarification remains independent: molecule-level resolution is
+appropriate, but PUG+EM versus family argmax is an unresolved scientific choice;
+no resolver is adopted.
+
+**Ongoing witness implementation reconciliation (2026-10-31):** Exact
+ordinary-body witness cpp/hpp cursor resumption is now implemented; its worker
+tests remain pending, and root will build. The authorized sequence is witness
+tests/full suite, then changed-binary same-1M parity against frozen F (all ten
+files/scientific counters) plus resources/throughput, then the unchanged whole
+66,601,887-group <2h/<300GB gate—no smaller-goal substitution. No whole run or
+new speed measurement exists.
+
+The user-proposed lazy wrong-way-splice check for only competitive alignments is
+not adopted. Root/Sol find it sound only after complete certification across
+ties, score window, support, antisense, and rejected-diagnostic behavior; it is
+therefore a review condition, not implementation or measured speedup. Defaults
+and biological choices stay unchanged. Native `count` is not PUG: `convert`
+already provides `map.rad`, and the full-168 interoperability coverage is
+cr-like rather than replication of original Alevin parsimony. PUG+EM versus
+family argmax remains unresolved and independent of this exact optimization.
+
+**G body-witness prelaunch checkpoint (2026-10-31):** Default witness validation
+is terminal: all 168 tests passed in 27.63 s
+(`build/ctest-body-witness-full.log`). Root corrected common-empty success,
+immediate complete-body proof, the cursor unordered-map comparator, and sorted
+common-body intersection. The scoped source change is native cpp/hpp/query test
+plus prepared-count operational statistics; Sol found the RI cursor/prefix/
+synchronous-cache invariants sound in principle with no blocker. Matched-F-cache
+wide (64/16/4 GiB) build is complete. Root verified its terminal 168/168 pass in
+27.25 s at `build/ctest-body-witness-wide-full.log` before launch.
+
+G is prepared, not live, at `R/node-score-body-witness-first1000000-t128.FCVKgz`
+with `run.sh`, F/counts comparator, immutable matched-cache binary/source/logs and
+`run-receipt.json`. Worktree cache defaults are restored to 8/8 GiB and 512 MiB;
+the frozen executable and archive retain the tested F-matched 64/16/4 GiB values.
+The next gate is the same
+1M input at 128 CPUs and 300e9 B/no swap, followed by independent validators and
+all-ten-file/scientific parity. No Docker launch, whole run, performance claim,
+or change to profiles/biology/UMI model is recorded. Whole <2h/<300GB remains
+pending.
+
+**G body-witness 1M live (2026-10-31):** Root launched
+`pancollapse-node-score-body-witness-first1000000-20261031`, ID
+`4f2744cde4538aaa84111088af90e24e59522a6f909d37c41092f9a0706a455d`,
+at `2026-10-31T23:19:45.976220066Z`. Native PID 119155 was live; cgroup confirms
+`memory.max=299999997952`, swap 0, and 128-CPU quota. Frozen G contains source,
+binary, receipt and both passing full-suite logs. Initial log shows all four
+reference branches loading in parallel. No performance or parity result yet;
+whole input remains unlaunched and the whole goal unmet.
+
+**Endpoint-free DP specialization pre-edit checkpoint (2026-10-31):** Sol/root
+reviewed the bounded proof. For a coalesced group whose unchanged complete
+reachable-edge prepass yields an empty final `SpliceOp` vector, every internal,
+cross-piece, and empty-bridge transition permits both final strands. The group is
+therefore certified endpoint-free: `StateKey.last` remains null and `valid`
+remains mask 3, so last tracking and allowed/internal-mask work may be skipped
+while retaining scores, exon/strand balance, body, bases, support, and normal
+merge. Restrictive groups remain unchanged. No fallback, biology, molecule
+policy, preliminary-winner certificate, or cross-record cache is introduced.
+
+The next worker owns only `node_score_resolver.cpp` and
+`tests/vg/node_score_dp_test.cpp`; root builds. Required acceptance is independent
+oracle parity; empty/insertion bridges; explicit mask 3; restrictive internal/
+bridge refusal; variable-support tie union; record-local masks; both strands and
+Gene objective; reduced targeted-toy DP states; full 168; and existing 320 seeded
+cases. Frozen G is a running reference witness benchmark (latest 10k 12.7004 s),
+not a performance conclusion; new source does not alter frozen G. No adaptive
+cache work is implemented from the cache question. The whole <2h/<300GB goal
+remains the only production goal.
+
+**G live CPU-profile / cache requirements checkpoint (2026-10-31):** Endpoint-
+free remains unpromoted: its unlaunched cpp/tests patch passed focused 2/2
+(`build/ctest-endpoint-free-focused.log`), but the user directs keeping current
+code running and profiling CPU because the certified case may be rare. No
+endpoint-free performance conclusion, new algorithm, or further implementation
+is authorized before profile interpretation.
+
+Frozen G is live at 420,000 groups/271.038 read seconds. Separate profiler
+container `pancollapse-live-cpu-profile-G-20261031`
+(`13cf850f726f0d41a92436cf6abd89d846ce64ee71cee844e91bcc28654d4c08`) attaches
+to shared target PID namespace process 8/host 119155; artifacts are
+`G/cpu-live-profile.5WMEZo`. It uses perf 6.8.12, `cpu-clock:u` at 19 Hz,
+DWARF 4 KiB, 30 s, and a separate 4-GB/4-CPU PERFMON+SYS_PTRACE container, with
+no host sysctl change or target restart. `perf.data` was confirmed growing; its
+report is pending. Do not use post-attach G timing as an unprofiled baseline.
+
+The user requires future cache limits to be configurable, scale to the overall
+target, and be generous, removing arbitrary fixed ceilings. That implementation
+has not started and establishes neither an optimal allocation nor a new default.
+The whole <2h/<300GB goal remains pending.
+
+**G terminal live-profiling evidence (2026-10-31):** G remains live at 700,000
+groups/412.740 read seconds; current RSS is 149.7e9 B, cgroup current 140.5e9 B,
+and cgroup peak 140.7e9 B. Initial stack profile
+`G/cpu-live-profile.5WMEZo` is excluded from percentages: its 336.979-MB
+`perf.data` lost 198,970 samples (71.96%), and its inclusive analysis stopped
+the report container only, never count.
+
+Valid repeat `G/cpu-live-flat.BMof18` completed record/report status 0 with
+49-Hz `cpu-clock:u`, no callgraph, 30 s, 8.433-MB data, 186K samples, zero loss,
+and empty report stderr. Its self samples identify
+`select_support_mcl::select` 21.64%, `FastLocate::locateNext` 10.90%,
+`NodeScoreResolver::resolve` 8.60%, `int_vector::get_int` 7.49%, node-build
+add-path lambda 5.14%, `Index::path_row` 4.46%, and `model` 2.66%; remaining DP
+helpers account for other self samples. These are self, not inclusive shares and
+do not establish that scoring is only 8.6% total. First-profile hardware stats
+over 10.00975 s observed 124.906 CPUs, 0.72 IPC, 31.94% cache misses/reference,
+and 75% multiplex coverage. Profiler overhead contaminates G wall timing; no
+full parity, endpoint-free promotion, or cache implementation follows. The whole
+<2h/<300GB goal remains unchanged.
+
+**Configurable generous cache-limits preimplementation checkpoint (2026-10-31):**
+To implement the user's configurable/scaled/generous requirement, root selects a
+startup-only planner rather than a live adaptive controller. Pending
+endpoint-free work remains out of the next binary; root will preserve/undo that
+experimental patch. `count --memory-budget <bytes>` sets planning target
+(default effective cgroup limit/available RAM); repeatable
+`--cache-limit node|edge|assignment|splice=<bytes>` is positive-unit strict, with
+duplicates rejected before GAMP. After reference load, measure RSS; reserve 10%
+of target for workers/counts (heuristic headroom, not a hard aggregate cap or
+spill), set cache pool `max(0, 90% target - RSS)`, and split unoverridden pool by
+renormalized heuristic weights node/edge/assignment/splice 60/25/10/5. Explicit
+overrides must sum at most pool. This is no optimum or upfront-allocation claim.
+
+Remove the practical assignment-entry ceiling; it is byte-only. Configure limits
+only at startup with empty caches/no flights, holding all shards and validating
+before a budget change; hot resize is forbidden. Logs/manifest report target,
+postload RSS, reserve, pool, and actual caps. Limits do not guarantee RSS; the
+external 300-GB cap remains authoritative, and defaults account for shared
+cgroup/MemAvailable. Required acceptance: pure parser/planner overflow,
+duplicate, partial/all override, rounding, and insufficient-headroom cases;
+configure-after-query rejection; tiny/default/huge count scientific parity; and
+full suite. Frozen G remains running (last 999,998 groups/570 s), with full
+parity pending; no wait is needed for this documentation gate.
+
+**G terminal / cache-planner integration checkpoint (2026-10-31):** G exited
+0/no OOM. `G/terminal-receipt.json` records 801.679596-s wall (13m21.68),
+140.956499312-s initialization, 588.488848619-s read, 2.920263331-s UMI final,
+154,255,171,584-B peak, and EOF at 2,502,433 records/1M groups with 982 drops,
+982,842 count rows, and 1,302,814 molecules. Count/MEX validation passed;
+`parity-0.json` passed all ten byte comparisons and scientific counters,
+summaries, and logical tables against F. Profiling and concurrent sort
+contaminate timing, so this is not isolated A/B performance evidence, nor
+whole-genome, F1, or CR full-parity evidence.
+
+Endpoint-free remains unpromoted and preserved externally at
+`R/unpromoted-endpoint-free.KrSF4h/source.tar.gz` with focused logs; root undid
+its cpp/test changes, so the next binary uses the same G scorer. Configurable,
+generous memory-budget/cache-limit CLI/helper/runtime integration is implemented
+by root/worker; 169-test build/full suite logs
+`build/build-memory-scaled-caches.log` and
+`build/ctest-memory-scaled-caches-full.log` remain pending. No full-GAMP
+production launch or whole-goal claim is authorized; <2h/<300GB remains unmet.
+
+**Whole memory-scaled live launch checkpoint (2026-10-31):**
+`R/whole-genome-memory-scaled-t128.XOrxaC` is frozen: `source-memory-scaled.tar.gz`
+was created; binary matches `build/src/panCollapse` by `cmp`; binary/archive/run
+scripts/prepared receipt are read-only. Container
+`pancollapse-whole-genome-memory-scaled-20261031`
+(`68825f7852326af087266ebb1abec3114a564efeceb81f85376bb52ce0d656a4`) started
+at 2026-10-31T23:43:46.622153755Z; host init PID 236004, native host PID 236044.
+Cgroup has memory.max 299,999,997,952 B, swap 0, 128 CPUs, and all
+`memory.events` zero. Parallel native.pci/XG/GBWT/RI load has begun; it is not
+yet streaming. Input is the same tracked 66,601,887-read/30,326,279,277-B full
+GAMP, retaining the 27-Oct/30-Oct provenance caveat; no profiler is attached.
+G 1M remains a control only, not full proof. Next verify ready, memory plan,
+read rate, EOF/group count, validators, and resources; launch does not meet the
+target.
+
+**Live whole performance-investigation checkpoint (2026-10-31):** Whole frozen
+container `68825f7852326af087266ebb1abec3114a564efeceb81f85376bb52ce0d656a4`
+remains unchanged and was still loading GBWT at 23:45:07Z; no new streaming rate
+exists. It is not close to demonstrated <2h feasibility: recent G 1M read rate
+was about 1,699/s versus about 9,250/s minimum (about 5.5x gap). An ~11-h linear
+projection is not a full-run ETA. The live whole attempt continues unchanged.
+
+Next authorized work is read-only: investigate exact neighboring-node membership
+reuse, using an occurrence-bijection certificate, to avoid redundant RI occurrence
+decoding and measure prevalence before any code promotion. This follows valid
+profile self samples (`select` 21.64%, `locateNext` 10.90%, `get_int` 7.49%);
+main scorer 8.60% self is not inclusive. Root must obtain consequential proof
+review before implementation and retain frozen G 1M outputs/full 169 tests.
+Measure live cache-warm throughput first. No shortcut, endpoint-free promotion,
+biology change, memory-target relaxation, or whole restart is authorized here.
+
+**Neighbor-membership pre-diagnostic-code checkpoint (2026-10-31):** Sol/root
+accepted the universal physical-adjacency empty-splice certificate under the
+existing trusted valid bidirectional GBWT/RI contract: if either orientation of
+either endpoint has nonempty outgoing successors and all successors are the
+physical other endpoint, with no endmarker, every body target in `C` has ordinary
+adjacency `B`, so `E intersect C minus B` is empty. Starts, ends, repeats, mixed
+orientation, and missing annotation rows are covered; `NativeSource` load
+enforces bidirectionality. G 1M previously had 8.92M edge queries and 3.855B
+probe-SA steps, but this and neighbor reuse alone cannot close the ~5.5x gap;
+45.17% profiled time gives 1.82x ideal Amdahl speedup.
+
+Authorize only a standalone no-RI 10k prevalence diagnostic: mirror resolver
+endpoint propagation, report unique physical pairs/query-weighted prevalence,
+cross-check record predicate against exact GBWT find counts, potential avoided
+edge occurrences, and bounded aggregate logging. No production scorer/cache
+edit, promotion, full restart, or hash is authorized. Whole stays live above
+260k at ~1,820 recent reads/s under 300GB/no swap/128 threads. Read-only NUMA
+observation (anon N0 ~34.9 GiB, N1 ~76.4 GiB; ~69% N1) is not remote-cost proof;
+no affinity change. Suffix saturation needs separate proof; endpoint-free held.
+
+**Sample-dependent DP threshold-saturation implementation checkpoint
+(2026-10-31):** Supported by new Sol proof, root authorizes semantics-preserving
+automatic saturation under existing performance authorization; frozen live-whole
+binary remains unchanged. Per coalesced group/piece use exon margin
+`2*exon-bases` and forward-minus-reverse strand balance; reverse-DAG suffix
+bounds `[L_j,U_j]` include successor `j` across all completion routes. Before
+every start seed/successor merge, canonicalize entering balance `b`: `b>=-L_j`
+to `-L_j`, `b<-U_j` to `-U_j-1`, otherwise exact. Exon/strand are independent;
+last, valid, all-exonic, body, bases/objectives/support and other flags remain
+unchanged. Sol's sequential-quotient proof is exact.
+
+Wide-128 preflight requires original signed bases/margins representable, exon/
+strand sum-absolute piece deltas <= `(INT64_MAX-1)/2`, and score/gene sumabs <=
+`INT64_MAX`;
+unsafe groups use unchanged DP and preserve original invalid errors. Automatic
+only: force-map/sparse/enumerator controls unchanged. A compact private helper
+is permitted for boundary tests, no public CLI. Required: 320 seeded-oracle
+parity; threshold/overflow/multistart/mask/support tests; full suite; real
+same-10k/1M parity before promotion; then state/time measurement without a 5.5x
+assumption. Adjacency worker separately runs prevalence diagnostic before any
+production shortcut. This does not endorse endpoint-free.
+
+**Threshold/adjacency real-gate prelaunch checkpoint (2026-10-31):** Threshold
+balance helper is implemented in `src/threshold_balance.hpp` with resolver and
+prepared logging; pure tests plus variable-length positive-balance fixture retain
+enumerated counts and reduce states >3x versus force-map. Focused DP/helper,
+including 320 seeded cases, and final full 171/171 passed in 30.07 s
+(`build/ctest-threshold-full.log`). Initial adjacency diagnostic API/fixture
+defects were corrected (edge pair, histogram/count sums, separated reversed
+fixture, GBWT dynamic include); its selftest now passes and full 171 includes it.
+
+Frozen unlaunched A is `R/adjacency-prevalence-first10000.yxZIo8`: helper/cpp/
+run script, GBWT-only/no RI, no GAMP count, 10k structural-pair upper bound,
+128GB/no swap/4 CPU, aggregate JSON, and no speed claim. Frozen unlaunched T is
+`R/node-score-threshold-first10000-t128.bDX1Cb`: binary/archive/logs/run script
+read-only; same 10k, both profiles, MEX, 128 threads/300GB/no swap/memory target;
+independent validators plus ten-file/scientific comparison against frozen static
+cache result. Production adjacency shortcut is not implemented. Root review and
+capacity check precede A/T launches. Whole W remains unchanged (>1.4M reads,
+~2,100 recent/s, ~180GB); concurrent whole/sort makes T timing nonisolated. T
+parity is not 1M/F1/CR proof; 1M parity is required before promotion/restart.
+
+**Threshold/adjacency real-gate live checkpoint (2026-11-01):** A is live as
+`pancollapse-adjacency-prevalence-first10000-20261101`
+(`ac4edd70cc1f91192e7519ce85b0d0c0122852eae600c78947c95306f8f91fa5`), started
+00:00:45.322173614Z; host init 313521/helper 313557; 128GB/no swap/4 CPUs,
+GBWT loading. T is live as `pancollapse-node-score-threshold-first10000-20261101`
+(`b456b6f2d1615859163dee3d39779ae3bd0cfb9cb20dff844b0d20d8860ab1f0`), started
+00:01:03.719884679Z; host init 317333/native 317369; memory.max
+299,999,997,952 B, swap 0, CPU quota 128. Source/binary/scripts are frozen.
+Sol accepted actual-code proof conformance without blocker: unsafe fallback keeps
+original invalid errors; potential linear-prepass overhead is unproven and added
+resolver exception testing is optional. Await A JSON prevalence and T EOF,
+validators/parity/state/timing. No promotion/restart/goal claim. W remains
+unchanged >1.52M/~2,300 recent/s/~188GB peak; W/T share reference loads and
+background sort, so timing is not isolated.
+
+**A/T terminal / adjacency implementation checkpoint (2026-11-01):** A exited
+0/no OOM: 179.341119-s wall, 81,317,462,016-B peak; 10k groups/25k records/14
+drops; 131,436 unique pairs/111,135 certified and 170,183 weighted/144,613
+certified (~85%); four edge occurrences 239,596,894/204,572,195 certified
+(~85.4%). Direct-record versus GBWT-find cross-check passed; load/scan/certify
+were 170.278/5.56907/0.524194 s. This is a structural superset, not actual count
+work or CPU speed evidence.
+
+T exited 0/no OOM: 219.087795-s wall, 175.339366509-s init,
+29.650317813-s read, 0.039151048-s finalize, 133,459,050,496-B peak, 13,904
+counts/13,995 molecules. Validation/MEX and `parity-0` all-ten files, scientific
+counters, summary and logical tables against static control passed. DP states
+were 49,948,641 versus old 10k 1,258,500,869 (~25x), max frontier 69 versus
+1411; all 158,551 groups saturated, zero unsafe. Cache races slightly change raw
+resolver call work; concurrent timing is not a 2x claim. Whole W unchanged at
+2.175M/~2k/s/no OOM.
+
+Root authorizes node-score-only universal adjacency fast return after same-node
+early return and both node-evidence validations, before common intersection/SA
+probe: either anchor orientation has nonempty all-non-ENDMARKER successors equal
+to physical other endpoint. Facts/profiles/strand rules remain unchanged. Add
+operational checks/success stats and test-only disable bool after existing load
+max-probe argument; no public CLI; full mode remains control. Root owns
+production files; bounded query tests follow. Require adversarial/random
+predicate-native-full parity and all 171, then one combined threshold+adjacency
+1M ten-file parity against G/F before promotion. No separate T 1M/10k, restart,
+version, policy, or memory change.
+
+**Complexity/SIMD read-only review checkpoint (2026-11-01):** User requests
+overall-complexity and SIMD assessment; root pauses further production edits/new
+fast paths. Combined threshold+adjacency build passed 171/171 in 34.07 s
+(`build/ctest-threshold-adjacency-full.log`). Root fixed a query-fixture
+assertion: ordinary small pairs already have old probe edge 0; a 512-unannotated-
+path-heavy fixture now forces probe exhaustion and proves certificate zero SA/edge
+versus baseline >0. Full parity covers 440 ordered fixture pairs, 32 random
+predicate-FM checks, endpoint-invalid case, and cold four-client case.
+
+Combined 1M `R/node-score-threshold-adjacency-first1000000-t128.zLDSex` is
+empty/prepared only: no binary frozen or launch. The requested review will assess
+algorithm cost, maintainability/minimal data structures, and vectorization fit
+from actual profile on AMD EPYC 7713 (AVX2, no AVX-512). No SIMD implementation,
+scientific/UMI policy change, promotion, whole restart, or review experiment is
+authorized. Whole W continues unchanged (3.27M, no OOM); A/T terminal evidence
+remains applicable.
+
+**Whole memory-scaled prelaunch checkpoint (2026-10-31):** Cache configuration
+full suite passed 169/169 in 27.67 s
+(`build/ctest-memory-scaled-caches-full-rounding.log`), including pure planner
+rounding/minimum-1-byte correction, invalid-option diagnostics, and
+`native_count_verify` tiny-1-B/default/generous-64-MiB fixture scientific parity.
+The startup memory target/caches are configurable and the old 655,360-entry
+assignment ceiling is removed. Root's engineering decision requires no new 1M
+run for this cache-retention-only change: scorer is restored G and G already
+passed 1M ten-file parity.
+
+Whole attempt is prepared, not launched, at
+`R/whole-genome-memory-scaled-t128.XOrxaC`, which contains binary, build/test
+logs, `run.sh`, `run-count.sh`, and `run-receipt.json`. It will use current
+tracked full/pilot `alignments.gamp` only (30,326,279,277 B; 66,601,887 reads),
+pending the asynchronous 30-Oct versus recorded-27-Oct provenance question; it
+does not introduce a dataset. Plan: 128 threads, 300e9 B/no swap,
+`--memory-budget 300GB` with automatic generous post-load caps, both profiles,
+MEX+Parquet, 64M complexity guard, and no profiler. Background sort remains
+original-envelope transport. Following root review, freeze archive then launch;
+actual Docker/PID/cgroup, EOF/group count, validators, and wall/RSS/cgroup
+evidence are required before any throughput/goal claim. No more pilot runs; the
+<2h target remains unproven.
+
+**F terminal / lookup-design gate (2026-10-31):** Frozen F terminal receipt is
+`R/node-score-distinct-doc-first1000000-t128.GEL63B/terminal-receipt.json`:
+exit 0/no OOM; 884.117372-s wall (166.691148893-s initialization,
+617.838627167-s read, 2.999921962-s finalize); 159,724,564,480-B peak; EOF at
+2,502,433 records/1M groups; 982 complexity drops; 982,842 count rows; and
+1,302,814 molecules. Validation/MEX validation and both all-ten-byte/scientific-
+counter parities passed. This is one-million-read node-score evidence only, not
+whole-genome, F1, or CR full-parity evidence. Sort remains live at 22M packed
+groups, so F is not isolated speed A/B.
+
+The 66,601,887-group <2h/<300GB goal remains unmet and no whole count launched.
+Native components passed focused 4/4 and retired query 1/1; converter-only
+extraction has since passed full 168/168 (the verification checkpoint above
+supersedes this checkpoint's earlier pending status). UMI research
+is complete as source findings plus verified preprocessing, with no policy change.
+In parallel with converter-only cleanup, root authorizes read-only native-hot-path
+correctness/performance design from frozen F source/tests/parity; no changed
+binary launch precedes full build/tests. Review-only candidate:
+`build_splice_evidence` exact ordinary-body witness short-circuit. It must prove
+that all possible common body targets having ordinary adjacency in any orientation
+implies an empty splice-target set under existing semantics. A bounded RI witness
+scan plus fallback is an accelerator only; budget exhaustion cannot drop reads or
+evidence. It is separate from CLI removal/UMI research and changes no biology or
+eligibility rule.
+
+On native successful exit and atomic output publication, validate completion from
+existing receipts only: required `manifest.json`, `summary.tsv`, and the four
+required Parquet tables (`barcodes`, `features`, `counts`, `molecules`); manifest
+count-storage/profile/input/provenance fields and table schemas/sort contract;
+and stable global/per-profile summary counters. These lightweight presence,
+schema, and counter checks do not add full-file hash scans. The next authorized
+task remains monitoring and diagnosing/fixing/restarting any failure without a
+biological-policy change.
+
+## Historical authorization checkpoint (2026-10-30)
+
+The user now authorizes diagnosis, repair, preflight, and a restart without
+further intervention, subject to a bounded technical review of the implementation
+approach. This authorizes no biological-policy change. The original GAMP and GBWT
+are preferred unchanged, and all immutable inputs must be preserved. The repair,
+preflight, and restart have **not** yet been performed; no new container, count,
+or published output exists.
+
+The terminal count failed on a missing path, not OOM: its fatal ledger row
+`chr2::HG00097#1#HG00097_ha_T0037310_R1` is byte-identical in the original and
+later ledger. The diagnosed cause is the Oct 28 asymmetric qualification:
+`qualify_ledgers.py:40-43` prefixes every ledger path, whereas
+`repair_metadata.cpp:115` skips non-generic GBWT paths. The binding records
+7,458,390 non-generic chr2 paths, exactly the difference between 190,240,849
+ledger rows and 182,782,459 matched paths. The completed `.ri` artifact and its
+source/hash receipts remain recorded below; it does not itself repair the
+ledger/graph binding or complete a count.
+
+Any restart must retain both profiles, 128 threads, and the 500,000,000,000-byte
+hard memory and memory-plus-swap limits (no swap). It is not evidence of a
+successful repair, fit, GAMP processing, or published count until its own native
+receipts are complete. Do not record a specific repair design as accepted before
+the bounded technical review concludes.
+
+## Historical: standard FastLocate `.ri` built; earlier namespace-repair mismatch diagnosed (2026-10-30)
+
+The `.ri` container exited 0 at `2026-10-30T16:03:46.588726829Z` (09:03 PDT).
+Published artifact: `pancollapse_transcript_ri_20261030_eAma1l/joint.transcripts.ri`
+under the result root below, 44,433,079,158 bytes, SHA-256
+`7c6f0526b35ccf6ce744f026da89e9203a2f3e7d8664691054dd2dcaaab711bd`.
+Source GBWT SHA-256 is
+`165d0a427a82eec08310b7f2306d6cb2dbdadc89a60bbbcab67c2f3224086961`.
+Builder reports 3,610,110,443 logical runs and 1,812.16 s indexing; native
+FastLocate construction was 1,560.69 s. Full query verification and a PanCollapse
+`.ri` loader remain absent; artifact generation is not count completion.
+
+**Read-only cause audit:** binary-search lookup in both the original graph-side
+ledger and the later count-repair ledger finds the fatal row byte-identical,
+including `vg_path_name`. Both ledgers retain 190,240,849 rows. The earlier
+Oct 28 graph namespace repair is inconsistent: `qualify_ledgers.py:40-43`
+prefixes every ledger path with `chromosome::`, while
+`repair_metadata.cpp:115` skips non-generic GBWT paths. Source and binding are
+under `/mnt/ssd/lalli/hprc_v2_vg_rna/notes/joint_transcript_gbz_20261028_repair/`.
+`BINDING.json` records 380,460,061 total paths and 373,001,671 generic paths;
+the difference, 7,458,390, exactly equals 190,240,849 ledger rows minus the
+182,782,459 matched paths. The ranges put all non-generic paths in chr2.
+This identifies the earlier name-qualification asymmetry, not recent string
+interning/flat-storage changes or biological/row removal, as the cause mechanism.
+A complete per-path counterpart audit has not run. No ledger/GBWT/index rewrite
+or count restart was performed or authorized by this diagnostic question.
+
+Container `pancollapse-memory-reduced-count-20261030-4sQJXD` finished at
+`2026-10-30T15:17:19.33273047Z` with exit 1 and `OOMKilled=false`. It completed
+`FastLocate` in 1592.66 s and `selected_path_positions` in 1511.04 s
+(182,782,459 paths; 224,363,518,048 steps; 3,780,279,798 checkpoints;
+15,121,119,192 coordinate bytes), then failed because ledger path
+`chr2::HG00097#1#HG00097_ha_T0037310_R1` was absent. No GAMP processing,
+completed count, or published output exists; no restart is authorized.
+
+The authorized independent standard FastLocate `.ri` build launched at
+`2026-10-30T15:32:41.725382404Z` (08:32 PDT) as container
+`pancollapse-transcript-ri-20261030-eAma1l` in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_transcript_ri_20261030_eAma1l/`.
+It uses frozen `build_ri` 1.5.0 SHA-256
+`3b1e02dff44c9973379c0e598b81267bb2cd93c319c22d5b284ef50e39023a0f`,
+128 threads/CPUs, and 500,000,000,000-byte memory and memory-plus-swap limits
+(no swap), with `/mnt/ssd/lalli/usr/local/src/vg/deps/gbwt/bin/build_ri` for the unchanged
+44,562,796,448-byte
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/joint_transcript_gbz_20261028_repair/joint/joint.transcripts.gbwt`.
+The root retains `launch.sh`, `build.sh`, `RUN.json`, `container.id`,
+`build.stdout`, and `build.log`. The `.staging/joint.transcripts.gbwt` symlink
+is the unchanged input; `joint.transcripts.ri` publishes only after builder exit
+0, nonempty output, stable source, and recorded completed source/output SHA-256
+binding. At 15:33 UTC it was running and loading GBWT (Docker displayed 23.4
+GiB); this is not artifact completion or query verification. This `.ri` is a
+reusable GBWT-side artifact only: current
+panCollapse has no `.ri` CLI option or loader, so it is not usable by the
+current count CLI and does not replace the ledger, XG/GBWT, PCANIDX2,
+selected-path positions, or exact model geometry. The GBWT must remain
+unchanged. Host preflight reported `MemAvailable` 896,347,656,192 bytes and
+about 12.15 TB free disk. The failed count remains unrestarted.
+
+## Historical: memory-reduced whole-genome count launched; reference initialization active (2026-10-30)
+
+The latest user instruction, **"Run it,"** authorized exactly one retry, now
+launched at `2026-10-30T12:54:14.737507532Z` (05:54 PDT). It uses the dirty, tested memory-reduction
+worktree on `fix/whole-genome-count-repair-20261028` at
+`327b048ce8747c83fe20c9f75074cc4ee77b1312`, using
+`build/src/panCollapse` SHA-256
+`ddb57632d7c70b6d7fb080a52bbbcd76cc11d32d6ae0abb41ffcae1a2305dc82`.
+The bounded receipts remain `build/reference-memory-ctest-final.log`
+(186/186) and `build/reference-memory-parity.log` (18/18 on the nine-read
+fixture); neither establishes real-data fit or completion.
+
+The one run is both `cr7` and `pansc-strict-v1`, with 128 threads, a
+500,000,000,000-byte hard container memory cap and equal memory-swap cap (no
+swap), memory-only aggregation (no spills), and the same existing GAMP, XG,
+GBWT, PCI, ledger, and whitelist inputs recorded by
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_indexed_count_20261030_uSVnCB/RUN.json`.
+It does not authorize remapping, reindexing, preloading, an old-binary retry,
+or a cap change. Preserve the old 600-GB OOM evidence. At admission check,
+`MemAvailable` was 895063134208 bytes; the target is 12.15 TB available, with no
+active PanCollapse count at that preflight. The launch passed the documentation
+checkpoint before execution. Container
+`pancollapse-memory-reduced-count-20261030-4sQJXD` is running with Docker limits
+verified at 500,000,000,000 bytes memory/memory-plus-swap and 128 CPUs. The kernel
+page-aligns `memory.max` to 499999997952 bytes; `memory.swap.max` is zero.
+The first native milestone is `identity_ledger_begin`; GAMP processing has not
+started and no counts are published. This does not establish full-reference fit.
+
+**Read-only update, 14:46 UTC / 07:46 PDT:** ledger validation, annotation-index
+load, metadata parse, XG and GBWT load have completed. FastLocate construction
+is still the uncompleted native phase; no GAMP progress is logged. Anonymous
+memory was 413.4 GB at 14:43 and 347.5 GB at 14:46; the latter snapshot also has
+64.8 GB file cache. The cgroup previously reached its 500-GB cap, with no OOM
+or OOM kill. These are process/container observations, not per-container-object
+heap attribution. The user asks why this work is not indexed: FastLocate has
+native `.ri` serialize/load support, but `GraphInput::initialize_gbwt()` builds
+it unconditionally. Current PCANIDX2 stores annotation-policy facts only, not
+the ledger identities, graph lookups or FastLocate. A future `.ri` loader must
+bind the exact source GBWT; the native `.ri` header does not verify that identity.
+No implementation or job change is authorized by this diagnostic question.
+
+Frozen executable, `launch.sh`, prepared `RUN.json`, `container.id`, `count.log`
+and `count.stdout` are in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_memory_reduced_count_20261030_4sQJXD/`.
+Final output target is that root's `counts/`, published atomically on success.
+The next authorized task is observing this one run through reference loading,
+GAMP processing and output validation; do not silently restart it if it fails.
+
+## Historical implementation checkpoint: reference-memory reductions; 186/186 tests and frozen-binary parity pass (2026-10-30)
+
+The user authorized the preceding audit's storage reductions. Implemented on
+dirty branch `fix/whole-genome-count-repair-20261028` (base `327b048`), preserving
+preexisting D097/D099 and memory-only changes:
+
+- Exact GBWT coordinates retain 64-step/terminal checkpoints, recovering an
+  occurrence through at most 63 LF steps with its BWT-record offset. Only one
+  coordinate width is live. Repeated visits, mixed orientation and >32-bit
+  positions remain supported; statistics report actual selected steps,
+  checkpoints, coordinate-capacity bytes and wide paths.
+- Validated ledger trees compact to lexical arrays, with representative Parent
+  pointers rebound before catalog construction. Main reuses lexical Parent
+  ranks rather than a second hash table, sorted name vector or persistent
+  materialized-fact pointer vector. Selection reuses row binding flags instead
+  of copying every selected GBWT name. Legacy-only path strings allocate only
+  on legacy paths; unused production gene-geometry duplicates are skipped.
+- Parent facts retain 24-byte records with shared gene/category dictionaries
+  and lexical rank/key APIs. The existing 13-byte PCANIDX2 disk representation,
+  source identity and deterministic bytes are unchanged; existing indexes need
+  no regeneration.
+- Native node/model caches account 1 GiB/256 MiB of resident values with FIFO
+  eviction/oversize bypass. Shared-pointer read leases preserve values during
+  eviction. Actual process memory also includes allocator overhead, active
+  leases and uncached work; these cache bounds are not a whole-process limit.
+- After workers and compatibility capture finish, cache/reference/model/Parent
+  state is released before UMI finalization; required transcript provenance is
+  retained separately. Common UMIs use lossless packed keys with an owned-string
+  fallback; historical filtering/UMI semantics remain unchanged. Consumed
+  buffers and hash buckets are released rather than retained through output.
+
+**Acceptance:** Docker build succeeds and
+`build/reference-memory-ctest-final.log` records **186/186 PASS in 47.20 s**.
+Coverage includes LF checkpoint/terminal boundaries, repeated/mixed-orientation
+paths, 1,025 steps -> 18 checkpoints, wide coordinates, flat catalog movement
+and pointer rebinding, 24-byte policies, shared categories, byte-exact index
+roundtrips, evicted active leases, concurrent single-flight cache construction,
+UMI packing/fallback edges and outputs after Parent release. Earlier integrated
+pass was 185/185 in 45.95 s before the cache test was added. A transient round3
+build failed because a parallel-owned release helper had not yet landed; final
+build resolves it (`build/reference-memory-build-final.log`).
+
+Frozen-executable comparison **18/18 PASS** via
+`tests/vg/reference_memory_parity_verify.py`: old/new 1 thread and new 4 threads,
+XG/XG+GBWT/GBZ, default/all-format sinks, both profiles, nine-read fixture.
+All produced table/diagnostic/MEX/RAD files are byte-identical; scientific
+counters and profile logical hashes agree. Receipt root:
+`build/reference-memory-parity-wvzakxpv/VALIDATION.json`; summary log:
+`build/reference-memory-parity.log`.
+Tested new binary SHA-256:
+`ddb57632d7c70b6d7fb080a52bbbcd76cc11d32d6ae0abb41ffcae1a2305dc82`
+at `build/src/panCollapse`; old frozen SHA remains
+`952b993fac47d773e36a3d258770d476da91f52dda85ead840f2b101c88b10ed`.
+Final DWARF sizes: Parent record 24 B, SelectedPath 56 B, exact aggregate key
+32 B and deferred key 96 B. These are layout facts, not measured whole-genome
+RSS reductions.
+
+**Next gate at this implementation checkpoint:** user-authorized resource qualification/retry, not automatically
+launched then (the later authorized launch is recorded above). No production GAMP, reference rebuild, release image or cap
+increase was started. The user's requested 500-GB process cap remains unchanged;
+the older-binary/450-GB count spill request is deferred and the working build
+remains memory-only. No claim of 500-GB fit, throughput, real-data F1 or full
+whole-genome count completion follows from bounded fixtures. The sampled
+coordinates introduce a lookup-time tradeoff that remains unmeasured at scale.
+
+## Historical: diagnostic/source/type-layout audit after indexed-count OOM (2026-10-30)
+
+The prior read-only audit asked why reference initialization used so much memory
+and which smaller structures could be retained while streaming reads. It did
+not then authorize implementation, relaunch, a new scientific policy, or a new
+resource limit. The implementation authorization above supersedes only that
+read-only boundary; the prior 500-GB-cap/450-GB-spill older-binary request
+remains deferred after the failure.
+
+Observed: container `pancollapse-indexed-count-20261030-uSVnCB` exited 137
+with `OOMKilled=true` at `2026-10-30T06:36:08.346768207Z`, under its
+600,000,000,000-byte no-swap cap; frozen binary SHA-256 is
+`952b993fac47d773e36a3d258770d476da91f52dda85ead840f2b101c88b10ed`.
+It completed identity-ledger validation (190,240,849 rows), annotation-index
+load, metadata parse, XG, GBWT, and FastLocate. It did not complete
+selected-path positions or GAMP processing. No GAMP completion or published
+counts exist. Receipts: `RUN.json`, `launch.sh`, and `count.log` in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_indexed_count_20261030_uSVnCB/`.
+
+**Read-only audit complete.** The failed interval is after FastLocate and
+before `selected_path_positions` (`src/main.cpp:3185-3205`). It both duplicates
+selected names in a string hash set and eagerly prepares per-step coordinates;
+there is no intermediate milestone identifying which allocation exhausted RAM.
+No heap trace or per-structure measured RSS survives. Do not call the following
+layout arithmetic an observed allocation breakdown or a proven memory-fit fix.
+
+Bounded GBWT-header inspection reports 760,920,122 stored sequences and
+474,167,531,502 symbols. Its bidirectional representation therefore contains
+380,460,061 forward metadata paths and 236,703,305,690 forward real steps.
+The format is pinned by
+`/mnt/ssd/lalli/usr/local/src/vg/deps/gbwt/include/gbwt/files.h:44`;
+`od -An -tx4 -N48` and `od -An -tu8 -j8 -N40` on the supplied GBWT read
+only its header (tag `0x6b376b37`, version 5, offset 1, alphabet size
+233,689,814, flags 7). Real forward steps are `(size - sequences) / 2`,
+excluding endmarkers and the stored reverse walks.
+`src/graph_input.cpp:136-158` extracts each selected walk and reserves a base
+coordinate for every step plus its terminal. If all forward paths were selected
+and stayed 32-bit, the packed coordinate payload alone would be
+948,335,063,004 bytes. The actual selected-step count was not recorded and was
+not measured by scanning the reference; that scenario is not the actual RSS.
+DWARF gives 72 bytes per `SelectedPath` object, or 13.70 GB if all 190,240,849
+ledger paths are selected, before coordinate buffers. FastLocate's constructor
+clears its large temporary construction arrays before logging completion;
+retained r-index arrays, XG and GBWT remain resident.
+
+Frozen-binary type inspection without running the inferior also establishes:
+176 bytes per ledger row tree node and 48 bytes per Parent index tree node,
+giving a combined 42,613,950,176-byte floor at the observed row/Parent count,
+excluding shared text atoms, character buffers and allocator overhead.
+Strings are already interned (8-byte handles; 40-byte unique atoms before text
+heap); audit-only provenance is already released after validation. Loaded
+Parent facts are flat 96-byte rows, not another tree: 18,263,121,504 bytes
+before category buffers, versus 13-byte numeric disk records. Do not propose
+already implemented string interning or provenance release as new work.
+
+**Opportunities, not implemented or approved designs:** retain numeric
+row/Parent/model IDs and packed policy records; remove startup-only copied
+selected names and redundant handle storage; avoid dense coordinates for every
+path occurrence through compact/shared or sampled/lazy geometry; combine
+duplicated node-reference/exact postings and make read-time caches safely
+discardable. A node-to-gene union remains insufficient: repeated occurrences,
+orientation, transcript coherence, exact overlap and junction semantics must
+survive. A flat node-posting expansion is not automatically smaller than GBWT.
+
+`NodeLedger`, exact-model candidate caches, exact Parent models, GAMP queues and
+count tallies were not populated at this failure. They cannot explain this OOM,
+but are additional whole-genome peaks still unqualified. The lazy reference
+caches never evict; safe eviction would require lifetime-safe access rather
+than deleting objects still referenced by workers. During later counting,
+exact/deferred aggregate keys also
+retain string objects (DWARF 48/112 bytes), and finalization retains multiple
+resident buffers. Compact sequence encoding, per-barcode batch output and
+releasing graph/model caches after workers join could reduce later peaks, not
+this startup failure. No dataset was rerun, production code changed, or new
+fit/performance claim established. Existing memory-only source and 185/185
+bounded acceptance remain untouched.
+
+## Historical snapshot: memory-only native count implemented and bounded tests pass; active run untouched (2026-10-30)
+
+The user has explicitly directed that **all count-path disk fallback be
+removed**.  The accepted follow-up requirement is therefore memory-only raw
+read/count aggregation and UMI collapse, with no spill, merge, or other
+count-intermediate disk escape path.  This is an implementation and parity
+gate, not a change to annotation, compatibility, assignment, or biological
+policy. The implementation now removes aggregate/deferred/corrected and
+single-barcode spill I/O, external merges, directory management and the
+independent runtime/output memory budget. The old CLI option fails explicitly;
+manifests/preload receipts report memory-only storage and compatibility spill
+counters remain zero. Optional diagnostic staging and final compressed outputs
+are unchanged. The frozen live run was neither stopped nor restarted; a restart
+remains an explicit user decision.
+
+**Acceptance:** coordinated Docker build plus the full existing CTest suite
+pass 185/185 in 45.84 s (`build/memory-only-build-final.log`,
+`build/memory-only-ctest-final.log`). An earlier pass was 185/185 in 47.54 s.
+Coverage includes frozen barcode/UMI goldens, insertion/thread/joint-profile
+invariance, a 60,000-feature single-barcode resident case, removed-option
+rejection, absence of aggregate files and raw/index output equivalence.
+The release-image smoke command was updated and passes `bash -n`; a new release
+image was not built. Runtime static inspection confirms no aggregate file
+writers or compressed-run machinery remain. These bounded checks do not prove
+whole-genome peak RAM or end-to-end performance. D100 and
+`docs/conversion-algorithm.md` record the actual design and remaining boundary.
+
+At that historical checkpoint the container was observed `running` (not then
+OOM-killed) with Memory=MemorySwap=600,000,000,000 bytes. Its latest native log milestone
+is 90,000,000 / 190,240,849 identity-ledger rows at 1438.44 s; this is still
+initialization only.  There is no observed GAMP processing, published count
+output, or count spill file.  These facts do not establish end-to-end memory
+fit or count correctness.
+
+**What was indexed.**  D099's completed `annotation.pci` is a 2,539,421,338-
+byte compiled annotation-fact artifact: the two frozen profile fact tables,
+source identities/formats, canonical Parent records and small gene/category
+dictionaries.  It avoids annotation decompression, parsing, and
+classification at count start.  It is deliberately not a graph/HST-node
+association index, nor a full prepared reference: the checksum-bound path
+identity ledger, XG/GBWT, FastLocate, graph/path positions, and exact
+Parent/exon/splice geometry still initialize for each count.
+
+**Architecture boundary.**  D048's simple active algorithm scores aligned
+nodes and attributes that evidence to every traversing HST path, then preserves
+the best-score/tie, transcript-collapse, orientation, and downstream
+assignment semantics.  A proposed node-to-association dictionary would have
+to represent that many-to-many path membership and all required identity and
+geometry links; a single node-to-gene mapping is not equivalent.  It may be a
+future performance candidate, but no simplification or replacement is
+authorized from this observation. The source-backed architecture audit and
+memory-only implementation/bounded validation are complete. The next decision
+is the user's choice about restarting the frozen run; a full prepared reference
+remains a recommendation, not an implemented or launched change. Do not reindex,
+launch a new pilot, alter policy, or infer a production restart.
+
+## Historical snapshot: direct indexed whole-genome count launched at 600 GB (2026-10-30)
+
+After the documentation checkpoint, actual native `count` (not preload) started
+at 2026-10-30T04:15:28.260611550Z (21:15:28 Pacific, Oct 29). Container
+`pancollapse-indexed-count-20261030-uSVnCB`, ID
+`c68ae03ffb6faed56e397051ac6b9d0179a07fa67aab2510395f8213e4458bc5`,
+was confirmed running at that time with Memory=MemorySwap=600,000,000,000 bytes, no swap,
+NanoCpus=128,000,000,000 and frozen binary
+`952b993fac47d773e36a3d258770d476da91f52dda85ead840f2b101c88b10ed`.
+Run root:
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_indexed_count_20261030_uSVnCB/`.
+Exact command/inputs/limits are in `launch.sh`/`RUN.json`; native progress is
+`count.log`. Default Parquet counts for both profiles will publish atomically
+under `counts/`. No BAM, optional diagnostic/RAD/MEX sink, remapping, index
+rebuild, GFF parse or separate `--preload-only` pass is requested. Initialization
+will proceed directly into GAMP in this same process if it succeeds.
+
+The first native observation is 5M ledger rows after 58.38 s, before GAMP.
+This is running initialization, not read processing, count completion or
+whole-genome fit. Admission `MemAvailable` was 878,532,720 kB (~900 GB), with
+~12 TB free. The compiled annotation index is complete and reused; remaining
+ledger/graph/FastLocate/model startup is still required.
+
+`--count-memory-budget 128GiB` was carried from the original plan; it is not a
+second hard process cap or preallocated reservation. It controls approximate
+aggregation spilling (currently triggers at 3/4, ~96 GiB) and merge buffers,
+not reference initialization. The user questioned this independent setting;
+no runtime change/restart or new policy was authorized by that question.
+
+## Prelaunch checkpoint: annotation index complete; higher-cap count authorized (2026-10-30)
+
+The former annotation-index build is **COMPLETE**, not running. Its run root is
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_annotation_index_20261029_HS3sPi/`.
+Docker records exit 0 and `OOMKilled=false` at
+`2026-10-30T02:50:18.720565643Z`; `index.stdout.json` reports
+`status=complete`, 190,240,849 Parents, 265,064 gene IDs, and
+2,539,421,338 fact-content bytes. The published index content ID is
+`sha256:a0e25615cbc0fa35f9224718cb8d0e44862d3848618e6415d5ce2683f148e733`.
+Native time was 12,546.4 s; container time was 12,950.65 s including cleanup.
+The frozen producer binary is
+`952b993fac47d773e36a3d258770d476da91f52dda85ead840f2b101c88b10ed`; the
+bounded suite passed 185/185. The completed index does not establish count fit.
+
+**Next authorized gate:** perform exactly one direct whole-genome `count` using
+this index, both profiles, 128 threads, a 128-GiB aggregation budget, and a
+600,000,000,000-byte hard memory cap with no swap. Use the GAMP, XG, and GBWT
+input paths recorded in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_source_gene_count_20261029-JQD61Y/execute.sh`;
+keep source inputs read-only. Do not run a separate preload or repeat
+initialization. This is authorization for no other experiment, remapping,
+graph/index rebuild, GFF regeneration, or production retry. The earlier 350-GB
+count preload OOM-killed before GAMP processing; it remains historical evidence,
+not a capacity result for indexed count. Host headroom must be freshly checked
+at launch. No indexed count has yet run; counts are not ready until processing
+completes with its run receipt.
+
+## Implementation acceptance: native annotation index; 185/185 tests pass (2026-10-29)
+
+User authorized compressed GTF/GFF indexing after the failed whole-genome
+preload. Architecture/adversarial review accepted a bounded first D098 slice,
+documented in D099: `panCollapse index ... --out annotation.pci` and native
+`count --annotation-index annotation.pci --path-identity-ledger ledger.tsv`.
+Implementation remains on dirty `fix/whole-genome-count-repair-20261028`, based
+at `327b048`; preserve the preexisting D097/storage changes and others' edits.
+
+The native `PCANIDX2` artifact contains prepared annotation facts for both
+profiles, source identities, explicit formats, dictionaries and lexical 13-byte
+Parent records. Count loads facts into reserved flat storage, reusing the
+checksum-bound ledger's strings, with no annotation parsing/classification.
+Raw/compiled routes preserve source fact identity and biological rules.
+Explicit GTF supports quoted/repeated attributes and requires transcript rows;
+decompression is cursor-buffered with bounds and checked zlib errors. No Python
+production dependency, SQLite, per-read spool, graph-handle persistence, GFF
+rewrite, cap raise or production relaunch was introduced.
+
+Index and ledger digests are calculated during their required reads. The
+loader retains exact consumed whole-file SHA/size for the count manifest, so
+manifest generation neither reopens nor rehashes the index. Its distinct
+`annotation_index_derivation_id` covers the payload, including formats and
+semantic version. Staged checksum verification and atomic no-overwrite
+publication protect outputs. Bounds, enums, source/content consistency,
+profile/equivalence invariants and ledger identity fail before graph/GAMP.
+
+Final build and CTest pass **185/185 in 45.46 s**, including raw/index count,
+molecule, read-assignment, logical-hash, semantic-counter, MEX and RAD parity at
+1/4 threads; gzip GFF3/GTF parity; deterministic bytes; deleted annotation
+sources; wrong ledger; corrupt/truncated records; re-checksummed forged source,
+format, flags and equivalence cycles; and loaded-inode identity retention.
+Logs: `build/annotation-index-build.log`,
+`build/annotation-index-ctest-final.log` (the earlier full run also passed
+185/185 in 47.66 s at `build/annotation-index-ctest.log`). Initial test-environment
+issues were an absent `/stock-vg` fixture mount and Python UMI-tools user-site
+path, not native failures; configure now uses the mounted existing vg executable
+and the full suite runs with explicit PYTHONPATH. `git diff --check` passes.
+Commands/limits: `docs/annotation-index.md`; core:
+`src/annotation_fact_index.{hpp,cpp}`, `direct_count_facts.*`, `main.cpp`.
+
+**Historical pre-index D098 gate:** the index is not a full prepared-reference
+snapshot or an OOM fix. Ledger maps, XG/GBWT loading, FastLocate, path positions
+and exact Parent/exon/splice geometry still initialize per count, and their
+whole-genome resource use remains unqualified. The current, explicitly
+higher-cap indexed-count authorization above supersedes the former requirement
+to reduce/persist this remaining state before a production rerun. The failed-run
+receipts below remain the authoritative prior result: zero GAMP reads/counts.
+
+## Historical: qualified whole-genome preload OOMKilled; reference index authorized (2026-10-29)
+
+The D097-qualified bounded preload failed before counting. Container
+`pancollapse-qualified-count-20261029-JQD61Y` (run root
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_source_gene_count_20261029-JQD61Y/`)
+started at 2026-10-29T15:00:25.246941463Z and was OOM-killed at
+2026-10-29T21:20:25.857153601Z: Docker records exit 137 and `OOMKilled=true`
+under Memory=MemorySwap=350,000,000,000 bytes (no swap). Do not infer the
+exact allocation that triggered the kill. `stage.json` remains
+`{"stage":"preload","gamp_opened":false}`; no count log or outputs exist.
+
+The final preload records identity-ledger validation at 190,240,849 rows,
+annotation facts for 190,240,849 Parents and 265,064 genes, metadata parsing at
+21,544.8 s, XG deserialization at 19.8736 s, and GBWT deserialization at
+271.377 s. It has no fast-locate-complete record. This is a failed resource
+qualification, not a count, parity, or biological result; historical evidence is
+preserved.
+
+**Next authorized task:** implement D098's native reference-index function:
+ingest compressed GTF/GFF and directly write a preprocessed binary that native
+count loads. The index must capture reusable reference-only prepared state, not
+just raw parsing inputs; retain input/version identity checks and complete/atomic
+publication. Sample-specific barcode priors, observations, assignments and UMI
+counts remain outside it. Establish raw-input versus indexed-reference parity and
+bounded tests before any production use, along with startup wall-time, peak-memory
+and I/O measurements. The existing scripts/fact bundle are not a complete runtime
+reference snapshot. No full whole-genome relaunch, memory-cap increase, or new
+experiment is authorized by this checkpoint.
+
+## Historical: D097 implemented/verified; qualified whole-genome preload failed (2026-10-29)
+
+D097 is implemented on dirty branch `fix/whole-genome-count-repair-20261028`:
+native `count` and compatibility replay qualify a conflicting canonical
+transcript by normalized source-gene ID while preserving both source-gene IDs
+and all original provenance. GFF/index inputs are unchanged; legacy
+`panCollapse convert` remains strict. No per-row target field was added (row
+size remains 136 bytes). The real CHM13 chr2 fixture remains
+`ENST00000477740.5` -> `ENSG00000241860.8` versus `ENSG00000238009.6`.
+
+`build/qualified-target-ctest.log` records full native suite 183/183 passing
+in 55.84 s; `build/qualified-target-focused.log` records 6/6 in 2.40 s,
+including semantic counters and forged mixed-source facts. Native end-to-end
+comparison found explicit canonical one/two-truth and qualified-canonical
+ambiguity matrices, molecules, read assignments, and counters exactly equal at
+one/four threads and replay; optional RAD unique keys also agree. This verifies
+the scoped behavior, not whole-genome capacity, biological equivalence,
+frozen-fact authority, protected-host compatibility, accuracy, or custom-profile
+promotion.
+
+Launched at 2026-10-29T15:00:25.246941463Z (08:00:25 Pacific):
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_source_gene_count_20261029-JQD61Y/`
+(`RUN.json`, `launch.sh`, `execute.sh`). Container
+`pancollapse-qualified-count-20261029-JQD61Y`, ID
+`2e5b93d5c56d0783bc6e98a9d7b3ae14374dd4b91a2989353a2bf2a5d2628010`,
+was later OOM-killed as recorded in the current checkpoint; it had Docker
+Memory=MemorySwap=350,000,000,000 and NanoCpus=128,000,000,000. Frozen binary SHA-256:
+`8200489e65aa056f18a5a367a6a21e9d778dd0c66a3d62223c1ceb1bc470ad1a`.
+The first observed snapshot processed 3,000,000 ledger rows in 32.94 s and
+reported about 2.287 GiB Docker memory; this is early loading, not peak RSS.
+`stage.json` says preload/no GAMP opened; `preload.log` has million-row progress.
+The workflow required bounded preload exit 0 with no GAMP reads before count,
+but that condition was not met. No count started. No cap raise, pilot series,
+BAM, remap, GFF rebuild, or whole-genome relaunch is authorized.
+
+## Historical: storage compaction implemented; source-gene identity conflict observed (2026-10-29)
+
+The compact-storage implementation now shares immutable identity text, releases
+audit-only provenance after the original validation checks, shares annotation
+metadata/tag sets and ParentFact strings, and stores graph handles/lexical ranks
+directly on rows instead of two additional lookup dictionaries. Fixed row size
+is 136 bytes (previously 744); this is not a measured whole-genome RSS reduction.
+The representation still has map-based row/Parent catalogs; a complete packed
+numeric catalog rewrite and whole-genome capacity qualification are not claimed.
+Native startup now logs ledger byte/row progress at million-row milestones.
+
+The actual conflict is not established to be a harmless copy label:
+`ENST00000477740` / `ENST00000477740.5` occurs with
+`source_gene=ENSG00000241860.8`, while
+`chr2::CHM13_T0135505_R1` has `gene_id=ENSG00000238009` and
+`source_gene=ENSG00000238009.6`. These normalize to different count-gene IDs.
+Whether these represent historical annotation aliases, a source annotation
+error, or different biological loci is unresolved. No gene merge, transcript
+re-keying, or policy relaxation has been applied. The original canonical/gene
+check remains fail-closed and reports the conflicting IDs/path.
+
+The two-row real-data regression is
+`tests/fixtures/path_identity_conflict_ENST00000477740.tsv`. Discovery evidence:
+`build/compact-identity-conflicts.log` (search stopped once the contradiction was
+captured; not a whole-ledger inventory), plus
+`/mnt/ssd/lalli/pancollapse_compact_identity_20261029-t6nati/`.
+Two complete native suites passed 181/181 before the final fixture was added;
+a later parallel run exposed an existing pair of isoform tests writing the same
+BAM path. Their shared output is now protected by a CTest resource lock. Final
+build/suite results are at `build/compact-identity-build.log` and
+`build/compact-identity-ctest.log`. Final rebuild and complete suite passed
+181/181 in 26.66 s, including the real conflict in ordinary and exact-preflight
+ledger modes. The standalone ledger regression reports identity=104 and row=136
+bytes. `git diff --check` passes. Whole-genome counting remains unstarted.
+The immutable-text unit also passes AddressSanitizer/UndefinedBehaviorSanitizer
+with leak detection enabled.
+
+No GFFs were regenerated, no persistent index/database was created, and no
+whole-genome count or repeat preload was started. Existing input authority,
+350-GB/no-swap startup cap and conditional count authorization are unchanged.
+Next task requires resolving the transcript/source-gene identity conflict with
+the user before another startup; storage changes alone cannot make that input
+consistent. The historical preload receipt now records its observed exit 1,
+not a stale running status.
+
+## Historical: full-reference startup failed in the identity loader (2026-10-29)
+
+`pancollapse-final-input-preload-20261029T041218Z` exited 1, not OOM, at
+2026-10-29T04:30:16.299861101Z before opening GAMP or producing counts. Its sole
+reported error is: `path identity ledger maps canonical transcript
+ENST00000477740 to multiple genes`. The run used final corrected GFF/ledger,
+original XG and repaired transcript GBWT, both profiles, 128 threads, a
+350,000,000,000-byte no-swap whole-process cap and 128-GiB count budget. Native
+binary SHA-256 is `ea4694b9a394fa4f95d1c3be03c56c2c957f3bbe69bfbfcb7441741f7dc4e4c8`
+at source `327b048ce8747c83fe20c9f75074cc4ee77b1312`; receipts remain at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_annotation_count_20261029T041218Z/`.
+
+**Observation, not policy:** the loader rejects this canonical-transcript/gene
+relation; the receipt does not establish whether rows are legitimate haplotype
+copy differences or a true gene contradiction. **Next authorized task:** replace
+the full string-heavy ledger provenance representation with compact numeric
+mappings/shared metadata, and add small regressions that distinguish those two
+cases without relaxing biological identity rules. Only after those regressions
+and a successful bounded startup check may the already-authorized real count be
+reconsidered under the existing hard cap. No extra GFF generation, remapping,
+BAM, database, persistent custom index, pilot series, or biological-policy
+change is authorized.
+
+## COMPLETE: corrected GFF input (2026-10-29)
+
+`RUN/corrected_gffs_usable/annotation.corrected.gff3.gz` and its matching
+hard-linked `path_identity_ledger.tsv` are published. Container
+`pancollapse-count-gffs-20261028T173014Z` exited 0 at
+2026-10-29T03:23:47.540000084Z: 24 chromosomes, 95,110,030 EXON contexts, and
+BGZF integrity passed; 811,212,428 input and 1,016,498,852 final feature rows;
+55,281,270,132-byte GFF; 3,841.709 s wall and 42,801,287,168-byte child peak RSS.
+Authority: `RUN/corrected_gffs_usable/manifest.json` and
+`RUN/logs/count-ready-gff-preparation.json`; reference commit
+`f8a6fec7d33169ae6e72ccf2fc9c79e4f6b301d0`.
+
+This closes corrected-GFF production only. The originally planned preload is
+the failed loader observation recorded above; it does not resolve frozen-profile
+facts, protected-host compatibility, or fallback-label physical-collision
+count-readiness. Historical writer states below are superseded.
+
+## Historical: simplified slice-stream job (superseded)
+
+The generic native stream was stopped as requested, with partial output and
+`RUN/logs/stream-generic-superseded*` preserved. New container
+`pancollapse-simple-gffs-20261028T173014Z`
+(`27230e467468c9d4bddb369f2cb27eb509e52ce5c45fc053f163650343215872`) started
+2026-10-29T01:48:53.964771673Z. Reference commit
+`74b7ce2511072f0c012d724059c768262b077c65` uses selected-field string views,
+unchanged-line passthrough, replacement slices and consecutive-parent caches.
+Ten small smoke checks passed in 0.216 s; no broad parity study was performed.
+Target is `RUN/corrected_gffs_simple`; limits remain 200 GB/no swap/32 CPUs,
+with bgzip 16 threads/level 1. Ledger loaded; initial chr1 source throughput is
+about 371k rows/s (2M at 01:52:14.591 UTC to 8M at 01:52:30.754 UTC), about
+6.7x the old 55k-row/s producer. Parent-summary and total runtime are not yet
+measured; no completed GFF is claimed. This supersedes generic-stream running statements below.
+No graph rebuild, remapping, biological policy change or native count has started.
+
+## Historical: streamed corrected-GFF stage (superseded)
+
+`batched3` completed with exit 0 in 709.319 seconds. Its `memory_reconciled`
+ledger has 190,240,849 rows, 95,110,030 EXON contexts, and 13,898,646 repaired
+identities; SHA-256 is
+`25f4d0eb1c7bfbc9b2dfb1470598a30069371f9a123de33379a60bbab05ff6c0`.
+All 24 original retained-GFF sources are verified. This supersedes the older
+running/unmatched-finalizer statements below.
+
+The Python corrected-GFF Docker writer was stopped as directed:
+`pancollapse-corrected-gffs-20261028T173014Z`
+(`f720aba70bd481f9b55b5cfea978d9386a74cffffbe9e4748eb4f9814ffbf95d`)
+exited 143 at 2026-10-29T00:52:51.119312224Z. Preserve
+`RUN/.corrected_gffs.staging-ypty38d6` and `logs/gff-python-superseded*` as
+historical partial output.
+
+The user waived the comparison/parity launch gate for the bounded native
+stream. Production container `pancollapse-streamed-gffs-20261028T173014Z`
+(`e7d448c1f2c2498d8fbf606f45514108f140c377f807d09eda46b2328faf27f5`) started
+at 2026-10-29T01:27:27.22569375Z, launched by
+`RUN/run_streamed_corrected_gffs.sh`. Active staging is
+`RUN/.corrected_gffs_bgzip.staging-6l4rwj15`; final target is
+`RUN/corrected_gffs_bgzip`.
+It compacts the global-name ledger in RAM, parses every GFF row once, modifies
+only allowed `Parent`/`ID`/`exon_unique_parent` fields, retains frozen PURE
+ParentRollup semantics, and pipes stdout through threaded `bgzip` (16 threads,
+level 1), under 200 GB/no swap/32 CPUs. No completed GFF is claimed. The
+existing 21 Python tests passed, but no new native parity test ran after the
+final port. Facts, compatibility, preload, admission, and count remain pending
+independent gates. The 450-GB whole-process cap is unchanged. Reference
+implementation worktree is clean at `28ea13cd142d74df7f1af98f14dae2f364da7697`.
+
+## Historical: whole-genome global-Parent identity repair gate (superseded)
 
 Authorized work is bounded implementation and tests for reconciling global
 Parent identities, scoped streaming/compact loading, and preload admission;
@@ -29,20 +3409,22 @@ aggregation (never the whole process).
 `/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/count_identity_repair_20261028T173014Z/`
 records 24 sources (5 live/19 archived). Its 100-feature-per-chromosome,
 observed-exon inspection is SAMPLEONLY, not a full composition/hash proof; no
-full payload was restored or hashed. Native tests pass 180/180; `count
+full payload was restored or hashed at that earlier checkpoint. This is
+superseded by the completed 24-shard materialization/hash verification below.
+Native tests pass 180/180; `count
 --preload-only` returns before writers/GAMP and
 passes FIFO-unopened plus invalid-authority checks 7/7. The SQLite reconciliation
 utility's registry suite passes 18/18. A 10k real metadata reconciliation
 exited 0 in 1.081267 s at 33,554,432-byte peak child RSS; 100k was deliberately
-skipped and is not a blocker. Full 190,240,849-row/85-GB reconciliation is now
-running under 64 GiB/no swap/16 CPUs in
+skipped and is not a blocker. The initial 190,240,849-row/85-GB SQLite attempt ran
+under 64 GiB/no swap/16 CPUs in the now-stopped
 `pancollapse-global-identity-20261028T173014Z` (container
 `ca9938a5a868d1a6cc734571fc6f2e0c799113b1954921a7fe2a3925285d7c6a`; Python
 image `sha256:b4403f3b7acf5e0700a5dd4e7ab01456d62b557a208a04f8a42d3470d93b5730`;
 utility commit `6c72e607dc548026256cd79b1c7010da270ae976`). Final timing receipt
 `logs/global-reconciliation.json` is completion-only. Native implementation
-is committed at `990872cf7ff8d68d52f459e2e93af4b7f5616da0`; the running
-reconciler remains the unchanged `6c72e60` utility. No native count or large
+is committed at `990872cf7ff8d68d52f459e2e93af4b7f5616da0`; that initial
+attempt used unchanged `6c72e60` utility code. No native count or large
 preload has started.
 
 **Current source gate:** the prior full-raw-CAT requirement is superseded as
@@ -54,14 +3436,11 @@ hashes and five live producer checksums are recovered and bound to exact
 SHA256SUMS sources in `live_annotation_source_hashes.json`. Do not rerun
 selection/dedup, ingest raw-CAT models, or change biology.
 
-Source restoration is now running in
-`pancollapse-count-sources-20261028T173014Z`, started
-`2026-10-28T18:44:54.701409115Z`, under 4 GiB/no swap/4 CPUs. It writes
-`RUN/verified_annotation_sources` atomically only after all 24 original
-source hashes match. Completion-only timing receipt:
-`logs/source-materialization.json`; inspect progress with `docker logs --tail
-10 pancollapse-count-sources-20261028T173014Z`. Materializer commit
-`fc1b7a68a43a47c6a4dfbae4d0ca03adf0d33e6b` passes 7 tests. Reference commit
+Source restoration completed at 2026-10-28 22:04:52 with exit 0.
+`RUN/verified_annotation_sources/manifest.json` is atomic and `verified` for
+all 24 original source hashes; `logs/source-materialization.json` records
+11,997.819248366868 seconds and 20,971,520-byte child peak RSS. Materializer
+commit `fc1b7a68a43a47c6a4dfbae4d0ca03adf0d33e6b` passes 7 tests. Reference commit
 `5d60a21af1f6c8e5824ec4b904b67d3c839d652c` adds an optional read-only global
 registry to future projector runs: 6 registry/shard integration tests and the
 12 existing projector tests pass; the reconciler's 18 tests remain passed.
@@ -69,10 +3448,49 @@ Indexed context lookup avoids per-Parent full registry scans. Missing contexts
 reject; the flag requires a complete preparation scope and does not yet change
 build-driver defaults.
 
-**Next bounded action:** complete the namespace-only GFF migration/aggregation
-tool against the new registry reader, preserving opaque existing body IDs.
-After both preparation jobs succeed, project the verified shards through the
-completed registry, then validate frozen chr20--22 parity and compile facts.
+**Historical SQLite state:** its 190,240,849-row ingest completed, then its
+container stopped at 2026-10-28T23:38:00.024748304Z with exit 143 after the
+replacement passed relation validation. Preserve `RUN/global_registry`, its
+WAL, `logs/sqlite-superseded.log`, and
+`logs/sqlite-superseded-container-state.json`; do not infer a missing
+`logs/global-reconciliation.json`.
+
+**Historical fast-path state:** coalesced batch finalizer
+`pancollapse-identity-batched3-20261028T173014Z`
+(`8addebd83679f03e851d41c0b55c94142b57f859e513075cb9ec831f07a33afb`) was
+started 2026-10-28T23:53:49.883231954Z with code
+`76c1b6dee5b59b7b25807c3e3bfbae31350de4d9`, 128,000,000,000 bytes, zero
+swap, 8 CPUs, and 2M bounded rows. It reuses the validated registry receipt;
+there is no SQL or new map build. Three tests pass including coalescing, and
+`finalizer_coalesced_qualification/attempt3/CHECKS.json` retains 10k
+byte-exact SHA `18b73c...`; native code is unchanged. It coalesced 2M slots
+into 96 joins including the final partial batch. The completed-ledger receipt
+is recorded in the current section above.
+
+The earlier 45k-chunk batched job stopped intentionally after 3.7M rows to
+avoid 4,000 hash rebuilds (no OOM; partial retained). The SQLite and 200-GB
+OOM runs are historical; their DB/intermediate/failure receipts remain
+preserved under RUN.
+
+**Next bounded action:** complete corrected GFFs and a matching identity ledger
+against the completed registry, preserving opaque BODY IDs. Only a globally
+non-unique Parent receives canonical `panSCup1_<sha256>`; globally unique
+Parents remain unchanged. The raw graph GFFs are exon/body-only and
+`from_annotation` ignores EXON, so namespace repair alone is not ingestion
+ready. Use only frozen PURE ParentRollup observation/emission from existing
+attributes (including established GENCODE gene-tag inheritance) to add gene,
+transcript, and body-parent features; do not introduce a classifier or policy.
+Validate namespace/structural-GFF readiness against the existing algorithm.
+It is not strict-profile count readiness or full-count parity: facts,
+protected-host compatibility, and preload retain their gates.
+`build_corrected_count_gffs.py` is committed at
+`31ec3b9802f5606717e66161e6869a0a869cfa37` with 21 passing tests (five gene
+adapter plus 16 coordinator/rewrite). Native updated-fixture qualification
+passes scoped tags for 3 Parents, isolated tag/body/gzip
+(`RUN/native_gff_qualification/qualification-scoped-tags.log`). Fallback
+count-identity collisions gate count readiness, not identifier-only structural
+GFF generation. The Python writer was later stopped as recorded above; no
+corrected GFF is published and no count/preload started.
 Conditional counting and startup measurement remain authorized but are not yet
 admitted or launched. No extra scale pilot, remapping, BAM, Nextflow,
 release/tag, or cap increase is authorized.

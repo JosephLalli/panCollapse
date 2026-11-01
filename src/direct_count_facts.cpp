@@ -714,10 +714,12 @@ std::string percent_decode(std::string_view value) {
     return out;
 }
 
+using AnnotationAttributes = std::map<std::string, std::vector<std::string>, std::less<>>;
+
 // One GFF3 attribute column. Repeated keys accumulate, which is how tag= lists arrive.
-std::map<std::string, std::vector<std::string>, std::less<>> gff_attributes(
+AnnotationAttributes gff_attributes(
     std::string_view column) {
-    std::map<std::string, std::vector<std::string>, std::less<>> out;
+    AnnotationAttributes out;
     size_t start = 0;
     while (start <= column.size()) {
         const size_t end = column.find(';', start);
@@ -734,8 +736,69 @@ std::map<std::string, std::vector<std::string>, std::less<>> gff_attributes(
     return out;
 }
 
+// GENCODE GTF attributes are key "value" pairs.  Unlike GFF3, semicolons inside
+// quoted values and escaped quotes are data, not delimiters.
+AnnotationAttributes gtf_attributes(std::string_view column) {
+    AnnotationAttributes out;
+    size_t index = 0;
+    while (true) {
+        while (index < column.size() && (column[index] == ' ' || column[index] == '\t')) ++index;
+        if (index == column.size()) return out;
+        const size_t key_start = index;
+        while (index < column.size() && column[index] != ' ' && column[index] != '\t' &&
+               column[index] != ';') ++index;
+        if (key_start == index) throw std::runtime_error("malformed GTF attribute key");
+        const std::string key(column.substr(key_start, index - key_start));
+        while (index < column.size() && (column[index] == ' ' || column[index] == '\t')) ++index;
+        if (index == column.size() || column[index] != '"') {
+            throw std::runtime_error("malformed GTF attribute value for " + key);
+        }
+        ++index;
+        std::string value;
+        bool closed = false;
+        while (index < column.size()) {
+            const char character = column[index++];
+            if (character == '\\') {
+                if (index == column.size()) throw std::runtime_error("malformed GTF escape");
+                value.push_back(column[index++]);
+            } else if (character == '"') {
+                closed = true;
+                break;
+            } else {
+                value.push_back(character);
+            }
+        }
+        if (!closed) throw std::runtime_error("unterminated GTF quoted attribute");
+        while (index < column.size() && (column[index] == ' ' || column[index] == '\t')) ++index;
+        if (index == column.size() || column[index] != ';') {
+            throw std::runtime_error("malformed GTF attribute terminator for " + key);
+        }
+        ++index;
+        out[key].push_back(std::move(value));
+    }
+}
+
+AnnotationAttributes annotation_attributes(std::string_view column, AnnotationFormat format) {
+    return format == AnnotationFormat::gff3 ? gff_attributes(column) : gtf_attributes(column);
+}
+
+bool looks_like_gtf_attributes(std::string_view column) {
+    return column.find('=') == std::string_view::npos && column.find('"') != std::string_view::npos;
+}
+
+void reject_conflicting_gtf_scalars(const AnnotationAttributes& attributes) {
+    for (const auto& [key, values] : attributes) {
+        if (key == "tag" || values.size() < 2) continue;
+        for (const std::string& value : values) {
+            if (value != values.front()) {
+                throw std::runtime_error("GTF repeats conflicting " + key + " attributes");
+            }
+        }
+    }
+}
+
 std::string attribute_value(
-    const std::map<std::string, std::vector<std::string>, std::less<>>& attributes,
+    const AnnotationAttributes& attributes,
     std::string_view key) {
     const auto found = attributes.find(key);
     if (found == attributes.end()) return {};
@@ -746,7 +809,7 @@ std::string attribute_value(
 }
 
 std::set<std::string, std::less<>> row_tags(
-    const std::map<std::string, std::vector<std::string>, std::less<>>& attributes) {
+    const AnnotationAttributes& attributes) {
     std::set<std::string, std::less<>> tags;
     const auto found = attributes.find("tag");
     if (found == attributes.end()) return tags;
@@ -764,7 +827,9 @@ std::set<std::string, std::less<>> row_tags(
     return tags;
 }
 
-// Line reader that transparently handles a gzipped annotation.
+// Line reader that transparently handles plain or gzipped annotations. gzread's
+// error state is checked before EOF is accepted, so a truncated gzip cannot yield
+// a partial index.  Keep the line bound independent of zlib's internal buffer.
 class AnnotationReader {
   public:
     explicit AnnotationReader(const std::filesystem::path& path)
@@ -780,19 +845,52 @@ class AnnotationReader {
 
     bool next(std::string& line) {
         line.clear();
-        char buffer[1 << 16];
-        while (gzgets(handle_, buffer, sizeof(buffer)) != nullptr) {
-            line.append(buffer);
-            if (!line.empty() && line.back() == '\n') {
-                line.pop_back();
+        while (true) {
+            const size_t newline = pending_.find('\n', cursor_);
+            if (newline != std::string::npos) {
+                if (newline - cursor_ > kMaxLineBytes) throw std::runtime_error("annotation line exceeds 16 MiB");
+                line.assign(pending_, cursor_, newline - cursor_);
+                cursor_ = newline + 1;
+                if (!line.empty() && line.back() == '\r') line.pop_back();
                 return true;
             }
+            if (pending_.size() - cursor_ > kMaxLineBytes) throw std::runtime_error("annotation line exceeds 16 MiB");
+            if (cursor_ != 0) {
+                pending_.erase(0, cursor_);
+                cursor_ = 0;
+            }
+            const int read = gzread(handle_, buffer_.data(), static_cast<unsigned int>(buffer_.size()));
+            if (read > 0) {
+                pending_.append(buffer_.data(), static_cast<size_t>(read));
+                continue;
+            }
+            if (read < 0) throw_gzip_error();
+            int error = Z_OK;
+            const char* message = gzerror(handle_, &error);
+            if (error != Z_OK && error != Z_STREAM_END) {
+                throw std::runtime_error("cannot read annotation: " + std::string(message ? message : "zlib error"));
+            }
+            if (pending_.size() == cursor_) return false;
+            line.assign(pending_, cursor_, std::string::npos);
+            pending_.clear();
+            cursor_ = 0;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            return true;
         }
-        return !line.empty();
     }
 
   private:
+    [[noreturn]] void throw_gzip_error() const {
+        int error = Z_OK;
+        const char* message = gzerror(handle_, &error);
+        throw std::runtime_error("cannot read annotation: " +
+                                 std::string(message ? message : "zlib error"));
+    }
+    static constexpr size_t kMaxLineBytes = 16u * 1024u * 1024u;
     gzFile handle_ = nullptr;
+    std::array<char, 1 << 16> buffer_{};
+    std::string pending_;
+    size_t cursor_ = 0;
 };
 
 std::vector<std::string_view> split_columns(std::string_view line) {
@@ -810,22 +908,45 @@ std::vector<std::string_view> split_columns(std::string_view line) {
 
 }  // namespace
 
+std::string normalized_count_gene_identity(const path_identity::AnnotationIdentity& identity) {
+    return normalized_locus(identity);
+}
+
 CountFactCatalog CountFactCatalog::from_annotation(
     const std::filesystem::path& annotation,
     const std::filesystem::path& reference,
     const path_identity::PathIdentityLedger& path_ledger,
-    const std::vector<ProfileId>& profile_ids) {
+    const std::vector<ProfileId>& profile_ids,
+    AnnotationFormat annotation_format,
+    AnnotationFormat reference_format,
+    const std::string& ledger_sha256) {
     // No bundle means no published content_id, so the facts are identified by the files
     // they were derived from. Hashing bytes, not the derived catalog: a gzipped and a plain
     // copy of the same GFF3 get different ids, which matches how `gamp` and `xg` are
     // recorded in the receipt and keeps the id cheap to compute.
     CountFactCatalog result;
+    result.annotation_format_ = annotation_format;
+    result.reference_format_ = reference_format;
+    result.parents_.reserve(path_ledger.identities_by_parent.size());
     {
-        std::string inputs = sha256_file(annotation);
+        const std::string annotation_sha256 = sha256_file(annotation);
+        const std::string reference_sha256 = sha256_file(reference);
+        const std::string ledger_digest = ledger_sha256.empty()
+            ? sha256_file(path_ledger.source_path) : ledger_sha256;
+        result.annotation_sources_.emplace(
+            "annotation", AnnotationSourceFile{annotation_sha256,
+                                                  std::filesystem::file_size(annotation)});
+        result.annotation_sources_.emplace(
+            "annotation_reference", AnnotationSourceFile{reference_sha256,
+                                                            std::filesystem::file_size(reference)});
+        result.annotation_sources_.emplace(
+            "path_identity_ledger", AnnotationSourceFile{ledger_digest,
+                                                            std::filesystem::file_size(path_ledger.source_path)});
+        std::string inputs = annotation_sha256;
         inputs += '\n';
-        inputs += sha256_file(reference);
+        inputs += reference_sha256;
         inputs += '\n';
-        inputs += sha256_file(path_ledger.source_path);
+        inputs += ledger_digest;
         inputs += '\n';
         result.content_id_ = "sha256:" + digest_bytes(inputs);
         result.authority_ = "annotation";
@@ -840,10 +961,20 @@ CountFactCatalog CountFactCatalog::from_annotation(
         while (reader.next(line)) {
             if (line.empty() || line.front() == '#') continue;
             const auto columns = split_columns(line);
-            if (columns.size() < 9 || columns[2] != "gene") continue;
-            const auto attributes = gff_attributes(columns[8]);
+            if (columns.size() < 3 || columns[2] != "gene") continue;
+            if (reference_format == AnnotationFormat::gtf && columns.size() != 9) {
+                throw std::runtime_error("GTF gene feature must have exactly 9 columns");
+            }
+            if (columns.size() < 9) continue;
+            if (reference_format == AnnotationFormat::gff3 && looks_like_gtf_attributes(columns[8])) {
+                throw std::runtime_error("annotation format is GFF3 but attributes are GTF");
+            }
+            const auto attributes = annotation_attributes(columns[8], reference_format);
+            if (reference_format == AnnotationFormat::gtf) reject_conflicting_gtf_scalars(attributes);
             std::string identifier = attribute_value(attributes, "ID");
-            if (identifier.empty()) identifier = attribute_value(attributes, "gene_id");
+            if (identifier.empty()) {
+                identifier = attribute_value(attributes, "gene_id");
+            }
             if (identifier.empty()) continue;
             auto tags = row_tags(attributes);
             if (!tags.empty()) {
@@ -852,56 +983,113 @@ CountFactCatalog CountFactCatalog::from_annotation(
         }
     }
 
+    using Tags = std::set<std::string, std::less<>>;
+    // Tag combinations and metadata repeat across haplotypes. Keep one immutable
+    // instance instead of allocating a tree and several strings for every Parent.
+    std::map<Tags, std::shared_ptr<const Tags>> tag_sets;
+    auto shared_tags = [&](Tags tags) {
+        const auto found = tag_sets.find(tags);
+        if (found != tag_sets.end()) return found->second;
+        auto shared = std::make_shared<const Tags>(tags);
+        tag_sets.emplace(std::move(tags), shared);
+        return shared;
+    };
+    CompactIdentityTextPool annotation_texts;
     struct AnnotationGene {
-        std::set<std::string, std::less<>> tags;
-        std::string biotype;
-        std::string nested_host;
+        std::shared_ptr<const Tags> tags;
+        CompactIdentityText biotype;
+        CompactIdentityText nested_host;
     };
     struct AnnotationTranscript {
-        std::string gene;              // Parent: on a transcript row this is the gene
-        std::string source_gene;
-        std::string gene_biotype;
-        std::string transcript_biotype;
-        std::set<std::string, std::less<>> tags;
+        CompactIdentityText gene; // Parent: on a transcript row this is the gene
+        CompactIdentityText source_gene;
+        CompactIdentityText gene_biotype;
+        CompactIdentityText transcript_biotype;
+        std::shared_ptr<const Tags> tags;
     };
-    std::map<std::string, AnnotationGene, std::less<>> annotation_genes;
-    std::map<std::string, AnnotationTranscript, std::less<>> annotation_transcripts;
+    std::map<CompactIdentityText, AnnotationGene, std::less<>> annotation_genes;
+    std::map<CompactIdentityText, AnnotationTranscript, std::less<>> annotation_transcripts;
+    std::map<std::string, std::string, std::less<>> gtf_transcript_parents;
     {
         AnnotationReader reader(annotation);
         std::string line;
         while (reader.next(line)) {
             if (line.empty() || line.front() == '#') continue;
             const auto columns = split_columns(line);
-            if (columns.size() < 9) continue;
+            if (columns.size() < 3) continue;
             const bool is_gene = columns[2] == "gene";
             const bool is_transcript = columns[2] == "transcript" || columns[2] == "mRNA";
             if (!is_gene && !is_transcript) continue;
-            const auto attributes = gff_attributes(columns[8]);
-            // Only ID is a unique key; transcript_id and gene_id are bare and assembly-local.
-            const std::string identifier = attribute_value(attributes, "ID");
+            if (annotation_format == AnnotationFormat::gtf && columns.size() != 9) {
+                throw std::runtime_error("GTF gene/transcript feature must have exactly 9 columns");
+            }
+            if (columns.size() < 9) continue;
+            if (annotation_format == AnnotationFormat::gff3 && looks_like_gtf_attributes(columns[8])) {
+                throw std::runtime_error("annotation format is GFF3 but attributes are GTF");
+            }
+            const auto attributes = annotation_attributes(columns[8], annotation_format);
+            if (annotation_format == AnnotationFormat::gtf) reject_conflicting_gtf_scalars(attributes);
+            std::string identifier = attribute_value(attributes, "ID");
+            std::string gtf_gene = attribute_value(attributes, "gene_id");
+            if (annotation_format == AnnotationFormat::gtf) {
+                if (is_gene) {
+                    identifier = gtf_gene;
+                } else {
+                    identifier = attribute_value(attributes, "transcript_id");
+                }
+                if (identifier.empty() || gtf_gene.empty()) {
+                    throw std::runtime_error("GTF " + std::string(is_gene ? "gene" : "transcript") +
+                                             " feature is missing required " +
+                                             (is_gene ? "gene_id" : "gene_id or transcript_id"));
+                }
+            }
+            // GFF3 retains its established ID/Parent rules. GTF maps gene_id to ID and
+            // transcript_id to ID, with gene_id as Parent.
             if (identifier.empty()) continue;
             if (is_gene) {
                 AnnotationGene gene;
-                gene.tags = row_tags(attributes);
-                gene.biotype = attribute_value(attributes, "gene_biotype");
-                if (gene.biotype.empty()) gene.biotype = attribute_value(attributes, "gene_type");
-                gene.nested_host = attribute_value(attributes, "nested_host_gene");
-                annotation_genes.insert_or_assign(identifier, std::move(gene));
+                gene.tags = shared_tags(row_tags(attributes));
+                std::string biotype = attribute_value(attributes, "gene_biotype");
+                if (biotype.empty()) biotype = attribute_value(attributes, "gene_type");
+                gene.biotype = annotation_texts.intern(biotype);
+                gene.nested_host = annotation_texts.intern(attribute_value(attributes, "nested_host_gene"));
+                annotation_genes.insert_or_assign(annotation_texts.intern(identifier), std::move(gene));
                 continue;
             }
             AnnotationTranscript transcript;
-            transcript.gene = attribute_value(attributes, "Parent");
-            transcript.source_gene = attribute_value(attributes, "source_gene");
-            transcript.gene_biotype = attribute_value(attributes, "gene_biotype");
-            if (transcript.gene_biotype.empty()) {
-                transcript.gene_biotype = attribute_value(attributes, "gene_type");
+            const std::string parent = annotation_format == AnnotationFormat::gtf
+                ? gtf_gene : attribute_value(attributes, "Parent");
+            if (annotation_format == AnnotationFormat::gtf) {
+                const auto found = gtf_transcript_parents.find(identifier);
+                if (found != gtf_transcript_parents.end() && found->second != parent) {
+                    throw std::runtime_error("GTF transcript_id has contradictory gene_id: " + identifier);
+                }
+                gtf_transcript_parents.emplace(identifier, parent);
             }
-            transcript.transcript_biotype = attribute_value(attributes, "transcript_biotype");
-            if (transcript.transcript_biotype.empty()) {
-                transcript.transcript_biotype = attribute_value(attributes, "transcript_type");
+            transcript.gene = annotation_texts.intern(parent);
+            std::string source_gene = attribute_value(attributes, "source_gene");
+            if (annotation_format == AnnotationFormat::gtf && source_gene.empty()) source_gene = gtf_gene;
+            transcript.source_gene = annotation_texts.intern(source_gene);
+            std::string gene_biotype = attribute_value(attributes, "gene_biotype");
+            if (gene_biotype.empty()) gene_biotype = attribute_value(attributes, "gene_type");
+            transcript.gene_biotype = annotation_texts.intern(gene_biotype);
+            std::string transcript_biotype = attribute_value(attributes, "transcript_biotype");
+            if (transcript_biotype.empty()) transcript_biotype = attribute_value(attributes, "transcript_type");
+            transcript.transcript_biotype = annotation_texts.intern(transcript_biotype);
+            transcript.tags = shared_tags(row_tags(attributes));
+            // Reuse the already loaded identity's Parent string when available.
+            const auto identity = path_ledger.identities_by_parent.find(identifier);
+            const auto key = identity == path_ledger.identities_by_parent.end()
+                ? annotation_texts.intern(identifier) : identity->first;
+            annotation_transcripts.insert_or_assign(key, std::move(transcript));
+        }
+    }
+
+    if (annotation_format == AnnotationFormat::gtf) {
+        for (const auto& [parent, unused] : path_ledger.identities_by_parent) {
+            if (annotation_transcripts.find(parent) == annotation_transcripts.end()) {
+                throw std::runtime_error("GTF lacks an explicit transcript feature for ledger Parent " + parent);
             }
-            transcript.tags = row_tags(attributes);
-            annotation_transcripts.insert_or_assign(identifier, std::move(transcript));
         }
     }
 
@@ -934,7 +1122,7 @@ CountFactCatalog CountFactCatalog::from_annotation(
         const path_identity::AnnotationIdentity& identity = *identity_pointer;
         ParentFact fact;
         fact.unique_parent = parent;
-        fact.count_gene = normalized_locus(identity);
+        fact.count_gene = annotation_texts.intern(normalized_locus(identity));
         fact.runtime_gene = identity.gene_id;
         fact.canonical_transcript = identity.canonical_transcript;
         fact.sample = identity.sample;
@@ -944,7 +1132,7 @@ CountFactCatalog CountFactCatalog::from_annotation(
         const auto transcript = annotation_transcripts.find(parent);
         const AnnotationGene* gene_row = nullptr;
         if (transcript != annotation_transcripts.end()) {
-            tags = transcript->second.tags;
+            tags = *transcript->second.tags;
             // `Parent` is level-dependent, and on this annotation it is not always the gene.
             // A body row (panSCbody1_<sha256>, feature_layer=transcript_body) names the
             // exon-layer transcript it was derived from, so the locus sits one hop further up:
@@ -963,7 +1151,7 @@ CountFactCatalog CountFactCatalog::from_annotation(
             }
             if (gene != annotation_genes.end()) {
                 gene_row = &gene->second;
-                tags.insert(gene->second.tags.begin(), gene->second.tags.end());
+                tags.insert(gene->second.tags->begin(), gene->second.tags->end());
             }
             const auto inherited =
                 reference_tags.find(strip_gene_version(transcript->second.source_gene));
@@ -986,7 +1174,7 @@ CountFactCatalog CountFactCatalog::from_annotation(
         if (const auto parsed = ensembl_identity(identity.source_gene);
             parsed && !parsed->discriminator.empty()) {
             fact.novel_paralog = true;
-            fact.novel_origin_gene = parsed->stable_gene;
+            fact.novel_origin_gene = annotation_texts.intern(parsed->stable_gene);
         }
 
         GeneAggregate& aggregate = aggregates[fact.count_gene];
@@ -1013,7 +1201,7 @@ CountFactCatalog CountFactCatalog::from_annotation(
         }
         // readthrough_gene is a gene-level declaration, so it is read from the gene row and
         // from the reference gene inherited through source_gene, never from a transcript row.
-        if (gene_row != nullptr && gene_row->tags.count("readthrough_gene") != 0) {
+        if (gene_row != nullptr && gene_row->tags->count("readthrough_gene") != 0) {
             aggregate.readthrough_gene_declared = true;
         }
         if (transcript != annotation_transcripts.end()) {
@@ -1026,11 +1214,11 @@ CountFactCatalog CountFactCatalog::from_annotation(
             // The conjunction counts only Parents that actually have a transcript row; one
             // with none abstains rather than voting "not readthrough" and overturning the locus.
             ++aggregate.transcript_observations;
-            if (transcript->second.tags.count("readthrough_transcript") != 0) {
+            if (transcript->second.tags->count("readthrough_transcript") != 0) {
                 ++aggregate.readthrough_transcript_observations;
             }
         }
-        result.parents_.emplace(parent, std::move(fact));
+        result.parents_.emplace(identity_pointer, std::move(fact));
     }
 
     for (const auto& [count_gene, aggregate] : aggregates) {
@@ -1098,10 +1286,10 @@ CountFactCatalog CountFactCatalog::from_annotation(
     // A novel-paralog origin gene may have no ledger row of its own; the frozen profiles look
     // a lumped copy up through it, so give it the same UNKNOWN row count_cr.py constructs.
     std::vector<std::string> origin_genes;
-    for (const auto& [parent, fact] : result.parents_) {
+    for (const auto [parent, fact] : result.parents_) {
         static_cast<void>(parent);
         if (fact.novel_paralog && !result.genes_.contains(fact.novel_origin_gene)) {
-            origin_genes.push_back(fact.novel_origin_gene);
+            origin_genes.push_back(fact.novel_origin_gene.str());
         }
     }
     std::sort(origin_genes.begin(), origin_genes.end());
@@ -1127,6 +1315,7 @@ CountFactCatalog CountFactCatalog::load(
     const CountFactBundle& bundle,
     const path_identity::PathIdentityLedger& path_ledger) {
     CountFactCatalog result;
+    result.parents_.reserve(path_ledger.identities_by_parent.size());
     result.content_id_ = bundle.content_id;
     result.authority_ = "count-bundle";
     for_each_tsv_row(
@@ -1337,18 +1526,18 @@ CountFactCatalog CountFactCatalog::load(
         if (support->second.count_gene != strong_support_gene) {
             throw std::runtime_error("strong-support count_gene disagrees for Parent " + parent);
         }
-        result.parents_.emplace(parent, std::move(fact));
+        result.parents_.emplace(identity_pointer, std::move(fact));
     }
     return result;
 }
 
-const ParentFact& CountFactCatalog::parent(std::string_view unique_parent) const {
+ParentFact CountFactCatalog::parent(std::string_view unique_parent) const {
     const auto found = parents_.find(unique_parent);
     if (found == parents_.end()) {
         throw std::runtime_error("count-fact catalog lacks Parent " +
                                  std::string(unique_parent));
     }
-    return found->second;
+    return (*found).second;
 }
 
 const GeneFact& CountFactCatalog::gene(std::string_view count_gene) const {
@@ -1443,6 +1632,13 @@ AssignmentCandidate CountFactCatalog::candidate(const EffectiveProfile& effectiv
     return result;
 }
 
+AssignmentCandidate CountFactCatalog::candidate_by_rank(
+    const EffectiveProfile& effective, std::size_t rank, std::int64_t score,
+    EvidenceTier tier, EvidenceStrand strand, std::uint32_t body_sample_support) const {
+    return candidate(effective, parents_.parent_by_rank(rank), score, tier, strand,
+                     body_sample_support);
+}
+
 AssignmentFacts CountFactCatalog::assignment_facts(
     const EffectiveProfile& effective,
     const CompatibilityFactSet& compatibility) const {
@@ -1450,7 +1646,7 @@ AssignmentFacts CountFactCatalog::assignment_facts(
     result.has_complete_provenance = compatibility.complete_provenance;
     result.exact.reserve(compatibility.exact.size());
     for (const ExactCompatibilityFact& fact : compatibility.exact) {
-        const ParentFact& current = parent(fact.unique_parent);
+        const ParentFact current = parent(fact.unique_parent);
         if (current.canonical_transcript != fact.canonical_transcript) {
             throw std::runtime_error(
                 "compatibility exact Parent changed canonical transcript: " +
@@ -1465,7 +1661,7 @@ AssignmentFacts CountFactCatalog::assignment_facts(
         // artifact for diagnosis and future policies, but is not a fallback.
         if (fact.layer != StructuralLayer::spliced) continue;
         for (const std::string& unique_parent : fact.winning_parents) {
-            const ParentFact& current = parent(unique_parent);
+            const ParentFact current = parent(unique_parent);
             if (current.canonical_transcript != fact.canonical_transcript) {
                 throw std::runtime_error(
                     "compatibility structural Parent changed canonical transcript: " +
@@ -1519,6 +1715,12 @@ void CountFactCatalog::validate_compatibility_structure(
         }
         require_parent_transcript(fact.unique_parent, fact.canonical_transcript);
         require_parent_transcript(fact.locus_parent, fact.canonical_transcript);
+        for (const auto& parent_name : {fact.unique_parent, fact.locus_parent}) {
+            if (path_ledger.target_transcript(*path_ledger.identities_by_parent.at(parent_name)) !=
+                path_ledger.target_transcript(observed.annotation)) {
+                throw std::runtime_error("compatibility exact fact crosses source-gene targets: " + fact.path);
+            }
+        }
         if ((!body && fact.locus_parent != fact.unique_parent) ||
             (body && observed.annotation.exon_unique_parent != fact.locus_parent)) {
             throw std::runtime_error(
@@ -1530,6 +1732,15 @@ void CountFactCatalog::validate_compatibility_structure(
         const std::string_view expected_layer =
             fact.layer == StructuralLayer::spliced ? "exon" : "body";
         std::set<std::string> observed_parents;
+        const std::string* runtime_target = nullptr;
+        auto require_target = [&](const path_identity::AnnotationIdentity& identity) {
+            const auto& target = path_ledger.target_transcript(identity);
+            if (runtime_target != nullptr && *runtime_target != target) {
+                throw std::runtime_error("compatibility structural fact crosses source-gene targets: " +
+                                         fact.canonical_transcript);
+            }
+            runtime_target = &target;
+        };
         for (const std::string& path_name : fact.winning_paths) {
             const path_identity::PathIdentityRow& observed = path(path_name);
             if (observed.annotation.feature_layer != expected_layer ||
@@ -1540,6 +1751,7 @@ void CountFactCatalog::validate_compatibility_structure(
                     path_name);
             }
             observed_parents.insert(observed.annotation.unique_parent);
+            require_target(observed.annotation);
         }
         const std::set<std::string> declared_parents(fact.winning_parents.begin(),
                                                      fact.winning_parents.end());
@@ -1550,6 +1762,7 @@ void CountFactCatalog::validate_compatibility_structure(
         }
         for (const std::string& unique_parent : declared_parents) {
             require_parent_transcript(unique_parent, fact.canonical_transcript);
+            require_target(*path_ledger.identities_by_parent.at(unique_parent));
         }
     }
 }

@@ -130,6 +130,119 @@ Build one testable behavior at a time:
 
 Per-increment verification is in `docs/conversion-algorithm-tests.md`.
 
+## Native gene counting and reference preparation
+
+The algorithm above describes the original RAD producer. Native `count` adds
+gene-assignment and molecule-counting stages; it does not replace transcript
+compatibility with a node-to-gene vote. Its production path is:
+
+1. Load graph/path identities and gene-policy facts. Prepare graph-to-transcript
+   lookup, ordered Parent models, exon/body positions and splice geometry.
+2. Stream grouped GAMP alignments. Score each alternative alignment route
+   separately, retaining the best compatible route rather than summing mutually
+   exclusive alternatives (D091).
+3. Associate aligned nodes with transcript/Parent models and compute exact
+   exon/body overlap, strand and splice-compatible evidence. MAX-collapse
+   equivalent paths instead of multiplying support by the number of haplotypes.
+4. Resolve that evidence independently under each requested frozen profile.
+   Current native assignment follows the frozen oracle's sense-bucket-first
+   policy; D066's earlier interleaved ranking is not the current rule. Profile
+   membership, categories, nesting and body-support rules are policy, not extra
+   votes from the graph.
+5. Aggregate integer `(profile, barcode, gene, UMI)` support in RAM. Every valid
+   input group, including a featureless one, contributes to the exact-whitelist
+   barcode prior. Potentially correctable off-whitelist observations retain
+   aggregated quality signatures until the final prior is known; raw alignments
+   are not retained.
+6. At EOF, finish barcode correction, merge corrected support, apply the frozen
+   non-transitive 1MM and cross-gene UMI rules, and write canonical count and
+   molecule tables. Publish the staged output directory only after validation.
+
+D100 removes all aggregation, corrected-observation and single-barcode disk
+fallbacks. These stages are memory-only and have no independent spill budget.
+The external whole-process limit covers reference state and counting together;
+insufficient RAM fails the run rather than switching to temporary aggregate
+files. Compressed final Parquet/MEX output is unchanged. Explicitly requested
+per-read diagnostics retain their separate ordered staging implementation;
+they are neither a counting fallback nor a default output.
+
+### What the current annotation index contains
+
+`PCANIDX2` (`annotation.pci`, D099) is a compiled **annotation-policy cache**:
+source hashes/sizes, format and semantic versions, profile/gene facts,
+gene/category dictionaries and a lexically ordered 13-byte numeric record per
+Parent (gene ID, category-set ID, novel-origin ID and flags). Parent names and
+path-to-Parent/canonical identities still come from the separately loaded,
+checksum-bound path-identity ledger. The index contains no graph handles, node
+postings, path-identity mapping, ordered exon positions or splice geometry.
+It avoids annotation decompression/parsing/classification, but is not the full
+once-only prepared reference contemplated by D098.
+
+`NodeLedger` already supplies a node-to-associations dictionary. It is populated
+lazily through FastLocate against the GBWT and the identity ledger during each
+sample run, rather than persisted as the prepared counting reference. The
+remaining ledger load, FastLocate construction and model/geometry preparation
+explain why a small annotation index does not eliminate reference startup.
+
+### Why associations must retain transcript identity
+
+A node-to-gene **set alone** loses transcript coherence. Suppose gene G has one
+transcript containing node A and a different transcript containing node B,
+whereas gene H has a transcript containing both. A read spanning A and B must
+not acquire an invented full-length G transcript by unioning the two G models.
+The current per-transcript MAX distinguishes partial G support from full H
+support. Strand, exon versus intron, repeated-node occurrences and junctions
+likewise cannot be recovered from a bare gene set.
+
+The appropriate lookup backbone is therefore node-to-dense-transcript/model
+associations, with shared Parent/gene metadata and the occurrence/junction
+context required by exact assignment. Persisting that lookup and prepared
+geometry could move repeated work into a once-only reference build. It is not
+implemented by `annotation.pci`, and its whole-genome size and loading costs
+remain unqualified: materializing all GBWT postings naively could be much larger
+than the compressed GBWT. No new reference format or biological-policy change
+is introduced by the memory-only runtime change.
+
+### Compact live reference state (D101)
+
+GBWT coordinates retain a prefix at step zero, every 64 steps, and the terminal
+step. FastLocate's decompressed node-record suffix-array order supplies the
+exact BWT record offset. LF follows that same occurrence for at most 63 steps:
+forward stored sequences walk to the next checkpoint and subtract node lengths;
+reverse stored sequences walk to the prior checkpoint and add intervening node
+lengths. This preserves mixed orientations, repeated nodes, and exact base
+positions. A checkpoint vector holds either 32- or checked 64-bit coordinates,
+never both. It is still constructed per sample, not persisted in `annotation.pci`.
+
+The ledger first validates arbitrary text-input order with its existing trees,
+then retains lexical row and Parent arrays. Parent pointers are rebound before
+the compact fact catalog is created. Fact rows retain one identity pointer,
+three numeric dictionary IDs and flags (24 bytes); category vectors live once
+per distinct set. Numeric lexical Parent ranks replace duplicate name/rank and
+long-lived materialized-fact catalogs. GBWT path selection reuses each ledger
+row's binding flag to detect duplicate names instead of copying selected names.
+
+Native node/model lookup caches account resident data against internal 1-GiB
+and 256-MiB bounds. FIFO eviction or oversized-entry bypass only changes reuse:
+immutable values remain alive through shared-pointer leases held by active reads.
+Those leases and allocator overhead are not included in the resident bounds;
+the external process cap remains the final resource guard. No cache eviction
+spills data or changes count policy. Legacy conversion remains uncapped here.
+
+After workers join and compatibility capture closes, counting preserves its
+output provenance, clears reference caches, and releases graph, ledger, Parent
+policy and model geometry before barcode/UMI finalization. Gene/profile metadata
+needed for final outputs remains. Common A/C/G/T UMI strings up to 31 bases use
+tagged numeric keys; a lossless owned-string fallback preserves the existing
+API for longer or noncanonical strings. Intermediate ordering is operational;
+final canonical row ordering and frozen UMI rules are unchanged.
+
+Bounded tests include checkpoint/terminal boundaries, 1,025-step paths, mixed
+orientations/repeated occurrences, wide coordinates, ledger move/rebinding,
+compact policy/index byte roundtrips, cache eviction with active leases, and
+UMI length/fallback edges. The full suite and a frozen-binary nine-read
+comparison qualify tested behavior, not whole-genome peak RAM or throughput.
+
 ## Open items
 
 - Step 1 is verified on real MHC GAMP: the flat per-node scorer reproduces `Subpath.score`

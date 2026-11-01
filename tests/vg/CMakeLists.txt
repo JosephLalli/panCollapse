@@ -1,4 +1,77 @@
 add_executable(vg_link_smoke vg_link_smoke.cpp)
+add_test(NAME convert_deprecation
+  COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:panCollapse>
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/convert_deprecation.cmake")
+set_tests_properties(convert_deprecation PROPERTIES LABELS "vg;cli;convert")
+add_executable(gamp_alignment_complexity_test gamp_alignment_complexity_test.cpp)
+target_include_directories(gamp_alignment_complexity_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(gamp_alignment_complexity_test PRIVATE panCollapse::vg_boundary panCollapse::warnings)
+add_test(NAME gamp_alignment_complexity_test COMMAND gamp_alignment_complexity_test)
+set_tests_properties(gamp_alignment_complexity_test PROPERTIES LABELS "vg;input;gamp")
+add_test(NAME alignment_cutoff_verify
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/alignment_cutoff_verify.py" $<TARGET_FILE:panCollapse>)
+set_tests_properties(alignment_cutoff_verify PROPERTIES LABELS "vg;count;cli;input")
+add_executable(native_count_index_test native_count_index_test.cpp)
+add_executable(count_memory_budget_test count_memory_budget_test.cpp)
+add_executable(threshold_balance_test threshold_balance_test.cpp)
+target_include_directories(threshold_balance_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(threshold_balance_test PRIVATE panCollapse::warnings)
+add_test(NAME threshold_balance_test COMMAND threshold_balance_test)
+set_tests_properties(threshold_balance_test PROPERTIES LABELS "pure;count;threshold")
+target_include_directories(count_memory_budget_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(count_memory_budget_test PRIVATE panCollapse::warnings)
+add_test(NAME count_memory_budget_test COMMAND count_memory_budget_test)
+set_tests_properties(count_memory_budget_test PROPERTIES LABELS "pure;count;memory")
+target_link_libraries(native_count_index_test PRIVATE panCollapse_prepared_count panCollapse::warnings)
+add_test(NAME native_count_index_test COMMAND native_count_index_test)
+set_tests_properties(native_count_index_test PROPERTIES LABELS "vg;count;native-index")
+add_executable(native_count_query_test native_count_query_test.cpp)
+add_library(pancollapse_native_query_oracle STATIC ../../src/native_count_reference.cpp)
+target_link_libraries(pancollapse_native_query_oracle PUBLIC panCollapse_prepared_count PRIVATE panCollapse::warnings)
+target_link_libraries(native_count_query_test PRIVATE pancollapse_native_query_oracle panCollapse::warnings)
+add_test(NAME native_count_query_test COMMAND native_count_query_test)
+set_tests_properties(native_count_query_test PROPERTIES LABELS "vg;count;native-index" TIMEOUT 120)
+add_executable(direct_count_index_test direct_count_index_test.cpp)
+target_link_libraries(direct_count_index_test PRIVATE panCollapse_prepared_count panCollapse::warnings)
+add_test(NAME direct_count_index_test COMMAND direct_count_index_test)
+set_tests_properties(direct_count_index_test PROPERTIES LABELS "vg;count;direct-index" TIMEOUT 120)
+add_executable(direct_count_compile_test direct_count_compile_test.cpp)
+target_link_libraries(direct_count_compile_test PRIVATE pancollapse_native_query_oracle panCollapse::warnings)
+add_test(NAME direct_count_compile_test COMMAND direct_count_compile_test)
+set_tests_properties(direct_count_compile_test PROPERTIES LABELS "vg;count;direct-index;differential" TIMEOUT 120)
+add_executable(count_reference_test count_reference_test.cpp)
+target_link_libraries(count_reference_test PRIVATE panCollapse_prepared_count panCollapse::warnings)
+add_test(NAME count_reference_test COMMAND count_reference_test)
+set_tests_properties(count_reference_test PROPERTIES LABELS "vg;count;prepared-index")
+add_executable(node_score_resolver_test node_score_resolver_test.cpp
+  node_score_oracle.cpp reference_assignment_projection_legacy.cpp)
+add_executable(reference_assignment_projection_test reference_assignment_projection_test.cpp
+  reference_assignment_projection_legacy.cpp)
+target_link_libraries(reference_assignment_projection_test PRIVATE panCollapse_prepared_count panCollapse::warnings)
+add_test(NAME reference_assignment_projection_test COMMAND reference_assignment_projection_test)
+set_tests_properties(reference_assignment_projection_test PROPERTIES LABELS "vg;count;native-index;policy")
+target_link_libraries(node_score_resolver_test PRIVATE panCollapse_prepared_count panCollapse::warnings)
+add_test(NAME node_score_resolver_test COMMAND node_score_resolver_test)
+set_tests_properties(node_score_resolver_test PROPERTIES LABELS "vg;count;prepared-index")
+add_executable(node_score_dp_test node_score_dp_test.cpp
+  node_score_oracle.cpp reference_assignment_projection_legacy.cpp)
+target_link_libraries(node_score_dp_test PRIVATE panCollapse_prepared_count panCollapse::warnings)
+add_test(NAME node_score_dp_test COMMAND node_score_dp_test)
+set_tests_properties(node_score_dp_test PROPERTIES LABELS "vg;count;prepared-index;differential" TIMEOUT 120)
+add_executable(numeric_assignment_test numeric_assignment_test.cpp)
+target_link_libraries(numeric_assignment_test PRIVATE panCollapse_prepared_count panCollapse::warnings)
+add_test(NAME numeric_assignment_test COMMAND numeric_assignment_test)
+set_tests_properties(numeric_assignment_test PROPERTIES LABELS "vg;count;policy;numeric;differential")
+add_executable(compact_score_frontier_test compact_score_frontier_test.cpp)
+target_include_directories(compact_score_frontier_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(compact_score_frontier_test PRIVATE panCollapse::warnings)
+add_test(NAME compact_score_frontier_test COMMAND compact_score_frontier_test)
+set_tests_properties(compact_score_frontier_test PROPERTIES LABELS "pure;count;frontier")
+add_executable(pod_row_codec_test pod_row_codec_test.cpp)
+target_include_directories(pod_row_codec_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(pod_row_codec_test PRIVATE panCollapse::warnings PkgConfig::ZSTD)
+add_test(NAME pod_row_codec_test COMMAND pod_row_codec_test)
+set_tests_properties(pod_row_codec_test PROPERTIES LABELS "pure;count;codec")
 target_link_libraries(vg_link_smoke PRIVATE panCollapse::vg_boundary panCollapse::warnings)
 add_test(NAME vg_link_smoke COMMAND vg_link_smoke)
 set_tests_properties(vg_link_smoke PROPERTIES LABELS "vg;link")
@@ -8,6 +81,24 @@ target_include_directories(ordered_gamp_reader_test PRIVATE "${CMAKE_SOURCE_DIR}
 target_link_libraries(ordered_gamp_reader_test PRIVATE panCollapse::vg_boundary panCollapse::warnings Threads::Threads)
 add_test(NAME ordered_gamp_reader_test COMMAND ordered_gamp_reader_test)
 set_tests_properties(ordered_gamp_reader_test PROPERTIES LABELS "vg;input;gamp;threads" TIMEOUT 120)
+
+add_executable(pancollapse_gamp_prefix ../../scripts/gamp_prefix.cpp)
+target_include_directories(pancollapse_gamp_prefix PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(pancollapse_gamp_prefix PRIVATE panCollapse::vg_boundary panCollapse::warnings Threads::Threads)
+
+add_executable(pancollapse_gamp_sort_envelope ../../scripts/gamp_sort_envelope.cpp)
+target_include_directories(pancollapse_gamp_sort_envelope PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(pancollapse_gamp_sort_envelope PRIVATE panCollapse::vg_boundary panCollapse::warnings Threads::Threads)
+
+add_executable(pancollapse_gamp_umi_reuse ../../scripts/gamp_umi_reuse.cpp)
+target_include_directories(pancollapse_gamp_umi_reuse PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(pancollapse_gamp_umi_reuse PRIVATE panCollapse::vg_boundary panCollapse::warnings Threads::Threads)
+
+add_executable(pancollapse_gamp_adjacency_prevalence ../../scripts/gamp_adjacency_prevalence.cpp)
+target_include_directories(pancollapse_gamp_adjacency_prevalence PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(pancollapse_gamp_adjacency_prevalence PRIVATE panCollapse::vg_boundary panCollapse::warnings Threads::Threads)
+add_test(NAME gamp_adjacency_prevalence_self_test COMMAND pancollapse_gamp_adjacency_prevalence --self-test)
+set_tests_properties(gamp_adjacency_prevalence_self_test PROPERTIES LABELS "vg;input;gamp;diagnostic")
 
 add_executable(read_granular_input_test read_granular_input_test.cpp)
 target_include_directories(read_granular_input_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
@@ -41,6 +132,12 @@ target_link_libraries(node_tally_cache_test PRIVATE panCollapse::vg_boundary pan
 add_test(NAME node_tally_cache_test COMMAND node_tally_cache_test)
 set_tests_properties(node_tally_cache_test PROPERTIES LABELS "vg;pathtally;cache")
 
+add_executable(bounded_reference_cache_test bounded_reference_cache_test.cpp)
+target_include_directories(bounded_reference_cache_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(bounded_reference_cache_test PRIVATE panCollapse::warnings Threads::Threads)
+add_test(NAME bounded_reference_cache_test COMMAND bounded_reference_cache_test)
+set_tests_properties(bounded_reference_cache_test PROPERTIES LABELS "pure;cache;memory;threads")
+
 # Ledger count-mode rules (Gene/GeneFull/variants); pure, no graph.
 add_executable(pathtally_ledger_test pathtally_ledger_test.cpp)
 target_include_directories(pathtally_ledger_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
@@ -51,8 +148,15 @@ set_tests_properties(pathtally_ledger_test PROPERTIES LABELS "vg;pathtally;ledge
 add_executable(path_identity_ledger_test path_identity_ledger_test.cpp)
 target_include_directories(path_identity_ledger_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(path_identity_ledger_test PRIVATE panCollapse::warnings)
-add_test(NAME path_identity_ledger_test COMMAND path_identity_ledger_test)
+add_test(NAME path_identity_ledger_test COMMAND path_identity_ledger_test
+    "${CMAKE_SOURCE_DIR}/tests/fixtures/path_identity_conflict_ENST00000477740.tsv")
 set_tests_properties(path_identity_ledger_test PROPERTIES LABELS "vg;pathtally;identity-ledger")
+
+add_executable(compact_identity_text_test compact_identity_text_test.cpp)
+target_include_directories(compact_identity_text_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(compact_identity_text_test PRIVATE panCollapse::warnings)
+add_test(NAME compact_identity_text_test COMMAND compact_identity_text_test)
+set_tests_properties(compact_identity_text_test PROPERTIES LABELS "vg;identity-ledger")
 
 # Self-contained end-to-end smoke: a tiny hand-authored graph + multipath GAMP go
 # through panCollapse, and the independent oracle checks the RAD exactly.
@@ -816,446 +920,31 @@ set_tests_properties(genefull_ex50pas_gamp PROPERTIES
   LABELS "vg;pathtally;genefull;ledger;ex50"
   FIXTURES_REQUIRED genefull_ex50pas_dir FIXTURES_SETUP genefull_ex50pas_inputs)
 
-# Native v0.10 direct counting. The authenticated bundle is rebuilt from repository
-# fixtures for every test run, then one- and four-thread requests must publish the
-# same canonical Parquet/MEX content. The small exact surface would normally reduce
-# the active worker count to one, so the multi-thread runs force the worker pool on
-# and the verifier asserts the manifest's active thread count.
+# Native index/count fixtures. Obsolete raw/expanded/replay count routes are retired;
+# native_count_verify covers thread/profile equality against fixed node-score goldens.
 set(DIRECT_COUNT_BUNDLE "${EX50_DIR}/count_bundle")
-set(DIRECT_COUNT_BUNDLE_TAGGED "${EX50_DIR}/count_bundle_tagged")
-set(DIRECT_COUNT_ONE "${EX50_DIR}/direct_count_threads_1")
-set(DIRECT_COUNT_FOUR "${EX50_DIR}/direct_count_threads_4")
-set(DIRECT_COUNT_FOUR_SPOOL "${EX50_DIR}/direct_count_threads_4_spool")
-set(DIRECT_COUNT_CR7 "${EX50_DIR}/direct_count_cr7_only")
-set(DIRECT_COUNT_PANSC "${EX50_DIR}/direct_count_pansc_only")
-set(DIRECT_COUNT_OVERRIDE "${EX50_DIR}/direct_count_override")
-set(DIRECT_COUNT_EMPTY "${EX50_DIR}/direct_count_empty")
-set(DIRECT_COUNT_COMPATIBILITY "${EX50_DIR}/direct_count_compatibility")
-set(DIRECT_COUNT_COMPATIBILITY_SOURCE "${EX50_DIR}/direct_count_compatibility_source")
-set(DIRECT_COUNT_COMPATIBILITY_ONE "${EX50_DIR}/direct_count_compatibility_one")
-set(DIRECT_COUNT_COMPATIBILITY_ONE_SOURCE
-  "${EX50_DIR}/direct_count_compatibility_one_source")
-set(DIRECT_COUNT_COMPATIBILITY_TAGGED
-  "${EX50_DIR}/direct_count_compatibility_tagged")
-set(DIRECT_COUNT_COMPATIBILITY_TAGGED_SOURCE
-  "${EX50_DIR}/direct_count_compatibility_tagged_source")
-set(DIRECT_COUNT_COMPATIBILITY_TAGGED_REPLAY
-  "${EX50_DIR}/direct_count_compatibility_tagged_replay")
-set(DIRECT_COUNT_COMPATIBILITY_REPLAY "${EX50_DIR}/direct_count_compatibility_replay")
-set(DIRECT_COUNT_COMPATIBILITY_OVERRIDE
-  "${EX50_DIR}/direct_count_compatibility_override")
-set(DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_GAMP
-  "${EX50_DIR}/reads_compatibility_denominator.gamp")
-set(DIRECT_COUNT_COMPATIBILITY_DENOMINATOR
-  "${EX50_DIR}/direct_count_compatibility_denominator")
-set(DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_SOURCE
-  "${EX50_DIR}/direct_count_compatibility_denominator_source")
-set(DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_REPLAY
-  "${EX50_DIR}/direct_count_compatibility_denominator_replay")
 add_test(NAME direct_count_fixture_clean
-  COMMAND ${CMAKE_COMMAND} -E rm -rf
-    "${DIRECT_COUNT_BUNDLE}" "${DIRECT_COUNT_BUNDLE_TAGGED}"
-    "${DIRECT_COUNT_ONE}" "${DIRECT_COUNT_FOUR}"
-    "${DIRECT_COUNT_FOUR_SPOOL}" "${DIRECT_COUNT_CR7}" "${DIRECT_COUNT_PANSC}"
-    "${DIRECT_COUNT_OVERRIDE}" "${DIRECT_COUNT_EMPTY}"
-    "${DIRECT_COUNT_COMPATIBILITY}" "${DIRECT_COUNT_COMPATIBILITY_SOURCE}"
-    "${DIRECT_COUNT_COMPATIBILITY_ONE}"
-    "${DIRECT_COUNT_COMPATIBILITY_ONE_SOURCE}"
-    "${DIRECT_COUNT_COMPATIBILITY_TAGGED}"
-    "${DIRECT_COUNT_COMPATIBILITY_TAGGED_SOURCE}"
-    "${DIRECT_COUNT_COMPATIBILITY_TAGGED_REPLAY}"
-    "${DIRECT_COUNT_COMPATIBILITY_REPLAY}"
-    "${DIRECT_COUNT_COMPATIBILITY_OVERRIDE}"
-    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_GAMP}"
-    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR}"
-    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_SOURCE}"
-    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_REPLAY}"
-    "${EX50_DIR}/direct_count_compatibility_forbidden_mixed"
-    "${EX50_DIR}/direct_count_compatibility_mixed.stderr"
-    "${EX50_DIR}/direct_count_compatibility_nested.stderr"
-    "${EX50_DIR}/empty.gamp")
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIRECT_COUNT_BUNDLE}")
 set_tests_properties(direct_count_fixture_clean PROPERTIES
   LABELS "vg;count;direct-count"
-  FIXTURES_REQUIRED genefull_ex50pas_inputs
-  FIXTURES_SETUP direct_count_clean)
-
+  FIXTURES_REQUIRED genefull_ex50pas_inputs FIXTURES_SETUP direct_count_clean)
 add_test(NAME direct_count_bundle_fixture
-  COMMAND ${Python3_EXECUTABLE}
-    "${CMAKE_CURRENT_SOURCE_DIR}/make_count_bundle_fixture.py"
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/make_count_bundle_fixture.py"
     "${EX50_FIX}" "${DIRECT_COUNT_BUNDLE}")
 set_tests_properties(direct_count_bundle_fixture PROPERTIES
   LABELS "vg;count;direct-count;facts"
-  FIXTURES_REQUIRED direct_count_clean
-  FIXTURES_SETUP direct_count_bundle)
-
-add_test(NAME direct_count_bundle_tagged_fixture
-  COMMAND ${Python3_EXECUTABLE}
-    "${CMAKE_CURRENT_SOURCE_DIR}/make_count_bundle_fixture.py"
-    "${EX50_FIX}" "${DIRECT_COUNT_BUNDLE_TAGGED}" tagged)
-set_tests_properties(direct_count_bundle_tagged_fixture PROPERTIES
-  LABELS "vg;count;direct-count;facts;compatibility;annotation"
-  FIXTURES_REQUIRED direct_count_clean
-  FIXTURES_SETUP direct_count_bundle_tagged)
-
-add_test(NAME direct_count_preload_verify
-  COMMAND ${Python3_EXECUTABLE}
-    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_preload_verify.py"
-    "${PT_PROGRAM}" "${EX50_DIR}" "${EX50_FIX}" "${DIRECT_COUNT_BUNDLE}")
-set_tests_properties(direct_count_preload_verify PROPERTIES
-  LABELS "vg;count;direct-count;preload"
+  FIXTURES_REQUIRED direct_count_clean FIXTURES_SETUP direct_count_bundle)
+add_test(NAME native_count_verify
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/native_count_verify.py"
+    "$<TARGET_FILE:panCollapse>" "${PT_VG}" "${EX50_DIR}" "${EX50_FIX}"
+    "${PT_FIXTURE_ROOT}/native_count_work")
+set_tests_properties(native_count_verify PROPERTIES
   FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
-  TIMEOUT 180)
-
-add_test(NAME direct_count_threads_1
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --t2g "${EX50_FIX}/count_t2g.tsv"
-    --body-t2g "${EX50_FIX}/count_body_t2g.tsv"
-    --cr7 --pansc-strict-v1 --threads 1 --count-memory-budget 1MiB
-    --10x-mex --rad-out
-    --read-assignments-out diagnostics/read_assignments.parquet
-    --out-dir "${DIRECT_COUNT_ONE}")
-set_tests_properties(direct_count_threads_1 PROPERTIES
-  LABELS "vg;count;direct-count;parquet;mex;rad"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
-  FIXTURES_SETUP direct_count_one)
-
-# D090: read-granular input decodes each read on the worker that counts it. Both parallel
-# input modes must reproduce the one-worker tables and read-assignment diagnostics exactly.
-add_test(NAME direct_count_input_modes
-  COMMAND ${Python3_EXECUTABLE}
-    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_input_mode_verify.py"
-    ${PT_PROGRAM} "${EX50_DIR}" "${EX50_FIX}" "${DIRECT_COUNT_BUNDLE}"
-    "${DIRECT_COUNT_ONE}" "${EX50_DIR}/direct_count_input_modes")
-set_tests_properties(direct_count_input_modes PROPERTIES
-  LABELS "vg;count;direct-count;threads;input;parquet"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle;direct_count_one"
-  TIMEOUT 180)
-
-# D088's factory smoke cannot catch main.cpp passing incomplete output provenance.
-add_test(NAME direct_count_annotation_cli
-  COMMAND ${Python3_EXECUTABLE}
-    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_annotation_verify.py"
-    ${PT_PROGRAM} "${EX50_FIX}" "${EX50_DIR}" "${DIRECT_COUNT_ONE}")
-set_tests_properties(direct_count_annotation_cli PROPERTIES
-  LABELS "vg;count;direct-count;annotation;parquet"
-  FIXTURES_REQUIRED direct_count_one
-  TIMEOUT 180)
-
-add_test(NAME direct_count_cache_cli
-  COMMAND ${Python3_EXECUTABLE}
-    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_cache_verify.py"
-    ${PT_PROGRAM} "${PT_VG}" "${EX50_FIX}" "${EX50_DIR}"
-    "${DIRECT_COUNT_BUNDLE}")
-set_tests_properties(direct_count_cache_cli PROPERTIES
-  LABELS "vg;count;direct-count;cache;annotation;parquet;threads"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
-  TIMEOUT 180)
-
-add_test(NAME direct_count_threads_4
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --pansc-strict-v1 --threads 4 --count-memory-budget 1MiB
-    --10x-mex --out-dir "${DIRECT_COUNT_FOUR}")
-set_tests_properties(direct_count_threads_4 PROPERTIES
-  LABELS "vg;count;direct-count;parquet;mex;threads"
-  ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
-  FIXTURES_SETUP direct_count_four)
-
-# Each worker spools read-assignment diagnostics privately; the spools merge by ordinal after
-# counting. These flags write no RAD or compatibility output, so no ordered sink is active.
-add_test(NAME direct_count_threads_4_spool
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --pansc-strict-v1 --threads 4 --count-memory-budget 1MiB
-    --read-assignments-out diagnostics/read_assignments.parquet
-    --out-dir "${DIRECT_COUNT_FOUR_SPOOL}")
-set_tests_properties(direct_count_threads_4_spool PROPERTIES
-  LABELS "vg;count;direct-count;parquet;threads;diagnostics"
-  ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
-  FIXTURES_SETUP direct_count_four_spool)
-
-# D079: persist policy-neutral E/P/B plus S/U evidence once, then replay it
-# without opening GAMP or XG. The fixture is intentionally nine reads so it is
-# fast enough to run during every filter-method iteration.
-add_test(NAME direct_count_compatibility_source
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --pansc-strict-v1 --threads 4 --count-memory-budget 1MiB
-    --10x-mex --read-assignments-out diagnostics/read_assignments.parquet
-    --compatibility-out "${DIRECT_COUNT_COMPATIBILITY}"
-    --out-dir "${DIRECT_COUNT_COMPATIBILITY_SOURCE}")
-set_tests_properties(direct_count_compatibility_source PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;parquet;threads"
-  ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
-  FIXTURES_SETUP direct_count_compatibility_source_output)
-
-add_test(NAME direct_count_compatibility_source_one
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --pansc-strict-v1 --threads 1 --count-memory-budget 1MiB
-    --10x-mex --read-assignments-out diagnostics/read_assignments.parquet
-    --compatibility-out "${DIRECT_COUNT_COMPATIBILITY_ONE}"
-    --out-dir "${DIRECT_COUNT_COMPATIBILITY_ONE_SOURCE}")
-set_tests_properties(direct_count_compatibility_source_one PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;parquet;threads"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
-  FIXTURES_SETUP direct_count_compatibility_one_source_output)
-
-add_test(NAME direct_count_compatibility_tagged_source
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE_TAGGED}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --pansc-strict-v1 --threads 1 --count-memory-budget 1MiB
-    --read-assignments-out diagnostics/read_assignments.parquet
-    --compatibility-out "${DIRECT_COUNT_COMPATIBILITY_TAGGED}"
-    --out-dir "${DIRECT_COUNT_COMPATIBILITY_TAGGED_SOURCE}")
-set_tests_properties(direct_count_compatibility_tagged_source PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;annotation;parquet"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle_tagged"
-  FIXTURES_SETUP direct_count_compatibility_tagged_source_output)
-
-add_test(NAME direct_count_compatibility_tagged_replay
-  COMMAND ${PT_PROGRAM} count
-    --compatibility-in "${DIRECT_COUNT_COMPATIBILITY}"
-    --count-bundle "${DIRECT_COUNT_BUNDLE_TAGGED}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --pansc-strict-v1 --count-memory-budget 1MiB
-    --read-assignments-out diagnostics/read_assignments.parquet
-    --out-dir "${DIRECT_COUNT_COMPATIBILITY_TAGGED_REPLAY}")
-set_tests_properties(direct_count_compatibility_tagged_replay PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;annotation;parquet"
-  FIXTURES_REQUIRED
-    "direct_count_compatibility_source_output;direct_count_bundle_tagged"
-  FIXTURES_SETUP direct_count_compatibility_tagged_replay_output)
-
-add_test(NAME direct_count_compatibility_replay
-  COMMAND ${PT_PROGRAM} count
-    --compatibility-in "${DIRECT_COUNT_COMPATIBILITY}"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --pansc-strict-v1 --threads 4 --count-memory-budget 1MiB
-    --10x-mex --read-assignments-out diagnostics/read_assignments.parquet
-    --out-dir "${DIRECT_COUNT_COMPATIBILITY_REPLAY}")
-set_tests_properties(direct_count_compatibility_replay PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;parquet"
-  FIXTURES_REQUIRED direct_count_compatibility_source_output
-  FIXTURES_SETUP direct_count_compatibility_replay_output)
-
-add_test(NAME direct_count_compatibility_override
-  COMMAND ${PT_PROGRAM} count
-    --compatibility-in "${DIRECT_COUNT_COMPATIBILITY}"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}/MANIFEST.json"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --analysis-scope sensitivity-analysis
-    --profile-override cr7-v1:score-window=4
-    --count-memory-budget 1MiB
-    --out-dir "${DIRECT_COUNT_COMPATIBILITY_OVERRIDE}")
-set_tests_properties(direct_count_compatibility_override PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;policy;parquet"
-  FIXTURES_REQUIRED direct_count_compatibility_source_output
-  FIXTURES_SETUP direct_count_compatibility_override_output)
-
-# Production-path denominator coverage: malformed aligned evidence remains in
-# the compatibility bundle, while a valid unaligned read remains as an empty
-# fact set. Both must replay with identical counters and diagnostics.
-add_test(NAME direct_count_compatibility_denominator_gamp
-  COMMAND /bin/sh -c
-    "$<SHELL_PATH:${PT_VG}> view -J -K -k '${EX50_FIX}/reads_compatibility_denominator.gamp.json' > '${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_GAMP}'")
-set_tests_properties(direct_count_compatibility_denominator_gamp PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;denominator"
-  FIXTURES_REQUIRED direct_count_clean
-  FIXTURES_SETUP direct_count_compatibility_denominator_input)
-
-add_test(NAME direct_count_compatibility_denominator_source
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_GAMP}"
-    --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --count-memory-budget 1MiB
-    --read-assignments-out diagnostics/read_assignments.parquet
-    --compatibility-out "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR}"
-    --out-dir "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_SOURCE}")
-set_tests_properties(direct_count_compatibility_denominator_source PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;denominator;parquet"
-  FIXTURES_REQUIRED
-    "genefull_ex50pas_inputs;direct_count_bundle;direct_count_compatibility_denominator_input"
-  FIXTURES_SETUP direct_count_compatibility_denominator_source_output)
-
-add_test(NAME direct_count_compatibility_denominator_replay
-  COMMAND ${PT_PROGRAM} count
-    --compatibility-in "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR}"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --count-memory-budget 1MiB
-    --read-assignments-out diagnostics/read_assignments.parquet
-    --out-dir "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_REPLAY}")
-set_tests_properties(direct_count_compatibility_denominator_replay PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;denominator;parquet"
-  FIXTURES_REQUIRED direct_count_compatibility_denominator_source_output
-  FIXTURES_SETUP direct_count_compatibility_denominator_replay_output)
-
-add_test(NAME direct_count_compatibility_verify
-  COMMAND ${Python3_EXECUTABLE}
-    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_compatibility_verify.py"
-    "${DIRECT_COUNT_COMPATIBILITY}"
-    "${DIRECT_COUNT_COMPATIBILITY_SOURCE}"
-    "${DIRECT_COUNT_COMPATIBILITY_REPLAY}"
-    "${DIRECT_COUNT_OVERRIDE}"
-    "${DIRECT_COUNT_COMPATIBILITY_OVERRIDE}"
-    "${DIRECT_COUNT_COMPATIBILITY_ONE}"
-    "${DIRECT_COUNT_COMPATIBILITY_ONE_SOURCE}"
-    "${DIRECT_COUNT_COMPATIBILITY_TAGGED}"
-    "${DIRECT_COUNT_COMPATIBILITY_TAGGED_SOURCE}"
-    "${DIRECT_COUNT_COMPATIBILITY_TAGGED_REPLAY}"
-    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR}"
-    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_SOURCE}"
-    "${DIRECT_COUNT_COMPATIBILITY_DENOMINATOR_REPLAY}")
-set_tests_properties(direct_count_compatibility_verify PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;policy;parquet"
-  FIXTURES_REQUIRED
-    "direct_count_compatibility_source_output;direct_count_compatibility_one_source_output;direct_count_compatibility_tagged_source_output;direct_count_compatibility_tagged_replay_output;direct_count_compatibility_replay_output;direct_count_override_output;direct_count_compatibility_override_output;direct_count_compatibility_denominator_source_output;direct_count_compatibility_denominator_replay_output")
-
-add_test(NAME direct_count_compatibility_mixed_source_rejected
-  COMMAND /bin/sh -c
-    "'${PT_PROGRAM}' count --compatibility-in '${DIRECT_COUNT_COMPATIBILITY}' --gamp '${EX50_DIR}/reads.gamp' --xg '${EX50_DIR}/graph.xg' --count-bundle '${DIRECT_COUNT_BUNDLE}' --barcode-whitelist '${EX50_FIX}/count_whitelist.txt' --cr7 --out-dir '${EX50_DIR}/direct_count_compatibility_forbidden_mixed' > '${EX50_DIR}/direct_count_compatibility_mixed.stderr' 2>&1; status=$?; test $status -ne 0 && grep -q 'exclusive count input' '${EX50_DIR}/direct_count_compatibility_mixed.stderr'")
-set_tests_properties(direct_count_compatibility_mixed_source_rejected PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;cli"
-  FIXTURES_REQUIRED direct_count_compatibility_source_output)
-
-add_test(NAME direct_count_compatibility_nested_output_rejected
-  COMMAND /bin/sh -c
-    "'${PT_PROGRAM}' count --compatibility-in '${DIRECT_COUNT_COMPATIBILITY}' --count-bundle '${DIRECT_COUNT_BUNDLE}' --barcode-whitelist '${EX50_FIX}/count_whitelist.txt' --cr7 --out-dir '${DIRECT_COUNT_COMPATIBILITY}/nested-output' > '${EX50_DIR}/direct_count_compatibility_nested.stderr' 2>&1; status=$?; test $status -ne 0 && grep -q 'must be disjoint paths' '${EX50_DIR}/direct_count_compatibility_nested.stderr'")
-set_tests_properties(direct_count_compatibility_nested_output_rejected PROPERTIES
-  LABELS "vg;count;direct-count;compatibility;cli"
-  FIXTURES_REQUIRED direct_count_compatibility_source_output)
-
-add_test(NAME direct_count_cr7_only
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --threads 2 --count-memory-budget 1MiB
-    --out-dir "${DIRECT_COUNT_CR7}")
-set_tests_properties(direct_count_cr7_only PROPERTIES
-  LABELS "vg;count;direct-count;parquet;profiles"
-  ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
-  FIXTURES_SETUP direct_count_cr7)
-
-add_test(NAME direct_count_pansc_only
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --pansc-strict-v1 --threads 2 --count-memory-budget 1MiB
-    --out-dir "${DIRECT_COUNT_PANSC}")
-set_tests_properties(direct_count_pansc_only PROPERTIES
-  LABELS "vg;count;direct-count;parquet;profiles"
-  ENVIRONMENT "PANCOLLAPSE_FORCE_WORKER_POOL=1"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
-  FIXTURES_SETUP direct_count_pansc)
-
-add_test(NAME direct_count_verify
-  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_verify.py"
-    "${DIRECT_COUNT_ONE}" "${DIRECT_COUNT_FOUR}"
-    "${DIRECT_COUNT_CR7}" "${DIRECT_COUNT_PANSC}" "${DIRECT_COUNT_FOUR_SPOOL}")
-set_tests_properties(direct_count_verify PROPERTIES
-  LABELS "vg;count;direct-count;parquet;mex;threads;profiles"
-  FIXTURES_REQUIRED
-    "direct_count_one;direct_count_four;direct_count_cr7;direct_count_pansc;direct_count_four_spool")
-
-add_test(NAME direct_count_duplicate_profile_rejected
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --profile cr7-v1 --out-dir "${EX50_DIR}/duplicate_profile")
-set_tests_properties(direct_count_duplicate_profile_rejected PROPERTIES
-  LABELS "vg;count;direct-count;cli"
-  FIXTURES_REQUIRED direct_count_bundle WILL_FAIL TRUE)
-
-add_test(NAME direct_count_override_scope_rejected
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --profile-override cr7-v1:score-window=4
-    --out-dir "${EX50_DIR}/override_without_scope")
-set_tests_properties(direct_count_override_scope_rejected PROPERTIES
-  LABELS "vg;count;direct-count;cli"
-  FIXTURES_REQUIRED direct_count_bundle WILL_FAIL TRUE)
-
-add_test(NAME direct_count_override_sensitivity
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}/MANIFEST.json"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --analysis-scope sensitivity-analysis
-    --profile-override cr7-v1:score-window=4
-    --out-dir "${DIRECT_COUNT_OVERRIDE}")
-set_tests_properties(direct_count_override_sensitivity PROPERTIES
-  LABELS "vg;count;direct-count;cli;policy"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle"
-  FIXTURES_SETUP direct_count_override_output)
-
-add_test(NAME direct_count_override_verify
-  COMMAND ${Python3_EXECUTABLE}
-    "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_override_verify.py"
-    "${DIRECT_COUNT_OVERRIDE}")
-set_tests_properties(direct_count_override_verify PROPERTIES
-  LABELS "vg;count;direct-count;cli;policy;parquet"
-  FIXTURES_REQUIRED direct_count_override_output)
-
-add_test(NAME direct_count_t2g_mismatch_rejected
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/reads.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --t2g "${EX50_FIX}/count_t2g_mismatch.tsv"
-    --cr7 --out-dir "${EX50_DIR}/t2g_mismatch")
-set_tests_properties(direct_count_t2g_mismatch_rejected PROPERTIES
-  LABELS "vg;count;direct-count;cli;facts"
-  FIXTURES_REQUIRED direct_count_bundle WILL_FAIL TRUE)
-
-add_test(NAME direct_count_empty_gamp_setup
-  COMMAND ${CMAKE_COMMAND} -E touch "${EX50_DIR}/empty.gamp")
-set_tests_properties(direct_count_empty_gamp_setup PROPERTIES
-  LABELS "vg;count;direct-count;empty"
-  FIXTURES_REQUIRED direct_count_clean FIXTURES_SETUP direct_count_empty_input)
-
-add_test(NAME direct_count_empty_gamp
-  COMMAND ${PT_PROGRAM} count
-    --gamp "${EX50_DIR}/empty.gamp" --xg "${EX50_DIR}/graph.xg"
-    --count-bundle "${DIRECT_COUNT_BUNDLE}"
-    --barcode-whitelist "${EX50_FIX}/count_whitelist.txt"
-    --cr7 --out-dir "${DIRECT_COUNT_EMPTY}")
-set_tests_properties(direct_count_empty_gamp PROPERTIES
-  LABELS "vg;count;direct-count;empty;parquet"
-  FIXTURES_REQUIRED "genefull_ex50pas_inputs;direct_count_bundle;direct_count_empty_input"
-  FIXTURES_SETUP direct_count_empty_output)
-
-add_test(NAME direct_count_empty_verify
-  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/direct_count_empty_verify.py"
-    "${DIRECT_COUNT_EMPTY}")
-set_tests_properties(direct_count_empty_verify PROPERTIES
-  LABELS "vg;count;direct-count;empty;parquet"
-  FIXTURES_REQUIRED direct_count_empty_output)
+  LABELS "vg;count;native-index" TIMEOUT 180)
+add_test(NAME count_cli_surface
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/count_cli_surface.py"
+    "$<TARGET_FILE:panCollapse>")
+set_tests_properties(count_cli_surface PROPERTIES LABELS "vg;count;cli")
 
 add_test(NAME genefull_ex50pas_rad_baseline
   COMMAND ${PT_PROGRAM} convert
@@ -1278,14 +967,6 @@ set_tests_properties(genefull_ex50pas_exact PROPERTIES
   FIXTURES_REQUIRED genefull_ex50pas_inputs
   FIXTURES_SETUP genefull_ex50pas_exact_out)
 
-# --rad-out is the existing pre-count sink, so native count must preserve the
-# exact legacy bytes rather than render either profile's final assignments.
-add_test(NAME direct_count_rad_matches_convert
-  COMMAND ${CMAKE_COMMAND} -E compare_files
-    "${DIRECT_COUNT_ONE}/map.rad" "${EX50_DIR}/exact/map.rad")
-set_tests_properties(direct_count_rad_matches_convert PROPERTIES
-  LABELS "vg;count;direct-count;rad;parity"
-  FIXTURES_REQUIRED "direct_count_one;genefull_ex50pas_exact_out")
 
 # A generated production-ledger fixture has 64 lexical Parents and canonical targets. Three exon
 # and three body paths per Parent produce 576 exact models but only 64 immutable exon-edge
@@ -1494,14 +1175,14 @@ add_test(NAME cyclic_body_inputs
   COMMAND /bin/sh -c "$<SHELL_PATH:${PT_VG}> convert -g '${CYCLIC_FIX}/graph.gfa' -x > '${CYCLIC_DIR}/graph.xg' && $<SHELL_PATH:${PT_VG}> view -J -K -k '${CYCLIC_FIX}/reads.gamp.json' > '${CYCLIC_DIR}/reads.gamp'")
 set_tests_properties(cyclic_body_inputs PROPERTIES LABELS "vg;pathtally;ledger;ex50;cyclic"
   FIXTURES_REQUIRED cyclic_body_dir FIXTURES_SETUP cyclic_body_inputs_ready)
-add_test(NAME cyclic_body_degrades_and_preserves_clean
-  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/cyclic' --bam-out '${CYCLIC_DIR}/cyclic/reads.bam' --debug-evidence-out '${CYCLIC_DIR}/cyclic/debug.tsv' 2> '${CYCLIC_DIR}/cyclic.stderr' && '${PT_PROGRAM}' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_clean.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/clean' --bam-out '${CYCLIC_DIR}/clean/reads.bam' && grep -qP '^body_paths_degraded\\t1$' '${CYCLIC_DIR}/cyclic/summary.tsv' && grep -qP '^body_path_degrade_reason\\trepeated_exonic_node$' '${CYCLIC_DIR}/cyclic/summary.tsv' && grep -q 'debug: degraded body path CYCLIC_BODY' '${CYCLIC_DIR}/cyclic.stderr' && '${Python3_EXECUTABLE}' '${CMAKE_CURRENT_SOURCE_DIR}/cyclic_body_verify.py' '${CYCLIC_DIR}/cyclic/reads.bam' '${CYCLIC_DIR}/clean/reads.bam'")
-set_tests_properties(cyclic_body_degrades_and_preserves_clean PROPERTIES
+add_test(NAME cyclic_body_repeats_preserve_clean
+  COMMAND /bin/sh -c "'${PT_PROGRAM}' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/cyclic' --bam-out '${CYCLIC_DIR}/cyclic/reads.bam' --debug-evidence-out '${CYCLIC_DIR}/cyclic/debug.tsv' 2> '${CYCLIC_DIR}/cyclic.stderr' && '${PT_PROGRAM}' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_clean.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/clean' --bam-out '${CYCLIC_DIR}/clean/reads.bam' && grep -qP '^body_paths_degraded\\t0$' '${CYCLIC_DIR}/cyclic/summary.tsv' && grep -qP '^body_path_degrade_reason\\tnone$' '${CYCLIC_DIR}/cyclic/summary.tsv' && '${Python3_EXECUTABLE}' '${CMAKE_CURRENT_SOURCE_DIR}/cyclic_body_verify.py' '${CYCLIC_DIR}/cyclic/reads.bam' '${CYCLIC_DIR}/clean/reads.bam'")
+set_tests_properties(cyclic_body_repeats_preserve_clean PROPERTIES
   LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
   FIXTURES_REQUIRED cyclic_body_inputs_ready)
 
 add_test(NAME cyclic_body_gene_change_fails_closed
-  COMMAND /bin/sh -c "if '${PT_PROGRAM}' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_gene_mismatch.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/gene_change' --bam-out '${CYCLIC_DIR}/gene_change/reads.bam' 2> '${CYCLIC_DIR}/gene_change.stderr'; then exit 1; fi && grep -Fx 'panCollapse: refusing body-path degradation because linked Parent CYCLIC_EXON_PARENT changes counted gene from SHARED_GENE to OTHER_GENE' '${CYCLIC_DIR}/gene_change.stderr'")
+  COMMAND /bin/sh -c "if '${PT_PROGRAM}' convert --gamp '${CYCLIC_DIR}/reads.gamp' --xg '${CYCLIC_DIR}/graph.xg' --path-identity-ledger '${CYCLIC_FIX}/path_identity_ledger_gene_mismatch.tsv' --count-mode genefull_ex50pas --bam-multigene all --out-dir '${CYCLIC_DIR}/gene_change' --bam-out '${CYCLIC_DIR}/gene_change/reads.bam' 2> '${CYCLIC_DIR}/gene_change.stderr'; then exit 1; fi && grep -Fx 'panCollapse: path identity ledger body Parent CYCLIC_BODY_PARENT changes counted gene from SHARED_GENE to OTHER_GENE' '${CYCLIC_DIR}/gene_change.stderr'")
 set_tests_properties(cyclic_body_gene_change_fails_closed PROPERTIES
   LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
   FIXTURES_REQUIRED cyclic_body_inputs_ready)
@@ -1529,6 +1210,19 @@ add_test(NAME repeated_body_resolved_occurrence_and_orientation
 set_tests_properties(repeated_body_resolved_occurrence_and_orientation PROPERTIES
   LABELS "vg;pathtally;ledger;ex50;cyclic;bam"
   FIXTURES_REQUIRED repeated_body_resolved_inputs_ready)
+
+# A disjoint body/exon pair has no shared node from which to infer orientation.
+# The body walk itself is therefore the only valid exact-orientation witness.
+set(DISJOINT_BODY_DIR "${PT_FIXTURE_ROOT}/disjoint_body_work")
+add_test(NAME disjoint_body_setup COMMAND ${CMAKE_COMMAND} -E make_directory "${DISJOINT_BODY_DIR}")
+set_tests_properties(disjoint_body_setup PROPERTIES
+  LABELS "vg;count;direct-count;ledger;ex50;orientation" FIXTURES_SETUP disjoint_body_dir)
+add_test(NAME disjoint_body_exact_orientation
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/disjoint_body_verify.py"
+    ${PT_PROGRAM} ${PT_VG} "${DISJOINT_BODY_DIR}")
+set_tests_properties(disjoint_body_exact_orientation PROPERTIES
+  LABELS "vg;count;direct-count;ledger;ex50;orientation;parquet;bam"
+  FIXTURES_REQUIRED "direct_count_clean;disjoint_body_dir" TIMEOUT 180)
 
 # D060 cross-isoform fixture: GENE1 has TWO exon isoforms over the SAME 3-node body -- NM_1.1 (exons
 # 1,3, skips node 2) and NM_1.2 (exons 1,2,3, a retained-intron isoform that keeps node 2 as exon).
@@ -1577,6 +1271,7 @@ add_test(NAME genefull_ledger_isoform_control
     && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep -w exonread | grep -qP 'TX:Z:NM_1.1(\\t|\$)' \
     && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep -w exonread | grep -qP 'GL:Z:S(\\t|\$)'")
 set_tests_properties(genefull_ledger_isoform_control PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  RESOURCE_LOCK genefull_isoform_ledger_output
   FIXTURES_REQUIRED "genefull_isoform_annotated;genefull_isoform_reads")
 
 # The cross-isoform case: NM_1.1 unspliced, NM_1.2 spliced, same gene -- one RAD record (single
@@ -1593,6 +1288,7 @@ add_test(NAME genefull_ledger_cross_isoform_ambiguous
     && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep ambigread | grep -q 'GL:Z:U;S' \
     && '${PANCOLLAPSE_SAMTOOLS}' view '${ISO_DIR}/ledger/reads.bam' | grep ambigread | grep -q 'XT:Z:GENE1'")
 set_tests_properties(genefull_ledger_cross_isoform_ambiguous PROPERTIES LABELS "vg;pathtally;genefull;ledger"
+  RESOURCE_LOCK genefull_isoform_ledger_output
   FIXTURES_REQUIRED "genefull_isoform_annotated;genefull_isoform_reads")
 
 # D063 splice ownership must compare each canonical transcript's exon paths with ITS OWN body

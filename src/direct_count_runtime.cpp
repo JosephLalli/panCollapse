@@ -1,20 +1,16 @@
 #include "direct_count_runtime.hpp"
 
-#include <zstd.h>
-
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <mutex>
-#include <queue>
-#include <set>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_map>
@@ -24,276 +20,79 @@ namespace pancollapse::direct_count {
 namespace {
 
 constexpr size_t kShardCount = 256;
-constexpr std::uint64_t kExactEntryBytes = 96;
-constexpr std::uint64_t kDeferredEntryBytes = 192;
-constexpr std::array<char, 8> kSpillMagic{'P', 'C', 'S', 'P', 'I', 'L', 'L', '1'};
 
-void require_zstd(size_t result, std::string_view operation) {
-    if (ZSTD_isError(result)) {
-        throw std::runtime_error(std::string(operation) + ": " + ZSTD_getErrorName(result));
-    }
-}
-
-// Spill streaming buffers. Sized to one Zstd block rather than a megabyte, and matched by
-// the encoder's window above, because merge_runs holds every run's reader live at once.
-constexpr int kSpillWindowLog = 17;
-constexpr std::size_t kSpillStreamBufferBytes = std::size_t{1} << kSpillWindowLog;
-
-class ZstdOutput {
+// The common A/C/G/T UMI fits in one tagged integer. Preserve the complete
+// historical API for longer/noncanonical strings through a rare owned fallback;
+// storage optimization must not add a new biological filter.
+class PackedUmi {
   public:
-    explicit ZstdOutput(const std::filesystem::path& path) : output_(path, std::ios::binary) {
-        if (!output_) {
-            throw std::runtime_error("cannot open aggregate spill output " + path.string());
-        }
-        context_ = ZSTD_createCCtx();
-        if (context_ == nullptr) {
-            throw std::runtime_error("cannot allocate ZSTD compression context");
-        }
-        require_zstd(ZSTD_CCtx_setParameter(context_, ZSTD_c_compressionLevel, 3),
-                     "cannot set ZSTD compression level");
-        require_zstd(ZSTD_CCtx_setParameter(context_, ZSTD_c_checksumFlag, 1),
-                     "cannot enable ZSTD checksum");
-        // Bound the window the decoder must allocate. merge_runs opens one reader per spill
-        // run at once, and a decompression context sized for level 3's default 2 MiB window
-        // grows to about 2.5 MiB on first use, so the merge paid several MiB per run no
-        // matter how small --count-memory-budget was. Spill runs are transient intermediates,
-        // so a smaller window costs only spill bytes and never reaches an output.
-        require_zstd(ZSTD_CCtx_setParameter(context_, ZSTD_c_windowLog, kSpillWindowLog),
-                     "cannot set ZSTD window log");
-    }
-
-    ZstdOutput(const ZstdOutput&) = delete;
-    ZstdOutput& operator=(const ZstdOutput&) = delete;
-
-    ~ZstdOutput() {
-        if (context_ != nullptr) {
-            ZSTD_freeCCtx(context_);
-        }
-    }
-
-    void write(const void* data, size_t size) {
-        ZSTD_inBuffer input{data, size, 0};
-        while (input.pos < input.size) {
-            ZSTD_outBuffer output{buffer_.data(), buffer_.size(), 0};
-            require_zstd(ZSTD_compressStream2(context_, &output, &input, ZSTD_e_continue),
-                         "cannot compress aggregate spill");
-            output_.write(buffer_.data(), static_cast<std::streamsize>(output.pos));
-            if (!output_) {
-                throw std::runtime_error("cannot write aggregate spill");
+    PackedUmi() = default;
+    explicit PackedUmi(std::string_view text) {
+        if (text.size() <= 31) {
+            std::uint64_t encoded = 1; // Length sentinel, including leading A's.
+            bool canonical = true;
+            for (char base : text) {
+                std::uint64_t digit = 0;
+                switch (base) {
+                    case 'A': break;
+                    case 'C': digit = 1; break;
+                    case 'G': digit = 2; break;
+                    case 'T': digit = 3; break;
+                    default: canonical = false; break;
+                }
+                if (!canonical) break;
+                encoded = (encoded << 2) | digit;
             }
+            if (canonical) { bits_ = encoded; return; }
         }
+        bits_ = 0;
+        exceptional_ = std::make_unique<const std::string>(text);
     }
-
-    void finish() {
-        size_t remaining = 1;
-        while (remaining != 0) {
-            ZSTD_inBuffer input{nullptr, 0, 0};
-            ZSTD_outBuffer output{buffer_.data(), buffer_.size(), 0};
-            remaining = ZSTD_compressStream2(context_, &output, &input, ZSTD_e_end);
-            require_zstd(remaining, "cannot finalize aggregate spill");
-            output_.write(buffer_.data(), static_cast<std::streamsize>(output.pos));
-        }
-        output_.close();
-        if (!output_) {
-            throw std::runtime_error("cannot close aggregate spill");
-        }
-        finished_ = true;
+    PackedUmi(const PackedUmi& other) : bits_(other.bits_) {
+        if (other.exceptional_) exceptional_ =
+            std::make_unique<const std::string>(*other.exceptional_);
     }
-
+    PackedUmi& operator=(const PackedUmi& other) {
+        if (this != &other) { PackedUmi copy(other); swap(copy); }
+        return *this;
+    }
+    PackedUmi(PackedUmi&& other) noexcept
+        : bits_(std::exchange(other.bits_, 1)), exceptional_(std::move(other.exceptional_)) {}
+    PackedUmi& operator=(PackedUmi&& other) noexcept {
+        if (this != &other) {
+            bits_ = std::exchange(other.bits_, 1);
+            exceptional_ = std::move(other.exceptional_);
+        }
+        return *this;
+    }
+    std::string str() const {
+        if (exceptional_) return *exceptional_;
+        static constexpr char bases[] = "ACGT";
+        std::string result;
+        for (auto encoded = bits_; encoded > 1; encoded >>= 2)
+            result.push_back(bases[encoded & 3]);
+        std::reverse(result.begin(), result.end());
+        return result;
+    }
+    std::size_t hash() const {
+        return exceptional_ ? std::hash<std::string>{}(*exceptional_)
+                            : std::hash<std::uint64_t>{}(bits_);
+    }
+    bool operator==(const PackedUmi& other) const {
+        return bits_ == other.bits_ && (bits_ != 0 || *exceptional_ == *other.exceptional_);
+    }
+    bool operator<(const PackedUmi& other) const {
+        return bits_ != other.bits_ ? bits_ < other.bits_
+                                   : bits_ == 0 && *exceptional_ < *other.exceptional_;
+    }
   private:
-    std::ofstream output_;
-    ZSTD_CCtx* context_ = nullptr;
-    std::array<char, kSpillStreamBufferBytes> buffer_{};
-    bool finished_ = false;
+    void swap(PackedUmi& other) noexcept {
+        std::swap(bits_, other.bits_); exceptional_.swap(other.exceptional_);
+    }
+    std::uint64_t bits_ = 1;
+    std::unique_ptr<const std::string> exceptional_;
 };
-
-class ZstdInput {
-  public:
-    explicit ZstdInput(const std::filesystem::path& path) : input_(path, std::ios::binary) {
-        if (!input_) {
-            throw std::runtime_error("cannot open aggregate spill input " + path.string());
-        }
-        context_ = ZSTD_createDCtx();
-        if (context_ == nullptr) {
-            throw std::runtime_error("cannot allocate ZSTD decompression context");
-        }
-    }
-
-    ZstdInput(const ZstdInput&) = delete;
-    ZstdInput& operator=(const ZstdInput&) = delete;
-
-    ~ZstdInput() {
-        if (context_ != nullptr) {
-            ZSTD_freeDCtx(context_);
-        }
-    }
-
-    void read(void* destination, size_t size) {
-        char* target = static_cast<char*>(destination);
-        size_t copied = 0;
-        while (copied < size) {
-            if (decoded_at_ == decoded_size_) {
-                refill();
-            }
-            if (decoded_size_ == 0) {
-                throw std::runtime_error("aggregate spill ended before its declared row count");
-            }
-            const size_t available = decoded_size_ - decoded_at_;
-            const size_t take = std::min(available, size - copied);
-            std::copy_n(decoded_.data() + decoded_at_, take, target + copied);
-            decoded_at_ += take;
-            copied += take;
-        }
-    }
-
-    // A spill run is an internal transactional artifact: accepting all of its
-    // declared rows is not sufficient unless the enclosing ZSTD frame also
-    // reaches its authenticated end.  In particular, the frame checksum lives
-    // after the final decoded byte and would otherwise never be examined.
-    void finish() {
-        if (finished_) {
-            return;
-        }
-        if (decoded_at_ != decoded_size_) {
-            throw std::runtime_error(
-                "aggregate spill contains data beyond its declared row count");
-        }
-        while (!frame_complete_) {
-            if (!load_encoded()) {
-                throw std::runtime_error(
-                    "aggregate spill is truncated before the ZSTD frame end");
-            }
-            ZSTD_inBuffer input{encoded_.data(), encoded_size_, encoded_at_};
-            ZSTD_outBuffer output{decoded_.data(), decoded_.size(), 0};
-            const size_t remaining = ZSTD_decompressStream(context_, &output, &input);
-            require_zstd(remaining, "cannot decompress aggregate spill");
-            encoded_at_ = input.pos;
-            if (output.pos != 0) {
-                throw std::runtime_error(
-                    "aggregate spill contains data beyond its declared row count");
-            }
-            frame_complete_ = remaining == 0;
-        }
-        if (encoded_at_ != encoded_size_) {
-            throw std::runtime_error(
-                "aggregate spill has trailing bytes or multiple ZSTD frames");
-        }
-        char trailing = 0;
-        input_.read(&trailing, 1);
-        if (input_.gcount() != 0) {
-            throw std::runtime_error(
-                "aggregate spill has trailing bytes or multiple ZSTD frames");
-        }
-        if (input_.bad()) {
-            throw std::runtime_error("cannot finish reading aggregate spill");
-        }
-        finished_ = true;
-    }
-
-  private:
-    bool load_encoded() {
-        if (encoded_at_ != encoded_size_) {
-            return true;
-        }
-        input_.read(encoded_.data(), static_cast<std::streamsize>(encoded_.size()));
-        encoded_size_ = static_cast<size_t>(input_.gcount());
-        encoded_at_ = 0;
-        if (input_.bad()) {
-            throw std::runtime_error("cannot read aggregate spill");
-        }
-        return encoded_size_ != 0;
-    }
-
-    void refill() {
-        decoded_at_ = 0;
-        decoded_size_ = 0;
-        while (decoded_size_ == 0 && !frame_complete_) {
-            if (!load_encoded()) {
-                return;
-            }
-            ZSTD_inBuffer input{encoded_.data(), encoded_size_, encoded_at_};
-            ZSTD_outBuffer output{decoded_.data(), decoded_.size(), 0};
-            const size_t remaining = ZSTD_decompressStream(context_, &output, &input);
-            require_zstd(remaining, "cannot decompress aggregate spill");
-            encoded_at_ = input.pos;
-            decoded_size_ = output.pos;
-            frame_complete_ = remaining == 0;
-        }
-    }
-
-    std::ifstream input_;
-    ZSTD_DCtx* context_ = nullptr;
-    std::array<char, kSpillStreamBufferBytes> encoded_{};
-    std::array<char, kSpillStreamBufferBytes> decoded_{};
-    size_t encoded_at_ = 0;
-    size_t encoded_size_ = 0;
-    size_t decoded_at_ = 0;
-    size_t decoded_size_ = 0;
-    bool frame_complete_ = false;
-    bool finished_ = false;
-};
-
-void write_u8(ZstdOutput& output, std::uint8_t value) {
-    output.write(&value, sizeof(value));
-}
-
-void write_u32(ZstdOutput& output, std::uint32_t value) {
-    std::array<unsigned char, 4> bytes{};
-    for (size_t index = 0; index < bytes.size(); ++index) {
-        bytes[index] = static_cast<unsigned char>(value >> (8 * index));
-    }
-    output.write(bytes.data(), bytes.size());
-}
-
-void write_u64(ZstdOutput& output, std::uint64_t value) {
-    std::array<unsigned char, 8> bytes{};
-    for (size_t index = 0; index < bytes.size(); ++index) {
-        bytes[index] = static_cast<unsigned char>(value >> (8 * index));
-    }
-    output.write(bytes.data(), bytes.size());
-}
-
-std::uint8_t read_u8(ZstdInput& input) {
-    std::uint8_t result = 0;
-    input.read(&result, sizeof(result));
-    return result;
-}
-
-std::uint32_t read_u32(ZstdInput& input) {
-    std::array<unsigned char, 4> bytes{};
-    input.read(bytes.data(), bytes.size());
-    std::uint32_t result = 0;
-    for (size_t index = 0; index < bytes.size(); ++index) {
-        result |= static_cast<std::uint32_t>(bytes[index]) << (8 * index);
-    }
-    return result;
-}
-
-std::uint64_t read_u64(ZstdInput& input) {
-    std::array<unsigned char, 8> bytes{};
-    input.read(bytes.data(), bytes.size());
-    std::uint64_t result = 0;
-    for (size_t index = 0; index < bytes.size(); ++index) {
-        result |= static_cast<std::uint64_t>(bytes[index]) << (8 * index);
-    }
-    return result;
-}
-
-void write_string(ZstdOutput& output, const std::string& value) {
-    if (value.size() > std::numeric_limits<std::uint8_t>::max()) {
-        throw std::runtime_error("aggregate spill string exceeds uint8 length");
-    }
-    write_u8(output, static_cast<std::uint8_t>(value.size()));
-    output.write(value.data(), value.size());
-}
-
-std::string read_string(ZstdInput& input) {
-    std::string result(read_u8(input), '\0');
-    if (!result.empty()) {
-        input.read(result.data(), result.size());
-    }
-    return result;
-}
+static_assert(sizeof(PackedUmi) <= 16);
 
 std::string canonical_barcode_quality(std::string_view quality) {
     std::string result;
@@ -309,7 +108,7 @@ struct ExactKey {
     std::uint32_t profile = 0;
     std::uint32_t barcode = 0;
     std::uint32_t feature = 0;
-    std::string umi;
+    PackedUmi umi;
 
     auto tuple() const { return std::tie(profile, barcode, feature, umi); }
     bool operator==(const ExactKey& other) const { return tuple() == other.tuple(); }
@@ -326,13 +125,29 @@ enum class PostBarcodeDisposition : std::uint8_t {
     invalid_umi = 6,
 };
 
+PostBarcodeDisposition assignment_disposition(std::string_view umi,
+                                              size_t gene_count,
+                                              bool reaches_umi_filter) {
+    if (!reaches_umi_filter) return PostBarcodeDisposition::early_exit;
+    switch (basic_umi_status(umi)) {
+        case BasicUmiStatus::contains_n: return PostBarcodeDisposition::umi_n;
+        case BasicUmiStatus::homopolymer: return PostBarcodeDisposition::umi_homopolymer;
+        case BasicUmiStatus::empty: return PostBarcodeDisposition::invalid_umi;
+        case BasicUmiStatus::valid:
+            return gene_count == 0 ? PostBarcodeDisposition::no_gene
+                 : gene_count == 1 ? PostBarcodeDisposition::unique
+                                   : PostBarcodeDisposition::direct_multigene;
+    }
+    throw std::logic_error("unrecognized UMI status");
+}
+
 struct DeferredKey {
     std::uint32_t profile = 0;
     std::string raw_barcode;
     std::string barcode_quality;
     PostBarcodeDisposition disposition = PostBarcodeDisposition::unique;
     std::uint32_t feature = 0;
-    std::string umi;
+    PackedUmi umi;
 
     auto tuple() const {
         return std::tie(profile, raw_barcode, barcode_quality, disposition, feature, umi);
@@ -353,7 +168,7 @@ struct KeyHash<ExactKey> {
         };
         combine(key.barcode);
         combine(key.feature);
-        combine(std::hash<std::string>{}(key.umi));
+        combine(key.umi.hash());
         return hash;
     }
 };
@@ -369,7 +184,7 @@ struct KeyHash<DeferredKey> {
         combine(std::hash<std::string>{}(key.barcode_quality));
         combine(static_cast<std::uint8_t>(key.disposition));
         combine(key.feature);
-        combine(std::hash<std::string>{}(key.umi));
+        combine(key.umi.hash());
         return hash;
     }
 };
@@ -389,6 +204,8 @@ struct DeferredRow {
     DeferredKey key;
     std::uint64_t count = 0;
 };
+static_assert(sizeof(ExactKey) <= 32);
+static_assert(sizeof(DeferredKey) <= 96);
 
 struct CollapsedCandidate {
     std::string umi;
@@ -427,229 +244,6 @@ void sort_and_combine(std::vector<Row>& rows) {
         }
     }
     rows.resize(output);
-}
-
-void write_header(ZstdOutput& output, char type, std::uint64_t row_count) {
-    output.write(kSpillMagic.data(), kSpillMagic.size());
-    output.write(&type, 1);
-    write_u64(output, row_count);
-}
-
-void require_header(ZstdInput& input, char type, std::uint64_t& row_count) {
-    std::array<char, 8> magic{};
-    input.read(magic.data(), magic.size());
-    char actual_type = 0;
-    input.read(&actual_type, 1);
-    if (magic != kSpillMagic || actual_type != type) {
-        throw std::runtime_error("aggregate spill has an invalid header");
-    }
-    row_count = read_u64(input);
-}
-
-void write_exact_run(const std::filesystem::path& path, std::vector<ExactRow> rows) {
-    sort_and_combine(rows);
-    ZstdOutput output(path);
-    write_header(output, 'E', rows.size());
-    for (const ExactRow& row : rows) {
-        write_u32(output, row.key.profile);
-        write_u32(output, row.key.barcode);
-        write_u32(output, row.key.feature);
-        write_string(output, row.key.umi);
-        write_u64(output, row.count);
-    }
-    output.finish();
-}
-
-void write_deferred_run(const std::filesystem::path& path,
-                        std::vector<DeferredRow> rows) {
-    sort_and_combine(rows);
-    ZstdOutput output(path);
-    write_header(output, 'D', rows.size());
-    for (const DeferredRow& row : rows) {
-        write_u32(output, row.key.profile);
-        write_string(output, row.key.raw_barcode);
-        write_string(output, row.key.barcode_quality);
-        write_u8(output, static_cast<std::uint8_t>(row.key.disposition));
-        write_u32(output, row.key.feature);
-        write_string(output, row.key.umi);
-        write_u64(output, row.count);
-    }
-    output.finish();
-}
-
-void write_collapsed_run(const std::filesystem::path& path,
-                         std::vector<CollapsedCandidate> rows) {
-    std::sort(rows.begin(), rows.end(), [](const auto& left, const auto& right) {
-        return left.tuple() < right.tuple();
-    });
-    ZstdOutput output(path);
-    write_header(output, 'C', rows.size());
-    for (const CollapsedCandidate& row : rows) {
-        write_string(output, row.umi);
-        write_u32(output, row.feature);
-        write_u64(output, row.supporting_reads);
-        write_u64(output, row.raw_umis);
-        write_u64(output, row.original_label_reads);
-    }
-    output.finish();
-}
-
-class ExactRunReader {
-  public:
-    explicit ExactRunReader(const std::filesystem::path& path) : input_(path) {
-        require_header(input_, 'E', remaining_);
-    }
-    bool next(ExactRow& row) {
-        if (remaining_ == 0) {
-            input_.finish();
-            return false;
-        }
-        row.key.profile = read_u32(input_);
-        row.key.barcode = read_u32(input_);
-        row.key.feature = read_u32(input_);
-        row.key.umi = read_string(input_);
-        row.count = read_u64(input_);
-        --remaining_;
-        return true;
-    }
-
-  private:
-    ZstdInput input_;
-    std::uint64_t remaining_ = 0;
-};
-
-class DeferredRunReader {
-  public:
-    explicit DeferredRunReader(const std::filesystem::path& path) : input_(path) {
-        require_header(input_, 'D', remaining_);
-    }
-    bool next(DeferredRow& row) {
-        if (remaining_ == 0) {
-            input_.finish();
-            return false;
-        }
-        row.key.profile = read_u32(input_);
-        row.key.raw_barcode = read_string(input_);
-        row.key.barcode_quality = read_string(input_);
-        const std::uint8_t disposition = read_u8(input_);
-        if (disposition >
-            static_cast<std::uint8_t>(PostBarcodeDisposition::invalid_umi)) {
-            throw std::runtime_error(
-                "aggregate spill has an invalid post-barcode disposition");
-        }
-        row.key.disposition = static_cast<PostBarcodeDisposition>(disposition);
-        row.key.feature = read_u32(input_);
-        row.key.umi = read_string(input_);
-        row.count = read_u64(input_);
-        --remaining_;
-        return true;
-    }
-
-  private:
-    ZstdInput input_;
-    std::uint64_t remaining_ = 0;
-};
-
-class CollapsedRunReader {
-  public:
-    explicit CollapsedRunReader(const std::filesystem::path& path) : input_(path) {
-        require_header(input_, 'C', remaining_);
-    }
-    bool next(CollapsedCandidate& row) {
-        if (remaining_ == 0) {
-            input_.finish();
-            return false;
-        }
-        row.umi = read_string(input_);
-        row.feature = read_u32(input_);
-        row.supporting_reads = read_u64(input_);
-        row.raw_umis = read_u64(input_);
-        row.original_label_reads = read_u64(input_);
-        --remaining_;
-        return true;
-    }
-
-  private:
-    ZstdInput input_;
-    std::uint64_t remaining_ = 0;
-};
-
-template<class Consumer>
-void merge_collapsed_runs(const std::vector<std::filesystem::path>& paths,
-                          Consumer consume) {
-    struct Cursor {
-        std::unique_ptr<CollapsedRunReader> reader;
-        CollapsedCandidate row;
-    };
-    std::vector<Cursor> cursors;
-    cursors.reserve(paths.size());
-    for (const std::filesystem::path& path : paths) {
-        Cursor cursor;
-        cursor.reader = std::make_unique<CollapsedRunReader>(path);
-        if (cursor.reader->next(cursor.row)) {
-            cursors.push_back(std::move(cursor));
-        }
-    }
-    auto later = [&](size_t left, size_t right) {
-        return cursors[right].row.tuple() < cursors[left].row.tuple();
-    };
-    std::priority_queue<size_t, std::vector<size_t>, decltype(later)> queue(later);
-    for (size_t index = 0; index < cursors.size(); ++index) {
-        queue.push(index);
-    }
-    while (!queue.empty()) {
-        const size_t index = queue.top();
-        queue.pop();
-        consume(std::move(cursors[index].row));
-        if (cursors[index].reader->next(cursors[index].row)) {
-            queue.push(index);
-        }
-    }
-}
-
-template<class Reader, class Row, class Consumer>
-void merge_runs(const std::vector<std::filesystem::path>& paths, Consumer consume) {
-    struct Cursor {
-        std::unique_ptr<Reader> reader;
-        Row row;
-    };
-    std::vector<Cursor> cursors;
-    cursors.reserve(paths.size());
-    for (const std::filesystem::path& path : paths) {
-        Cursor cursor;
-        cursor.reader = std::make_unique<Reader>(path);
-        if (cursor.reader->next(cursor.row)) {
-            cursors.push_back(std::move(cursor));
-        }
-    }
-    auto later = [&](size_t left, size_t right) {
-        return cursors[right].row.key < cursors[left].row.key;
-    };
-    std::priority_queue<size_t, std::vector<size_t>, decltype(later)> queue(later);
-    for (size_t index = 0; index < cursors.size(); ++index) {
-        queue.push(index);
-    }
-    while (!queue.empty()) {
-        const size_t index = queue.top();
-        queue.pop();
-        Row combined = cursors[index].row;
-        if (cursors[index].reader->next(cursors[index].row)) {
-            queue.push(index);
-        }
-        while (!queue.empty() && same_key(combined, cursors[queue.top()].row)) {
-            const size_t duplicate = queue.top();
-            queue.pop();
-            if (std::numeric_limits<std::uint64_t>::max() - combined.count <
-                cursors[duplicate].row.count) {
-                throw std::runtime_error("aggregate read count overflow while merging spills");
-            }
-            combined.count += cursors[duplicate].row.count;
-            if (cursors[duplicate].reader->next(cursors[duplicate].row)) {
-                queue.push(duplicate);
-            }
-        }
-        consume(std::move(combined));
-    }
 }
 
 std::optional<std::uint64_t> encode_barcode(std::string_view barcode) {
@@ -722,33 +316,7 @@ struct CountRuntime::Impl {
     std::vector<std::unique_ptr<AtomicProfileCountRuntimeCounters>> profile_counters;
     std::array<AggregateShard<ExactKey>, kShardCount> exact_shards;
     std::array<AggregateShard<DeferredKey>, kShardCount> deferred_shards;
-    std::atomic<std::uint64_t> approximate_bytes{0};
-    std::mutex spill_mutex;
-    std::vector<std::filesystem::path> exact_runs;
-    std::vector<std::filesystem::path> deferred_runs;
-    std::uint64_t next_run = 0;
     bool finalized = false;
-    std::vector<std::filesystem::path> collapsed_runs;
-    bool owns_spill_directory = false;
-
-    ~Impl() {
-        // Best-effort cleanup for a runtime that never reached the end of
-        // finalize(): remove every spill run this instance wrote and the spill
-        // directory when this instance created it.
-        std::error_code ignored;
-        for (const std::filesystem::path& path : exact_runs) {
-            std::filesystem::remove(path, ignored);
-        }
-        for (const std::filesystem::path& path : deferred_runs) {
-            std::filesystem::remove(path, ignored);
-        }
-        for (const std::filesystem::path& path : collapsed_runs) {
-            std::filesystem::remove(path, ignored);
-        }
-        if (owns_spill_directory) {
-            std::filesystem::remove(options.spill_directory, ignored);
-        }
-    }
 
     std::atomic<std::uint64_t> barcode_prior_groups{0};
     std::atomic<std::uint64_t> exact_barcode_prior_groups{0};
@@ -760,9 +328,6 @@ struct CountRuntime::Impl {
     std::atomic<std::uint64_t> off_whitelist_uncorrectable_dropped{0};
     std::atomic<std::uint64_t> barcode_correction_succeeded{0};
     std::atomic<std::uint64_t> barcode_correction_failed{0};
-    std::atomic<std::uint64_t> aggregate_spill_runs{0};
-    std::atomic<std::uint64_t> aggregate_spill_rows{0};
-    std::atomic<std::uint64_t> aggregate_spill_bytes{0};
 
     void record_post_barcode(std::uint32_t profile,
                              PostBarcodeDisposition disposition,
@@ -896,74 +461,6 @@ struct CountRuntime::Impl {
                                         : std::nullopt;
     }
 
-    void record_spill(const std::filesystem::path& path, size_t rows) {
-        ++aggregate_spill_runs;
-        aggregate_spill_rows.fetch_add(rows, std::memory_order_relaxed);
-        aggregate_spill_bytes.fetch_add(std::filesystem::file_size(path),
-                                        std::memory_order_relaxed);
-    }
-
-    void spill_locked() {
-        std::vector<ExactRow> exact_rows;
-        std::vector<DeferredRow> deferred_rows;
-        for (auto& shard : exact_shards) {
-            std::lock_guard<std::mutex> lock(shard.mutex);
-            exact_rows.reserve(exact_rows.size() + shard.values.size());
-            for (auto& [key, count] : shard.values) {
-                exact_rows.push_back({std::move(key), count});
-            }
-            shard.values.clear();
-        }
-        for (auto& shard : deferred_shards) {
-            std::lock_guard<std::mutex> lock(shard.mutex);
-            deferred_rows.reserve(deferred_rows.size() + shard.values.size());
-            for (auto& [key, count] : shard.values) {
-                deferred_rows.push_back({std::move(key), count});
-            }
-            shard.values.clear();
-        }
-        const std::uint64_t released = exact_rows.size() * kExactEntryBytes +
-                                       deferred_rows.size() * kDeferredEntryBytes;
-        // Workers can insert into a shard that has already been drained while
-        // this spill is walking later shards. Subtract only the entries this
-        // spill actually removed so those concurrent insertions remain charged.
-        std::uint64_t prior = approximate_bytes.load(std::memory_order_relaxed);
-        while (!approximate_bytes.compare_exchange_weak(
-            prior, prior > released ? prior - released : 0,
-            std::memory_order_relaxed, std::memory_order_relaxed)) {
-        }
-        if (!exact_rows.empty()) {
-            const std::filesystem::path path =
-                options.spill_directory /
-                ("aggregate-" + std::to_string(next_run++) + ".exact.zst");
-            const size_t rows = exact_rows.size();
-            exact_runs.push_back(path);
-            write_exact_run(path, std::move(exact_rows));
-            record_spill(path, rows);
-        }
-        if (!deferred_rows.empty()) {
-            const std::filesystem::path path =
-                options.spill_directory /
-                ("aggregate-" + std::to_string(next_run++) + ".deferred.zst");
-            const size_t rows = deferred_rows.size();
-            deferred_runs.push_back(path);
-            write_deferred_run(path, std::move(deferred_rows));
-            record_spill(path, rows);
-        }
-    }
-
-    void spill_if_needed(bool force = false) {
-        if (!force && approximate_bytes.load(std::memory_order_relaxed) <=
-                          options.memory_budget_bytes * 3 / 4) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(spill_mutex);
-        if (force || approximate_bytes.load(std::memory_order_relaxed) >
-                         options.memory_budget_bytes * 3 / 4) {
-            spill_locked();
-        }
-    }
-
     CountRuntimeCounters counters() const {
         return {
             barcode_prior_groups.load(),
@@ -976,9 +473,9 @@ struct CountRuntime::Impl {
             off_whitelist_uncorrectable_dropped.load(),
             barcode_correction_succeeded.load(),
             barcode_correction_failed.load(),
-            aggregate_spill_runs.load(),
-            aggregate_spill_rows.load(),
-            aggregate_spill_bytes.load(),
+            0,
+            0,
+            0,
         };
     }
 };
@@ -1029,9 +526,9 @@ void CountWorker::observe_assignment(std::uint32_t profile_index,
     if (runtime_ == nullptr) {
         throw std::logic_error("count worker is not attached to a runtime");
     }
-    auto pending = runtime_->prepare_assignment(profile_index, raw_barcode,
-                                                barcode_quality, umi, genes, read_count,
-                                                reaches_umi_filter);
+    auto pending = runtime_->prepare_string_assignment(
+        profile_index, raw_barcode, barcode_quality, umi, genes, read_count,
+        reaches_umi_filter);
     if (!pending) {
         return;
     }
@@ -1039,6 +536,34 @@ void CountWorker::observe_assignment(std::uint32_t profile_index,
     if (pending_.size() >= batch_capacity_) {
         flush();
     }
+}
+
+void CountWorker::observe_assignment_ids(
+    std::uint32_t profile_index, std::string_view raw_barcode,
+    std::optional<std::string_view> barcode_quality, std::string_view umi,
+    std::span<const std::uint32_t> gene_ids, std::uint64_t read_count,
+    bool reaches_umi_filter) {
+    if (runtime_ == nullptr) {
+        throw std::logic_error("count worker is not attached to a runtime");
+    }
+    auto pending = runtime_->prepare_id_assignment(
+        profile_index, raw_barcode, barcode_quality, umi, gene_ids, read_count,
+        reaches_umi_filter);
+    if (!pending) {
+        return;
+    }
+    pending_.push_back(std::move(*pending));
+    if (pending_.size() >= batch_capacity_) {
+        flush();
+    }
+}
+
+bool CountWorker::potentially_countable(std::string_view raw_barcode,
+                                        std::string_view umi) const {
+    if (runtime_ == nullptr) {
+        throw std::logic_error("count worker is not attached to a runtime");
+    }
+    return runtime_->potentially_countable(raw_barcode, umi);
 }
 
 void CountWorker::flush() {
@@ -1054,9 +579,6 @@ CountRuntime::CountRuntime(std::vector<EffectiveProfile> profiles,
     : impl_(std::make_unique<Impl>()) {
     if (profiles.empty()) {
         throw std::invalid_argument("direct count requires at least one profile");
-    }
-    if (options.memory_budget_bytes < (1ULL << 20)) {
-        throw std::invalid_argument("count memory budget must be at least 1 MiB");
     }
     if (options.raw_barcode_length == 0 || options.raw_barcode_length > 32 ||
         options.raw_umi_length == 0 || options.raw_umi_length > 32) {
@@ -1103,10 +625,13 @@ CountRuntime::CountRuntime(std::vector<EffectiveProfile> profiles,
         impl_->barcode_index.emplace(*encoded, static_cast<std::uint32_t>(index));
     }
 
-    std::sort(feature_catalog.begin(), feature_catalog.end());
+    if (!impl_->options.feature_catalog_prepared) {
+        std::sort(feature_catalog.begin(), feature_catalog.end());
+    }
     if (feature_catalog.empty() ||
-        std::adjacent_find(feature_catalog.begin(), feature_catalog.end()) !=
-            feature_catalog.end()) {
+        (!impl_->options.feature_catalog_prepared &&
+         std::adjacent_find(feature_catalog.begin(), feature_catalog.end()) !=
+            feature_catalog.end())) {
         throw std::invalid_argument("feature catalog must be nonempty and unique");
     }
     if (feature_catalog.size() > std::numeric_limits<std::uint32_t>::max() ||
@@ -1114,20 +639,12 @@ CountRuntime::CountRuntime(std::vector<EffectiveProfile> profiles,
         throw std::invalid_argument("direct count dictionaries exceed uint32 indexes");
     }
     impl_->features = std::move(feature_catalog);
-    impl_->feature_index.reserve(impl_->features.size());
-    for (size_t index = 0; index < impl_->features.size(); ++index) {
-        impl_->feature_index.emplace(impl_->features[index], static_cast<std::uint32_t>(index));
+    if (!impl_->options.feature_catalog_prepared) {
+        impl_->feature_index.reserve(impl_->features.size());
+        for (size_t index = 0; index < impl_->features.size(); ++index) {
+            impl_->feature_index.emplace(impl_->features[index], static_cast<std::uint32_t>(index));
+        }
     }
-
-    if (impl_->options.spill_directory.empty()) {
-        throw std::invalid_argument("direct count requires a spill directory");
-    }
-    if (std::filesystem::exists(impl_->options.spill_directory) &&
-        !std::filesystem::is_empty(impl_->options.spill_directory)) {
-        throw std::invalid_argument("direct count spill directory must be absent or empty");
-    }
-    impl_->owns_spill_directory = !std::filesystem::exists(impl_->options.spill_directory);
-    std::filesystem::create_directories(impl_->options.spill_directory);
 }
 
 CountRuntime::~CountRuntime() = default;
@@ -1150,11 +667,67 @@ void CountRuntime::observe_barcode(std::string_view raw_barcode) {
     }
 }
 
-std::optional<CountWorker::Pending> CountRuntime::prepare_assignment(
+bool CountRuntime::potentially_countable(std::string_view raw_barcode,
+                                         std::string_view umi) const {
+    return basic_umi_status(umi) == BasicUmiStatus::valid &&
+           (impl_->exact_barcode(raw_barcode).has_value() ||
+            !impl_->barcode_candidates(raw_barcode).empty());
+}
+
+std::optional<CountWorker::Pending> CountRuntime::prepare_string_assignment(
     std::uint32_t profile_index, std::string_view raw_barcode,
     std::optional<std::string_view> barcode_quality, std::string_view umi,
     const std::vector<std::string>& genes, std::uint64_t read_count,
     bool reaches_umi_filter) {
+    const PostBarcodeDisposition disposition =
+        assignment_disposition(umi, genes.size(), reaches_umi_filter);
+    std::optional<std::uint32_t> feature_index;
+    if (disposition == PostBarcodeDisposition::unique) {
+        if (impl_->options.feature_catalog_prepared) {
+            const auto feature = std::lower_bound(impl_->features.begin(),
+                impl_->features.end(), genes.front());
+            if (feature == impl_->features.end() || *feature != genes.front()) {
+                throw std::runtime_error(
+                    "assignment resolved a gene outside the count-fact catalog: " +
+                    genes.front());
+            }
+            feature_index = static_cast<std::uint32_t>(feature - impl_->features.begin());
+        } else {
+            const auto feature = impl_->feature_index.find(genes.front());
+            if (feature == impl_->feature_index.end()) {
+                throw std::runtime_error(
+                    "assignment resolved a gene outside the count-fact catalog: " +
+                    genes.front());
+            }
+            feature_index = feature->second;
+        }
+    }
+    return prepare_assignment(profile_index, raw_barcode, barcode_quality, umi,
+                              static_cast<std::uint8_t>(disposition), feature_index,
+                              read_count);
+}
+
+std::optional<CountWorker::Pending> CountRuntime::prepare_id_assignment(
+    std::uint32_t profile_index, std::string_view raw_barcode,
+    std::optional<std::string_view> barcode_quality, std::string_view umi,
+    std::span<const std::uint32_t> gene_ids, std::uint64_t read_count,
+    bool reaches_umi_filter) {
+    const PostBarcodeDisposition disposition =
+        assignment_disposition(umi, gene_ids.size(), reaches_umi_filter);
+    std::optional<std::uint32_t> feature_index;
+    if (disposition == PostBarcodeDisposition::unique) {
+        feature_index = gene_ids.front();
+    }
+    return prepare_assignment(profile_index, raw_barcode, barcode_quality, umi,
+                              static_cast<std::uint8_t>(disposition), feature_index,
+                              read_count);
+}
+
+std::optional<CountWorker::Pending> CountRuntime::prepare_assignment(
+    std::uint32_t profile_index, std::string_view raw_barcode,
+    std::optional<std::string_view> barcode_quality, std::string_view umi,
+    std::uint8_t disposition_value, std::optional<std::uint32_t> feature_index,
+    std::uint64_t read_count) {
     if (impl_->finalized) {
         throw std::logic_error("cannot observe an assignment after finalization");
     }
@@ -1164,36 +737,14 @@ std::optional<CountWorker::Pending> CountRuntime::prepare_assignment(
     if (read_count == 0) {
         throw std::invalid_argument("assignment read_count must be positive");
     }
-    PostBarcodeDisposition disposition = PostBarcodeDisposition::early_exit;
-    if (reaches_umi_filter) {
-        switch (basic_umi_status(umi)) {
-            case BasicUmiStatus::contains_n:
-                disposition = PostBarcodeDisposition::umi_n;
-                break;
-            case BasicUmiStatus::homopolymer:
-                disposition = PostBarcodeDisposition::umi_homopolymer;
-                break;
-            case BasicUmiStatus::empty:
-                disposition = PostBarcodeDisposition::invalid_umi;
-                break;
-            case BasicUmiStatus::valid:
-                disposition = genes.empty()
-                    ? PostBarcodeDisposition::no_gene
-                    : genes.size() == 1
-                        ? PostBarcodeDisposition::unique
-                        : PostBarcodeDisposition::direct_multigene;
-                break;
-        }
-    }
-    std::uint32_t feature_index = 0;
+    const PostBarcodeDisposition disposition =
+        static_cast<PostBarcodeDisposition>(disposition_value);
+    std::uint32_t resolved_feature_index = 0;
     if (disposition == PostBarcodeDisposition::unique) {
-        const auto feature = impl_->feature_index.find(genes.front());
-        if (feature == impl_->feature_index.end()) {
-            throw std::runtime_error(
-                "assignment resolved a gene outside the count-fact catalog: " +
-                genes.front());
+        if (!feature_index || *feature_index >= impl_->features.size()) {
+            throw std::out_of_range("assignment feature index is outside the count-fact catalog");
         }
-        feature_index = feature->second;
+        resolved_feature_index = *feature_index;
     }
     const bool usable_barcode_quality =
         barcode_quality && barcode_quality->size() == raw_barcode.size();
@@ -1206,7 +757,7 @@ std::optional<CountWorker::Pending> CountRuntime::prepare_assignment(
         CountWorker::Pending result;
         result.count = read_count;
         result.exact = true;
-        result.exact_key = {profile_index, *barcode, feature_index, std::string(umi)};
+        result.exact_key = {profile_index, *barcode, resolved_feature_index, PackedUmi(umi)};
         return result;
     }
     AtomicProfileCountRuntimeCounters& profile_counters =
@@ -1231,9 +782,8 @@ std::optional<CountWorker::Pending> CountRuntime::prepare_assignment(
         usable_barcode_quality ? canonical_barcode_quality(*barcode_quality)
                                : std::string{},
         disposition,
-        feature_index,
-        disposition == PostBarcodeDisposition::unique ? std::string(umi)
-                                                       : std::string{},
+        resolved_feature_index,
+        PackedUmi(disposition == PostBarcodeDisposition::unique ? umi : std::string_view{}),
     };
     return result;
 }
@@ -1252,9 +802,6 @@ void CountRuntime::merge_worker_batch(std::vector<CountWorker::Pending>& pending
                     throw std::runtime_error("aggregate read count overflow");
                 }
                 found->second += observation.count;
-            } else {
-                impl_->approximate_bytes.fetch_add(kExactEntryBytes,
-                                                   std::memory_order_relaxed);
             }
         } else {
             const size_t shard_index =
@@ -1269,14 +816,10 @@ void CountRuntime::merge_worker_batch(std::vector<CountWorker::Pending>& pending
                     throw std::runtime_error("aggregate read count overflow");
                 }
                 found->second += observation.count;
-            } else {
-                impl_->approximate_bytes.fetch_add(kDeferredEntryBytes,
-                                                   std::memory_order_relaxed);
             }
         }
     }
     pending.clear();
-    impl_->spill_if_needed();
 }
 
 CountRuntimeResult CountRuntime::finalize() {
@@ -1289,73 +832,48 @@ CountRuntimeResult CountRuntime::finalize() {
     const auto begin = profile_timing ? Clock::now() : Clock::time_point{};
     double umi_collapse_seconds = 0;
     std::uint64_t feature_groups = 0, distinct_umis = 0, max_feature_umis = 0;
-    const bool external_merge = !impl_->exact_runs.empty() || !impl_->deferred_runs.empty();
     std::vector<ExactRow> resident_exact;
     std::vector<DeferredRow> resident_deferred;
-    if (external_merge) {
-        // Once a budget crossing has created external runs, materialize the final
-        // resident shard contents as another run and use one deterministic merge.
-        impl_->spill_if_needed(true);
-    } else {
-        // The normal no-spill path remains entirely in memory. Finalization must not
-        // turn every successful run into an evidence spool merely for convenience.
-        size_t resident_exact_size = 0;
-        for (auto& shard : impl_->exact_shards) {
-            std::lock_guard<std::mutex> lock(shard.mutex);
-            if (shard.values.size() > resident_exact.max_size() - resident_exact_size) {
-                throw std::length_error("resident exact aggregate exceeds vector capacity");
-            }
-            resident_exact_size += shard.values.size();
+    size_t resident_exact_size = 0;
+    for (auto& shard : impl_->exact_shards) {
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        if (shard.values.size() > resident_exact.max_size() - resident_exact_size) {
+            throw std::length_error("resident exact aggregate exceeds vector capacity");
         }
-        resident_exact.reserve(resident_exact_size);
-        for (auto& shard : impl_->exact_shards) {
-            std::lock_guard<std::mutex> lock(shard.mutex);
-            for (auto& [key, count] : shard.values) {
-                resident_exact.push_back({std::move(key), count});
-            }
-            shard.values.clear();
-        }
-
-        size_t resident_deferred_size = 0;
-        for (auto& shard : impl_->deferred_shards) {
-            std::lock_guard<std::mutex> lock(shard.mutex);
-            if (shard.values.size() > resident_deferred.max_size() - resident_deferred_size) {
-                throw std::length_error("resident deferred aggregate exceeds vector capacity");
-            }
-            resident_deferred_size += shard.values.size();
-        }
-        resident_deferred.reserve(resident_deferred_size);
-        for (auto& shard : impl_->deferred_shards) {
-            std::lock_guard<std::mutex> lock(shard.mutex);
-            for (auto& [key, count] : shard.values) {
-                resident_deferred.push_back({std::move(key), count});
-            }
-            shard.values.clear();
-        }
-        impl_->approximate_bytes.store(0, std::memory_order_relaxed);
-        // Exact keys are already unique across shards; sort them once after
-        // barcode-corrected deferred rows have been appended below.
-        sort_and_combine(resident_deferred);
+        resident_exact_size += shard.values.size();
     }
+    resident_exact.reserve(resident_exact_size);
+    for (auto& shard : impl_->exact_shards) {
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        for (auto& [key, count] : shard.values) {
+            resident_exact.push_back({std::move(key), count});
+        }
+        shard.values.clear();
+        shard.values.rehash(0);
+    }
+
+    size_t resident_deferred_size = 0;
+    for (auto& shard : impl_->deferred_shards) {
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        if (shard.values.size() > resident_deferred.max_size() - resident_deferred_size) {
+            throw std::length_error("resident deferred aggregate exceeds vector capacity");
+        }
+        resident_deferred_size += shard.values.size();
+    }
+    resident_deferred.reserve(resident_deferred_size);
+    for (auto& shard : impl_->deferred_shards) {
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        for (auto& [key, count] : shard.values) {
+            resident_deferred.push_back({std::move(key), count});
+        }
+        shard.values.clear();
+        shard.values.rehash(0);
+    }
+    sort_and_combine(resident_deferred);
 
     const auto resident_done = profile_timing ? Clock::now() : Clock::time_point{};
     std::vector<ExactRow> corrected_buffer;
-    const size_t corrected_limit = static_cast<size_t>(std::max<std::uint64_t>(
-        1, impl_->options.memory_budget_bytes / (4 * kExactEntryBytes)));
-    auto spill_corrected = [&]() {
-        if (corrected_buffer.empty()) {
-            return;
-        }
-        const std::filesystem::path path =
-            impl_->options.spill_directory /
-            ("corrected-" + std::to_string(impl_->next_run++) + ".exact.zst");
-        const size_t rows = corrected_buffer.size();
-        impl_->exact_runs.push_back(path);
-        write_exact_run(path, std::move(corrected_buffer));
-        corrected_buffer.clear();
-        corrected_buffer.reserve(std::min<size_t>(corrected_limit, 1 << 20));
-        impl_->record_spill(path, rows);
-    };
+    corrected_buffer.reserve(resident_deferred.size());
     auto consume_deferred = [&](DeferredRow row) {
             const auto corrected = impl_->correct_barcode(row.key.raw_barcode,
                                                           row.key.barcode_quality);
@@ -1374,9 +892,6 @@ CountRuntimeResult CountRuntime::finalize() {
                         {{row.key.profile, *corrected, row.key.feature,
                           std::move(row.key.umi)},
                          row.count});
-                    if (external_merge && corrected_buffer.size() >= corrected_limit) {
-                        spill_corrected();
-                    }
                 }
             } else {
                 if (row.key.profile == 0) {
@@ -1387,21 +902,19 @@ CountRuntimeResult CountRuntime::finalize() {
                     ->barcode_correction_failed.fetch_add(
                         row.count, std::memory_order_relaxed);
             }
-        };
-    if (external_merge) {
-        merge_runs<DeferredRunReader, DeferredRow>(impl_->deferred_runs,
-                                                   consume_deferred);
-        spill_corrected();
-    } else {
-        for (DeferredRow& row : resident_deferred) {
-            consume_deferred(std::move(row));
-        }
-        resident_exact.insert(resident_exact.end(),
-                              std::make_move_iterator(corrected_buffer.begin()),
-                              std::make_move_iterator(corrected_buffer.end()));
-        corrected_buffer.clear();
-        sort_and_combine(resident_exact);
+    };
+    for (DeferredRow& row : resident_deferred) {
+        consume_deferred(std::move(row));
     }
+    std::vector<DeferredRow>().swap(resident_deferred);
+    if (corrected_buffer.size() > resident_exact.max_size() - resident_exact.size())
+        throw std::length_error("corrected aggregate exceeds vector capacity");
+    resident_exact.reserve(resident_exact.size() + corrected_buffer.size());
+    resident_exact.insert(resident_exact.end(),
+                          std::make_move_iterator(corrected_buffer.begin()),
+                          std::make_move_iterator(corrected_buffer.end()));
+    std::vector<ExactRow>().swap(corrected_buffer);
+    sort_and_combine(resident_exact);
 
     const auto correction_done = profile_timing ? Clock::now() : Clock::time_point{};
     CountRuntimeResult result;
@@ -1409,24 +922,6 @@ CountRuntimeResult CountRuntime::finalize() {
     std::optional<std::uint32_t> current_feature;
     std::map<std::string, std::uint64_t> feature_umis;
     std::vector<CollapsedCandidate> collapsed;
-    std::vector<std::filesystem::path>& collapsed_runs = impl_->collapsed_runs;
-    const size_t collapsed_limit = static_cast<size_t>(
-        std::max<std::uint64_t>(1, impl_->options.memory_budget_bytes /
-                                      (4 * kExactEntryBytes)));
-    auto spill_collapsed = [&]() {
-        if (collapsed.empty()) {
-            return;
-        }
-        const std::filesystem::path path =
-            impl_->options.spill_directory /
-            ("barcode-" + std::to_string(impl_->next_run++) + ".collapsed.zst");
-        const size_t rows = collapsed.size();
-        collapsed_runs.push_back(path);
-        write_collapsed_run(path, std::move(collapsed));
-        collapsed.clear();
-        collapsed.reserve(std::min<size_t>(collapsed_limit, 1 << 20));
-        impl_->record_spill(path, rows);
-    };
 
     auto flush_feature = [&]() {
         if (!current_feature || feature_umis.empty()) {
@@ -1466,20 +961,12 @@ CountRuntimeResult CountRuntime::finalize() {
             }
         }
         feature_umis.clear();
-        if (collapsed.size() >= collapsed_limit) {
-            spill_collapsed();
-        }
     };
 
     auto flush_barcode = [&]() {
         flush_feature();
         if (!current_barcode) {
             collapsed.clear();
-            std::error_code ignored_removal;
-            for (const std::filesystem::path& path : collapsed_runs) {
-                std::filesystem::remove(path, ignored_removal);
-            }
-            collapsed_runs.clear();
             return;
         }
         const size_t molecule_begin = result.molecules.size();
@@ -1531,17 +1018,12 @@ CountRuntimeResult CountRuntime::finalize() {
             }
             same_umi.push_back(std::move(candidate));
         };
-        if (collapsed_runs.empty()) {
-            std::sort(collapsed.begin(), collapsed.end(),
-                      [](const auto& left, const auto& right) {
-                          return left.tuple() < right.tuple();
-                      });
-            for (CollapsedCandidate& candidate : collapsed) {
-                consume_collapsed(std::move(candidate));
-            }
-        } else {
-            spill_collapsed();
-            merge_collapsed_runs(collapsed_runs, consume_collapsed);
+        std::sort(collapsed.begin(), collapsed.end(),
+                  [](const auto& left, const auto& right) {
+                      return left.tuple() < right.tuple();
+                  });
+        for (CollapsedCandidate& candidate : collapsed) {
+            consume_collapsed(std::move(candidate));
         }
         resolve_umi();
         auto first_molecule = result.molecules.begin() +
@@ -1567,11 +1049,6 @@ CountRuntimeResult CountRuntime::finalize() {
             at = end;
         }
         collapsed.clear();
-        std::error_code ignored_removal;
-        for (const std::filesystem::path& path : collapsed_runs) {
-            std::filesystem::remove(path, ignored_removal);
-        }
-        collapsed_runs.clear();
     };
 
     auto consume_exact = [&](ExactRow row) {
@@ -1586,15 +1063,12 @@ CountRuntimeResult CountRuntime::finalize() {
             flush_feature();
         }
         current_feature = row.key.feature;
-        feature_umis.emplace(std::move(row.key.umi), row.count);
+        feature_umis.emplace(row.key.umi.str(), row.count);
     };
-    if (external_merge) {
-        merge_runs<ExactRunReader, ExactRow>(impl_->exact_runs, consume_exact);
-    } else {
-        for (ExactRow& row : resident_exact) {
-            consume_exact(std::move(row));
-        }
+    for (ExactRow& row : resident_exact) {
+        consume_exact(std::move(row));
     }
+    std::vector<ExactRow>().swap(resident_exact);
     flush_barcode();
 
     result.exact_barcode_priors.reserve(impl_->whitelist.size());
@@ -1608,25 +1082,6 @@ CountRuntimeResult CountRuntime::finalize() {
         result.profile_counters.push_back(profile_counters->snapshot());
     }
 
-    // Cleanup must not discard a completed result: use the non-throwing overloads
-    // and let the destructor retry anything that could not be removed here.
-    std::error_code ignored;
-    for (const std::filesystem::path& path : impl_->exact_runs) {
-        std::filesystem::remove(path, ignored);
-    }
-    for (const std::filesystem::path& path : impl_->deferred_runs) {
-        std::filesystem::remove(path, ignored);
-    }
-    impl_->exact_runs.clear();
-    impl_->deferred_runs.clear();
-    // Leave a caller-supplied spill directory in place; only remove one this
-    // runtime created itself.
-    if (impl_->owns_spill_directory) {
-        std::filesystem::remove(impl_->options.spill_directory, ignored);
-        // Ownership ends here so the destructor cannot remove a directory that a
-        // caller recreates at the same path after finalize.
-        impl_->owns_spill_directory = false;
-    }
     if (profile_timing) {
         std::cerr << "panCollapse: count_finalize_profile"
                   << " resident_prepare_seconds="
@@ -1639,7 +1094,7 @@ CountRuntimeResult CountRuntime::finalize() {
                   << " feature_groups=" << feature_groups
                   << " distinct_umis=" << distinct_umis
                   << " max_feature_umis=" << max_feature_umis
-                  << " external_merge=" << external_merge << '\n';
+                  << " storage=memory_only\n";
     }
     return result;
 }

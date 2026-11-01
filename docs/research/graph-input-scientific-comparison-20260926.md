@@ -58,7 +58,7 @@ For `manifest.json`, the exclusions in the current schema are precisely:
   arguments and whitelist the intended graph/output-path differences.
 - `/assignment_cache/{capacity,entries,hits,misses,uncached}`.
 - `/counters/global/` followed by each of the eight summary metric names above.
-- `/memory_budget_bytes` and `/threads`: retain truthful values and enforce the matched
+- `/count_storage` (and legacy `/memory_budget_bytes`) and `/threads`: retain truthful values and enforce the matched
   experiment settings separately; their exclusion does not authorize changing the comparison.
 - `/timings/initialization_seconds`, `/timings/processing_seconds`,
   `/timings/read_processing_seconds`, `/timings/compatibility_finalize_seconds`,

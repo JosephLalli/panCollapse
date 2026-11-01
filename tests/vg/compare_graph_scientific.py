@@ -30,6 +30,7 @@ OPERATIONAL_MANIFEST_PATHS = [
     ("assignment_cache", "misses"),
     ("assignment_cache", "uncached"),
     ("memory_budget_bytes",),
+    ("count_storage",),
     ("threads",),
     ("timings", "initialization_seconds"),
     ("timings", "processing_seconds"),

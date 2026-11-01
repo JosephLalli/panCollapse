@@ -1,8 +1,6 @@
 #include "direct_count_runtime.hpp"
 
 #include <algorithm>
-#include <array>
-#include <filesystem>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -18,8 +16,6 @@ using namespace pancollapse::direct_count;
 
 namespace {
 
-constexpr std::uint64_t kNoSpillBudget = 64ULL << 20;
-constexpr std::uint64_t kForcedSpillBudget = 1ULL << 20;
 constexpr size_t kBulkBarcodeCount = 40000;
 
 void expect(bool value, const std::string& message) {
@@ -28,9 +24,10 @@ void expect(bool value, const std::string& message) {
     }
 }
 
-std::filesystem::path scratch(std::string_view name) {
-    return std::filesystem::temp_directory_path() /
-           ("pancollapse-direct-count-determinism-" + std::string(name));
+void expect_memory_only(const CountRuntimeCounters& counters, const std::string& message) {
+    expect(counters.aggregate_spill_runs == 0 && counters.aggregate_spill_rows == 0 &&
+               counters.aggregate_spill_bytes == 0,
+           message);
 }
 
 std::string barcode_from_index(std::uint32_t value) {
@@ -175,12 +172,8 @@ void expect_same_semantics(const CanonicalResult& expected, const CanonicalResul
 }
 
 CanonicalResult run(const Fixture& fixture, std::vector<EffectiveProfile> profiles,
-                    size_t thread_count, std::uint64_t budget, std::string_view label) {
-    const auto spill = scratch(label);
-    std::filesystem::remove_all(spill);
+                    size_t thread_count) {
     CountRuntimeOptions options;
-    options.memory_budget_bytes = budget;
-    options.spill_directory = spill;
     options.raw_barcode_length = 8;
     options.raw_umi_length = 8;
     CountRuntime runtime(std::move(profiles), fixture.whitelist, fixture.features, options);
@@ -308,33 +301,25 @@ int main() {
         };
 
         const CanonicalResult reference =
-            run(fixture, joint_profiles, 1, kNoSpillBudget, "joint-reference");
-        expect(reference.counters.aggregate_spill_runs == 0,
-               "large-budget reference must remain resident");
+            run(fixture, joint_profiles, 1);
+        expect_memory_only(reference.counters,
+                           "reference aggregation must remain memory-only");
         expect_fixture_semantics(reference);
 
         for (const size_t thread_count : {size_t{1}, size_t{2}, size_t{4}, size_t{8},
                                           size_t{16}, size_t{128}}) {
             const std::string prefix = "joint-" + std::to_string(thread_count);
-            const CanonicalResult resident =
-                run(fixture, joint_profiles, thread_count, kNoSpillBudget, prefix + "-resident");
-            const CanonicalResult spilled =
-                run(fixture, joint_profiles, thread_count, kForcedSpillBudget, prefix + "-spill");
-            expect(resident.counters.aggregate_spill_runs == 0,
-                   prefix + ": large-memory run spilled unexpectedly");
-            expect(spilled.counters.aggregate_spill_runs > 2,
-                   prefix + ": forced run did not make repeated spill runs");
-            expect_same_semantics(reference, resident, prefix + " resident");
-            expect_same_semantics(reference, spilled, prefix + " spilled");
+            const CanonicalResult observed = run(fixture, joint_profiles, thread_count);
+            expect_memory_only(observed.counters, prefix + ": runtime wrote aggregate storage");
+            expect_same_semantics(reference, observed, prefix + " memory-only");
         }
 
-        const CanonicalResult cr7 = run(fixture, {effective_profile(ProfileId::cr7_v1)}, 16,
-                                        kForcedSpillBudget, "cr7-alone");
+        const CanonicalResult cr7 =
+            run(fixture, {effective_profile(ProfileId::cr7_v1)}, 16);
         const CanonicalResult pansc =
-            run(fixture, {effective_profile(ProfileId::pansc_strict_v1)}, 16,
-                kForcedSpillBudget, "pansc-alone");
-        expect(cr7.counters.aggregate_spill_runs > 2 && pansc.counters.aggregate_spill_runs > 2,
-               "separate-profile runs must exercise repeated spills");
+            run(fixture, {effective_profile(ProfileId::pansc_strict_v1)}, 16);
+        expect_memory_only(cr7.counters, "CR7 separate run must remain memory-only");
+        expect_memory_only(pansc.counters, "panSC separate run must remain memory-only");
         const CanonicalResult joint_cr7 = extract_profile(reference, "cr7-v1");
         const CanonicalResult joint_pansc = extract_profile(reference, "pansc-strict-v1");
         expect(joint_cr7.counts == cr7.counts && joint_cr7.molecules == cr7.molecules &&

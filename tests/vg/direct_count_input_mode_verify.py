@@ -30,7 +30,7 @@ def run(binary: str, ex50_dir: Path, ex50_fix: Path, bundle: Path, out_dir: Path
          "--barcode-whitelist", str(ex50_fix / "count_whitelist.txt"),
          "--t2g", str(ex50_fix / "count_t2g.tsv"),
          "--body-t2g", str(ex50_fix / "count_body_t2g.tsv"),
-         "--cr7", "--pansc-strict-v1", "--threads", "8", "--count-memory-budget", "1MiB",
+         "--cr7", "--pansc-strict-v1", "--threads", "8",
          "--read-assignments-out", "diagnostics/read_assignments.parquet",
          "--rad-out", "--out-dir", str(out_dir)],
         env=env, capture_output=True, text=True, check=False)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify Parent-scoped cyclic-body degradation preserves a shared clean sibling."""
+"""D105: repeated body motifs do not alter a clean sibling's evidence."""
 import sys
 
 import pysam
@@ -35,4 +35,4 @@ clean_only = exact_for(clean[0], "CLEAN_EXON_PARENT")
 assert len(clean_cyclic) == len(clean_only) == 1
 assert clean_cyclic == clean_only
 assert cyclic[0].to_string() == clean[0].to_string()
-print("PASS: one cyclic Parent degrades; clean shared-canonical record is identical")
+print("PASS: repeated body motifs remain valid; clean shared-canonical record is identical")

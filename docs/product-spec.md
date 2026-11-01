@@ -4,6 +4,16 @@ This document is the canonical product contract. Implementation choices may evol
 changes to the behavior defined here require an explicit decision-log entry and human
 approval.
 
+**Current native-count representation (D110):** `index` compiles complete,
+graph-specific numeric node memberships, ready model metadata and directional
+splice facts. `count` requires that direct-facts object, GAMP, whitelist and
+profiles; XG/GBWT/RI are compiler inputs only. It performs no annotation parsing,
+path locating or reference preprocessing. No reference positions, ordered-walk
+containment or global path-step arrays are introduced. This supersedes earlier
+native-count runtime-input descriptions below, not the independent deprecated
+`convert` contract. Profiles, node-score decisions and barcode/UMI counting rules
+are unchanged by the representation change.
+
 The GAMP-to-RAD algorithm is defined by decision D048 and `docs/conversion-algorithm.md`.
 Where mechanism text below predates D048, the algorithm doc governs.
 
@@ -15,11 +25,24 @@ RAD format. The RAD output is consumed by the ordinary alevin-fry permit-list, c
 and quantification workflow, which ultimately emits gene-level expression values.
 
 Version 0.10 additionally defines a native count surface. It consumes a verified
-`panSC-count-facts-v1` bundle rather than independent annotation/policy flags and emits
+`panSC-count-facts-v1` bundle, corrected annotation, or its compiled annotation
+index (D088/D099), rather than independent policy flags, and emits
 Parquet count tables by default; 10x MEX and RAD are optional compatibility outputs. The
 legacy conversion contract below remains supported independently. An opt-in
 `--read-assignments-out` emits ordered compressed Parquet diagnostics for audit; it is not
 enabled by default because it is per-read-scale I/O.
+
+Native count/replay qualifies an internally ambiguous canonical transcript by
+its explicit normalized source-gene ID (D097), preserving both source genes and
+all original provenance labels without rewriting GFFs or graph indexes. Each
+qualified pair must still identify one raw gene. Missing provenance and Parent
+or body/exon inconsistencies remain errors; legacy `convert` stays strict.
+
+D098's first implemented slice is native `panCollapse index` plus
+`count --annotation-index` (D099). It compiles compressed GFF3/explicit GTF facts
+into a checked binary catalog, preserving annotation-derived identity and
+biological rules. Ledger/graph lookup state, positions and geometry are not yet
+persisted by this slice.
 
 `count --compatibility-out <dir>` may instead publish a reusable, non-BAM tiered
 read-compatibility intermediate. It is policy-neutral evidence before
@@ -68,7 +91,8 @@ V1 does not:
 - emit transcriptome BAM, BUS, or TCC output;
 - automatically infer which copy in a CNV gene family is closest to GRCh38, T2T, or an
   annotated canonical copy;
-- build a custom transcript-compatibility index;
+- build a custom transcript-compatibility index for legacy `convert`; native
+  `count` uses the direct-facts exception specified by D110;
 - fetch, build, or vendor VG itself;
 - define a general library-geometry framework beyond the initial 10x 3′ scope.
 
@@ -211,7 +235,8 @@ Native v0.10 `count` always publishes `parquet/barcodes.parquet`,
 exact schemas and sort order in `docs/input-output-contract.md`; barcode and feature dictionaries
 are the lexical union actually used across requested profiles. The manifest records immutable
 profile hashes, source identities, canonical logical table hashes, current output hashes,
-counters, timings, threads, memory limit, cache statistics, and spill statistics. Optional raw
+counters, timings, threads, memory-only storage mode and cache statistics. Legacy
+aggregate-spill counters remain present as zeros for readers of existing summaries. Optional raw
 10x MEX is emitted per profile, while optional RAD is one pre-count compatibility artifact rather
 than a rendering of either profile. Per-read assignments remain opt-in because they restore
 per-read-scale I/O.
@@ -270,9 +295,9 @@ self-describing chunks, and the writer seeks back to backpatch each chunk header
 `num_chunks` with their final values once known (D049). RAD, BAM, summary, tx2gene, and debug
 artifacts from `convert` must remain byte-identical across supported thread counts for identical
 non-operational inputs and configuration. Native `count` must instead preserve decoded semantic
-rows and corresponding per-profile logical hashes across thread counts, scheduling, spill
-boundaries, and joint-versus-separate profile execution. Its operational manifest and summary fields may legitimately report different
-thread, timing, cache, or spill values, and Parquet bytes may change after a future pinned Arrow
+rows and corresponding per-profile logical hashes across thread counts, scheduling,
+and joint-versus-separate profile execution. Its operational manifest and summary fields may legitimately report different
+thread, timing or cache values, and Parquet bytes may change after a future pinned Arrow
 upgrade without changing logical identity.
 
 ## 12. Diagnostics
@@ -290,8 +315,8 @@ least:
 - groups emitted and number of targets per emitted group;
 - total optional-BAM records and barcode-only prior-evidence records;
 - manifest misses and annotation/index consistency failures;
-- native-count barcode-prior, correction, UMI-filter, assignment, molecule, cache, memory, and
-  spill counters globally and per profile where the event is profile-specific.
+- native-count barcode-prior, correction, UMI-filter, assignment, molecule and cache
+  counters globally and per profile where the event is profile-specific; legacy spill counters are zero.
 
 Errors affecting input interpretation must fail loudly rather than silently changing the
 assignment model.
@@ -299,8 +324,9 @@ assignment model.
 ## 13. Performance constraints
 
 V1 should be stream-oriented over name-grouped GAMP. It may build ordinary in-memory GTF
-structures and use existing VG indexes, but it must not introduce a new persistent custom
-index.
+structures and use existing VG indexes. D098 supersedes the original prohibition
+on persistent custom indexes for prepared counting references; D099 implements
+only the annotation-fact portion, not a new mapper or graph index.
 
 Parallel execution must share graph and annotation state within one process, bound queued and
 out-of-order work, preserve exact completed-name validation, and serialize output by input-group
@@ -312,17 +338,29 @@ change scientific output bytes. Initialization phase time, processing time, grou
 cache-entry counts, and periodic progress are stderr-only diagnostics so performance regressions
 can be separated into startup and per-group phases.
 
+D101 retains exact GBWT base coordinates through 64-step/terminal checkpoints
+and at most 63 LF steps per positional lookup. Ledger catalogs compact after
+validation, Parent policies retain numeric 24-byte rows, and no new on-disk
+index format is introduced. Native node/model caches bound accounted resident
+data to 1 GiB/256 MiB and retain active values through shared ownership; leases,
+allocator overhead and uncached work are outside these accelerator bounds.
+Reference state that is no longer needed is released before UMI finalization.
+These bounds are not a process memory guarantee and introduce no disk fallback
+or biological-policy change.
+
 If direct lookup proves too slow, record profiling evidence and a proposed custom-index
 design as a future development item. Implementation of that index requires a separate
 human-approved decision.
 
 Native `count` is a single GAMP pass with no complete per-read evidence spool. Workers resolve
 CB-independent evidence into thread-local aggregate batches; fixed hash shards combine integer
-counts. Only potentially correctable off-whitelist observations are deferred. Deterministic,
-Zstandard-compressed sorted runs spill when `--count-memory-budget` is crossed, including a
-secondary path for one pathological barcode. Barcode correction partitions by raw barcode and
-UMI reduction by corrected barcode. Ordered coordination is reserved for explicitly ordered RAD
-or diagnostic sinks.
+counts. Only potentially correctable off-whitelist observations are deferred in memory.
+D100 removes all aggregation, corrected-observation and single-barcode spill paths:
+barcode correction and UMI reduction remain in RAM. There is no separate count-memory
+budget or disk fallback. The whole-process memory limit is external; memory exhaustion
+fails the run without publishing partial counts. Barcode correction partitions by raw
+barcode and UMI reduction by corrected barcode. Ordered coordination is reserved for
+explicitly ordered RAD or diagnostic sinks.
 
 ## 14. Acceptance boundary
 
@@ -340,8 +378,9 @@ The V1 product is complete only when:
 - no custom index or deferred splicing-state behavior has entered the implementation.
 
 Native v0.10 additionally requires exact frozen-oracle agreement for terminal classes, corrected
-barcodes, retained molecules, matrices, and counters; logical-hash equality for no-spill and
-repeated-spill runs at supported thread counts; joint-profile equality with separate-profile runs;
+barcodes, retained molecules, matrices, and counters; logical-hash equality across
+memory-only thread/scheduling/insertion-order runs and no aggregate temporary files;
+joint-profile equality with separate-profile runs;
 independent Parquet/MEX validation; optional RAD byte identity; and a release image that exercises
 all count formats without Python. The staged scientific release gate then uses the canonical
 one-million-read subset, full chr20 and chr21, and the immutable joint chr20–22 GAMP. On the joint

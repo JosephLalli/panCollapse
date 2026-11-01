@@ -87,6 +87,25 @@ bool rejects(const std::string& name, const std::vector<Row>& rows) {
 }
 
 void run() {
+    pancollapse::FrozenFlatMap<std::string, int> flat;
+    flat.emplace("z", 3);
+    flat.emplace("a", 1);
+    check(!flat.emplace("a", 9).second, "builder preserves duplicate-key rejection");
+    flat.freeze();
+    check(flat.at_rank(0).first == "a" && flat.index_of("z") == 1 &&
+              flat.find("missing") == flat.end(),
+          "flat lookup preserves lexical ranks and absent-key behavior");
+    flat.at("a") = 2;
+    check(flat.at_rank(0).second == 2, "flat mapped values accept runtime bindings");
+    bool insert_rejected = false;
+    try { flat.emplace("b", 4); } catch (const std::logic_error&) { insert_rejected = true; }
+    check(insert_rejected, "frozen catalog must not relocate existing bindings");
+    pancollapse::FrozenFlatMap<std::string, int> empty_flat;
+    empty_flat.freeze();
+    check(empty_flat.begin() == empty_flat.end() && empty_flat.find("a") == empty_flat.end(),
+          "empty flat catalog lookup is safe");
+    static_assert(sizeof(path_identity::AnnotationIdentity) <= 104);
+    static_assert(sizeof(path_identity::PathIdentityRow) <= 136);
     // Multiple emitted paths per Parent and multiple Parents per canonical are legal. Literal
     // suffixes are identities, not syntax, and commas in general provenance are legal.
     const std::vector<Row> valid = {
@@ -99,6 +118,20 @@ void run() {
     const auto valid_path = write_ledger("valid", valid);
     auto ledger = path_identity::read(valid_path);
     path_identity::PathIdentityLedger moved_ledger = std::move(ledger);
+    check(moved_ledger.rows_by_path.frozen() && moved_ledger.identities_by_parent.frozen(),
+          "validated ledger retains flat storage rather than tree nodes");
+    static_assert(sizeof(decltype(moved_ledger.rows_by_path)::value_type) <= 144);
+    static_assert(sizeof(decltype(moved_ledger.identities_by_parent)::value_type) <= 16);
+    check(moved_ledger.identities_by_parent.index_of("UP_A") <
+              moved_ledger.identities_by_parent.index_of("UP_B"),
+          "flat Parent ranks preserve lexical order");
+    for (const auto& [name, stored] : moved_ledger.rows_by_path) {
+        static_cast<void>(name);
+        const auto identity = moved_ledger.identities_by_parent.at(stored.annotation.unique_parent);
+        check(identity->unique_parent == stored.annotation.unique_parent &&
+                  identity->canonical_transcript == stored.annotation.canonical_transcript,
+              "flat compaction rebinds every Parent to a live representative");
+    }
     check(moved_ledger.rows_by_path.size() == 5, "valid: all exact paths retained");
     check(moved_ledger.identities_by_parent.size() == 4,
           "valid: repeated emitted paths share one Parent identity");
@@ -107,7 +140,15 @@ void run() {
     for (const auto& [parent, identity] : moved_ledger.identities_by_parent) {
         check(identity != nullptr && identity->unique_parent == parent,
               "valid: representative Parent pointers survive ledger move");
+        check(!identity->audit, "valid: audit-only metadata released after validation");
     }
+    const auto& first = moved_ledger.rows_by_path.at("path_A");
+    const auto& copied_path = moved_ledger.rows_by_path.at("path_A_copy");
+    check(first.annotation.canonical_transcript.data() ==
+              copied_path.annotation.canonical_transcript.data(),
+          "valid: repeated transcript labels share immutable storage");
+    check(moved_ledger.rows_by_path.find("path_A")->first.data() == first.vg_path_name.data(),
+          "valid: path lookup key shares its row's path label");
     std::filesystem::remove(valid_path);
 
     {
@@ -226,12 +267,27 @@ void run() {
               "reject missing source transcript without an explicit fallback");
     }
 
-    std::printf("path identity ledger: PASS\n");
+    std::printf("path identity ledger: PASS; identity=%zu row=%zu bytes\n",
+                sizeof(path_identity::AnnotationIdentity), sizeof(path_identity::PathIdentityRow));
 }
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     run();
+    if (argc == 2) {
+        for (const bool defer_body_mismatch : {false, true}) {
+            bool rejected = false;
+            try {
+                (void)path_identity::read(argv[1], defer_body_mismatch);
+            } catch (const std::runtime_error& error) {
+                const std::string message = error.what();
+                rejected = message.find("ENST00000477740") != std::string::npos &&
+                    message.find("ENSG00000241860") != std::string::npos &&
+                    message.find("ENSG00000238009") != std::string::npos;
+            }
+            check(rejected, "real whole-genome canonical/source-gene conflict stays fail-closed");
+        }
+    }
     return 0;
 }

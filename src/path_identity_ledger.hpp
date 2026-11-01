@@ -1,5 +1,8 @@
 #pragma once
 
+#include "compact_identity_text.hpp"
+#include "frozen_flat_map.hpp"
+
 // Strict reader for the production panSC post-vg path identity ledger.  This is
 // intentionally separate from the historical 2/3-column t2g adapter: callers
 // select the schema explicitly and no file-shape auto-detection occurs.
@@ -8,11 +11,14 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -66,46 +72,81 @@ inline constexpr std::array<const char*, 24> kRequiredColumns = {
     "end",
 };
 
-struct AnnotationIdentity {
-    std::string schema_version;
-    std::string unique_parent;
-    std::string source_parent;
-    std::string input_parent;
-    std::string canonical_transcript;
-    std::string gene_id;
-    std::string source_path_or_contig;
-    std::string sample;
-    std::string haplotype;
-    std::string annotation_source;
-    std::string feature_layer;
-    std::string selection_status;
-    std::string fallback_status;
-    std::string exon_unique_parent;
-    std::string gene_locus;
-    std::string source_gene;
-    std::string source_transcript;
-    std::string transcript_class;
-    std::string strand;
-    std::string start;
-    std::string end;
+// Needed only while validating rows and linked exon/body provenance. Production
+// evidence, counting and structural hashes never read these audit-only columns.
+struct AnnotationAudit {
+    pancollapse::CompactIdentityText source_parent;
+    pancollapse::CompactIdentityText input_parent;
+    pancollapse::CompactIdentityText haplotype;
+    pancollapse::CompactIdentityText annotation_source;
+    pancollapse::CompactIdentityText selection_status;
+    pancollapse::CompactIdentityText fallback_status;
+    pancollapse::CompactIdentityText source_transcript;
+    pancollapse::CompactIdentityText transcript_class;
 
-    bool operator==(const AnnotationIdentity&) const = default;
+    bool operator==(const AnnotationAudit&) const = default;
+};
+
+struct AnnotationIdentity {
+    pancollapse::CompactIdentityText unique_parent;
+    pancollapse::CompactIdentityText canonical_transcript;
+    pancollapse::CompactIdentityText gene_id;
+    pancollapse::CompactIdentityText source_path_or_contig;
+    pancollapse::CompactIdentityText sample;
+    pancollapse::CompactIdentityText feature_layer;
+    pancollapse::CompactIdentityText exon_unique_parent;
+    pancollapse::CompactIdentityText gene_locus;
+    pancollapse::CompactIdentityText source_gene;
+    pancollapse::CompactIdentityText strand;
+    pancollapse::CompactIdentityText start;
+    pancollapse::CompactIdentityText end;
+    std::unique_ptr<const AnnotationAudit> audit;
+
+    bool operator==(const AnnotationIdentity& other) const {
+        return unique_parent == other.unique_parent &&
+            canonical_transcript == other.canonical_transcript && gene_id == other.gene_id &&
+            source_path_or_contig == other.source_path_or_contig && sample == other.sample &&
+            feature_layer == other.feature_layer && exon_unique_parent == other.exon_unique_parent &&
+            gene_locus == other.gene_locus && source_gene == other.source_gene &&
+            strand == other.strand && start == other.start && end == other.end &&
+            ((!audit && !other.audit) || (audit && other.audit && *audit == *other.audit));
+    }
 };
 
 struct PathIdentityRow {
     AnnotationIdentity annotation;
-    std::string vg_path_name;
+    pancollapse::CompactIdentityText vg_path_name;
     uint64_t vg_path_length = 0;
-    std::string vg_haplotype_origins;
+    // Numeric runtime binding; never included in identity/structural digests.
+    uint64_t graph_handle = 0;
+    uint32_t lexical_rank = 0;
+    bool graph_bound = false;
+};
+
+inline constexpr std::string_view kQualifiedTargetPrefix = "panSCtxg1:";
+
+struct QualifiedTranscriptTarget {
+    pancollapse::CompactIdentityText target;
+    pancollapse::CompactIdentityText source_gene;
+    pancollapse::CompactIdentityText gene_id;
 };
 
 struct PathIdentityLedger {
-    std::map<std::string, PathIdentityRow> rows_by_path;
-    // std::map nodes are stable: index each Parent by a representative owned row instead of
-    // duplicating its 21-string annotation. The ledger is move-only so these internal pointers
-    // cannot be invalidated by an accidental deep copy.
-    std::map<std::string, const AnnotationIdentity*> identities_by_parent;
+    pancollapse::FrozenFlatMap<pancollapse::CompactIdentityText, PathIdentityRow> rows_by_path;
+    // Trees validate arbitrary input order, then compact into lexical arrays.
+    // Parent references are rebound once at compaction and survive ledger moves.
+    pancollapse::FrozenFlatMap<pancollapse::CompactIdentityText, const AnnotationIdentity*>
+        identities_by_parent;
     std::map<std::string, std::string> canonical_gene;
+    // Count-only splits. Original row labels stay intact; no per-row target string
+    // or second full transcript catalog is retained.
+    std::map<pancollapse::CompactIdentityText,
+             std::map<pancollapse::CompactIdentityText, QualifiedTranscriptTarget, std::less<>>,
+             std::less<>> qualified_targets;
+    std::unordered_map<pancollapse::CompactIdentityText, pancollapse::CompactIdentityText>
+        normalized_source_genes;
+    std::map<pancollapse::CompactIdentityText, pancollapse::CompactIdentityText, std::less<>>
+        escaped_targets, original_transcripts;
     // Where these rows were read from, so a consumer deriving an identity from the ledger
     // does not have to be handed the path a second time alongside the ledger itself.
     std::filesystem::path source_path;
@@ -116,6 +157,29 @@ struct PathIdentityLedger {
     PathIdentityLedger& operator=(const PathIdentityLedger&) = delete;
     PathIdentityLedger(PathIdentityLedger&&) = default;
     PathIdentityLedger& operator=(PathIdentityLedger&&) = default;
+
+    const std::string& target_transcript(const AnnotationIdentity& identity) const {
+        const auto qualified = qualified_targets.find(identity.canonical_transcript);
+        if (qualified != qualified_targets.end()) {
+            // Body/exon source and canonical labels have already been checked equal.
+            const auto& source = normalized_source_genes.at(identity.source_gene);
+            return qualified->second.at(source).target.str();
+        }
+        const auto escaped = escaped_targets.find(identity.canonical_transcript);
+        return escaped == escaped_targets.end() ? identity.canonical_transcript.str()
+                                               : escaped->second.str();
+    }
+
+    const std::string& original_transcript(const std::string& target) const {
+        const auto found = original_transcripts.find(target);
+        return found == original_transcripts.end() ? target : found->second.str();
+    }
+
+    size_t qualified_target_count() const {
+        size_t result = 0;
+        for (const auto& [canonical, targets] : qualified_targets) result += targets.size();
+        return result;
+    }
 };
 
 inline std::vector<std::string> split_tab(const std::string& line) {
@@ -213,8 +277,14 @@ inline uint64_t parse_positive_coordinate(const std::string& value, const std::s
 }
 
 inline PathIdentityLedger read(const std::filesystem::path& filename,
-                               bool defer_linked_body_gene_mismatch = false) {
-    std::ifstream in(filename);
+                               bool defer_linked_body_gene_mismatch = false,
+                               const std::function<void(size_t, size_t, uint64_t)>& progress = {},
+                               const std::function<std::string(const AnnotationIdentity&)>&
+                                   source_gene_identity = {},
+                               std::istream* supplied_stream = nullptr) {
+    std::ifstream file;
+    if (!supplied_stream) file.open(filename);
+    std::istream& in = supplied_stream ? *supplied_stream : file;
     if (!in) {
         throw std::runtime_error("cannot open path identity ledger " + filename.string());
     }
@@ -277,6 +347,22 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
     };
 
     PathIdentityLedger ledger;
+    // The lookup table is construction-only. Each returned value keeps its immutable
+    // storage alive, so neither rows nor Parent pointers depend on the pool's lifetime.
+    pancollapse::CompactIdentityTextPool texts;
+    std::unordered_map<pancollapse::CompactIdentityText, const AnnotationIdentity*>
+        first_exon_by_canonical;
+    auto normalized_source = [&](const AnnotationIdentity& identity) {
+        if (identity.source_gene.empty() || identity.source_gene == "N/A") {
+            return pancollapse::CompactIdentityText{};
+        }
+        auto found = ledger.normalized_source_genes.find(identity.source_gene);
+        if (found == ledger.normalized_source_genes.end()) {
+            found = ledger.normalized_source_genes.emplace(
+                identity.source_gene, texts.intern(source_gene_identity(identity))).first;
+        }
+        return found->second;
+    };
     ledger.source_path = filename;
     std::string line;
     size_t line_number = 1;
@@ -329,28 +415,30 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
             require_not_bam_missing_sentinel(field(fields, bam_field), bam_field, line_number);
         }
 
+        auto audit = std::make_unique<AnnotationAudit>(AnnotationAudit{
+            texts.intern(field(fields, "source_parent")),
+            texts.intern(field(fields, "input_parent")),
+            texts.intern(field(fields, "haplotype")),
+            texts.intern(field(fields, "annotation_source")),
+            texts.intern(field(fields, "selection_status")),
+            texts.intern(field(fields, "fallback_status")),
+            texts.intern(field(fields, "source_transcript")),
+            texts.intern(field(fields, "transcript_class")),
+        });
         AnnotationIdentity annotation{
-            field(fields, "schema_version"),
-            field(fields, "unique_parent"),
-            field(fields, "source_parent"),
-            field(fields, "input_parent"),
-            field(fields, "canonical_transcript"),
-            field(fields, "gene_id"),
-            field(fields, "source_path_or_contig"),
-            field(fields, "sample"),
-            field(fields, "haplotype"),
-            field(fields, "annotation_source"),
-            layer,
-            field(fields, "selection_status"),
-            field(fields, "fallback_status"),
-            field(fields, "exon_unique_parent"),
-            field(fields, "gene_locus"),
-            field(fields, "source_gene"),
-            field(fields, "source_transcript"),
-            field(fields, "transcript_class"),
-            strand,
-            field(fields, "start"),
-            field(fields, "end"),
+            texts.intern(field(fields, "unique_parent")),
+            texts.intern(field(fields, "canonical_transcript")),
+            texts.intern(field(fields, "gene_id")),
+            texts.intern(field(fields, "source_path_or_contig")),
+            texts.intern(field(fields, "sample")),
+            texts.intern(layer),
+            texts.intern(field(fields, "exon_unique_parent")),
+            texts.intern(field(fields, "gene_locus")),
+            texts.intern(field(fields, "source_gene")),
+            texts.intern(strand),
+            texts.intern(field(fields, "start")),
+            texts.intern(field(fields, "end")),
+            std::move(audit),
         };
 
         if (annotation.canonical_transcript == "N/A" || annotation.gene_id == "N/A") {
@@ -360,10 +448,10 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
         }
         const std::string& fallback_target =
             layer == "exon" ? annotation.unique_parent : annotation.exon_unique_parent;
-        if (annotation.source_transcript == "N/A" &&
+        if (annotation.audit->source_transcript == "N/A" &&
             (annotation.canonical_transcript != fallback_target ||
-             annotation.fallback_status == "N/A" ||
-             annotation.fallback_status == "none")) {
+             annotation.audit->fallback_status == "N/A" ||
+             annotation.audit->fallback_status == "none")) {
             throw std::runtime_error("path identity ledger line " +
                                      std::to_string(line_number) +
                                      " missing source_transcript must use its exon Parent as "
@@ -388,11 +476,11 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
         require_group_component_safe(annotation.canonical_transcript, "canonical_transcript",
                                      line_number, false);
         require_group_component_safe(annotation.gene_id, "gene_id", line_number, false);
-        PathIdentityRow row{std::move(annotation), path_name,
-                            parse_positive_length(field(fields, "vg_path_length"), line_number),
-                            field(fields, "vg_haplotype_origins")};
+        PathIdentityRow row{std::move(annotation), texts.intern(path_name),
+                            parse_positive_length(field(fields, "vg_path_length"), line_number)};
+        const auto shared_path_name = row.vg_path_name;
         auto [stored_row, row_inserted] =
-            ledger.rows_by_path.emplace(path_name, std::move(row));
+            ledger.rows_by_path.emplace(shared_path_name, std::move(row));
         if (!row_inserted) {
             throw std::runtime_error("path identity ledger repeats vg_path_name " + path_name);
         }
@@ -417,17 +505,55 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
         // Exact Ex50 preflight has a more specific fail-closed diagnostic for a linked body that
         // changes its exon Parent's counted gene. Defer only that body-side contradiction until
         // the graph-aware preflight; exon and ordinary-mode validation remain strict here.
-        if (!(defer_linked_body_gene_mismatch && layer == "body")) {
+        if (source_gene_identity && layer == "exon") {
+            const auto [first, inserted] = first_exon_by_canonical.emplace(
+                stored_annotation.canonical_transcript, &stored_annotation);
+            if (!inserted) {
+                const auto& prior = *first->second;
+                if (prior.source_gene != stored_annotation.source_gene ||
+                    prior.gene_id != stored_annotation.gene_id) {
+                    const auto prior_source = normalized_source(prior);
+                    const auto current_source = normalized_source(stored_annotation);
+                    if (prior_source.empty() || current_source.empty()) {
+                        throw std::runtime_error("cannot qualify conflicting transcript " +
+                            stored_annotation.canonical_transcript + " without explicit source_gene");
+                    }
+                    if (prior_source == current_source && prior.gene_id != stored_annotation.gene_id) {
+                        throw std::runtime_error("transcript/source-gene pair maps to multiple raw genes: " +
+                            stored_annotation.canonical_transcript + " / " + current_source);
+                    }
+                    if (prior_source != current_source) {
+                        auto& targets = ledger.qualified_targets[stored_annotation.canonical_transcript];
+                        for (const auto* candidate : {&prior, &stored_annotation}) {
+                            const auto source = normalized_source(*candidate);
+                            auto [target, added] = targets.emplace(source, QualifiedTranscriptTarget{
+                                {}, source, candidate->gene_id});
+                            if (!added && target->second.gene_id != candidate->gene_id) {
+                                throw std::runtime_error("transcript/source-gene pair maps to multiple raw genes: " +
+                                    candidate->canonical_transcript + " / " + source);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (!source_gene_identity && !(defer_linked_body_gene_mismatch && layer == "body")) {
             auto [canonical, canonical_inserted] =
                 ledger.canonical_gene.emplace(stored_annotation.canonical_transcript,
                                               stored_annotation.gene_id);
             if (!canonical_inserted && canonical->second != stored_annotation.gene_id) {
                 throw std::runtime_error("path identity ledger maps canonical transcript " +
                                          stored_annotation.canonical_transcript +
-                                         " to multiple genes");
+                                         " to multiple genes: " + canonical->second + " versus " +
+                                         stored_annotation.gene_id + " at path " +
+                                         stored_row->second.vg_path_name + "; source_gene=" +
+                                         stored_annotation.source_gene);
             }
         }
         ledger.has_body_layer = ledger.has_body_layer || layer == "body";
+        if (progress && ledger.rows_by_path.size() % 1000000 == 0) {
+            progress(ledger.rows_by_path.size(), ledger.identities_by_parent.size(),
+                     static_cast<uint64_t>(in.tellg()));
+        }
     }
 
     if (ledger.rows_by_path.empty()) {
@@ -453,19 +579,12 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
                                      annotation.exon_unique_parent);
         }
         const AnnotationIdentity& exon_identity = *exon->second;
-        if (exon_identity.source_parent != annotation.source_parent ||
-            exon_identity.input_parent != annotation.input_parent ||
+        if (*exon_identity.audit != *annotation.audit ||
             exon_identity.canonical_transcript != annotation.canonical_transcript ||
             exon_identity.source_path_or_contig != annotation.source_path_or_contig ||
             exon_identity.sample != annotation.sample ||
-            exon_identity.haplotype != annotation.haplotype ||
-            exon_identity.annotation_source != annotation.annotation_source ||
-            exon_identity.selection_status != annotation.selection_status ||
-            exon_identity.fallback_status != annotation.fallback_status ||
             exon_identity.gene_locus != annotation.gene_locus ||
             exon_identity.source_gene != annotation.source_gene ||
-            exon_identity.source_transcript != annotation.source_transcript ||
-            exon_identity.transcript_class != annotation.transcript_class ||
             exon_identity.strand != annotation.strand) {
             throw std::runtime_error("path identity ledger body Parent " +
                                      annotation.unique_parent +
@@ -480,6 +599,53 @@ inline PathIdentityLedger read(const std::filesystem::path& filename,
     }
     if (!has_exon) {
         throw std::runtime_error("path identity ledger has no exon rows");
+    }
+    if (source_gene_identity) {
+        for (auto& [canonical, targets] : ledger.qualified_targets) {
+            for (auto& [source, target] : targets) {
+                // Length framing is injective even if identifiers contain colons.
+                target.target = texts.intern(std::string(kQualifiedTargetPrefix) + "Q" +
+                    std::to_string(canonical.size()) + ":" + canonical +
+                    std::to_string(source.size()) + ":" + source);
+                ledger.original_transcripts.emplace(target.target, canonical);
+            }
+        }
+        for (const auto& [canonical, first] : first_exon_by_canonical) {
+            static_cast<void>(first);
+            if (canonical.view().starts_with(kQualifiedTargetPrefix) &&
+                ledger.qualified_targets.count(canonical) == 0) {
+                const auto escaped = texts.intern(std::string(kQualifiedTargetPrefix) + "E" +
+                    std::to_string(canonical.size()) + ":" + canonical);
+                ledger.escaped_targets.emplace(canonical, escaped);
+                ledger.original_transcripts.emplace(escaped, canonical);
+            }
+        }
+        if (ledger.qualified_targets.empty()) ledger.normalized_source_genes.clear();
+    }
+    // All source and cross-layer checks have passed. Preserve the full ledger on
+    // disk, not a second resident provenance database throughout counting.
+    uint32_t rank = 0;
+    for (auto& [path_name, row] : ledger.rows_by_path) {
+        static_cast<void>(path_name);
+        row.annotation.audit.reset();
+        row.lexical_rank = rank++;
+    }
+    if (ledger.rows_by_path.size() <= std::numeric_limits<uint32_t>::max()) {
+        // AnnotationIdentity is the pointer-interconvertible first member. Save
+        // representative ranks before moving rows so no dangling pointer is read.
+        static_assert(std::is_standard_layout_v<PathIdentityRow>);
+        static_assert(offsetof(PathIdentityRow, annotation) == 0);
+        std::vector<uint32_t> parent_rows;
+        parent_rows.reserve(ledger.identities_by_parent.size());
+        for (const auto& [parent, identity] : ledger.identities_by_parent) {
+            static_cast<void>(parent);
+            parent_rows.push_back(reinterpret_cast<const PathIdentityRow*>(identity)->lexical_rank);
+        }
+        ledger.rows_by_path.freeze();
+        size_t parent_rank = 0;
+        ledger.identities_by_parent.freeze([&](const AnnotationIdentity*& identity) {
+            identity = &ledger.rows_by_path.at_rank(parent_rows.at(parent_rank++)).second.annotation;
+        });
     }
     return ledger;
 }

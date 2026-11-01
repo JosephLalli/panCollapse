@@ -66,7 +66,8 @@ def main():
             output = root / name
             argv = [str(binary), "count", "--gamp", str(gamp), "--xg", str(work / "graph.xg"),
                     "--barcode-whitelist", str(fixture / "count_whitelist.txt"), "--cr7",
-                    "--pansc-strict-v1", "--threads", str(threads), "--count-memory-budget", "1MiB",
+                    "--pansc-strict-v1", "--threads", str(threads),
+                    "--max-alignments-per-read", "0",
                     "--10x-mex",
                     "--out-dir", str(output)] + authorities[authority]
             if sidecars == "all":

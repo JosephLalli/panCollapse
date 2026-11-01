@@ -14,6 +14,10 @@ struct Visit { int64_t node; bool reverse; int64_t score; int64_t bases; };
 using Catalog = std::map<int64_t, Metadata>;
 using Cache = pathtally::ReadNodeTallyCache<Metadata>;
 
+std::shared_ptr<const Metadata> lease(const Catalog& catalog, int64_t id) {
+    return std::shared_ptr<const Metadata>(&catalog.at(id), [](const Metadata*) {});
+}
+
 void check(bool ok, const char* message) {
     if (!ok) throw std::runtime_error(message);
 }
@@ -38,9 +42,9 @@ bool compare(Cache& cache, const Catalog& catalog, const std::vector<Visit>& vis
     const auto lookup = [&](int64_t id) -> const Metadata& { return catalog.at(id); };
     original(expected, visits, lookup);
     std::map<int64_t, size_t> calls;
-    const auto counted_lookup = [&](int64_t id) -> const Metadata& {
+    const auto counted_lookup = [&](int64_t id) -> std::shared_ptr<const Metadata> {
         ++calls[id];
-        return catalog.at(id);
+        return lease(catalog, id);
     };
     bool fits = true;
     for (const auto& v : visits) fits &= cache.add(v.node, v.reverse, v.score, v.bases);
@@ -89,6 +93,22 @@ int main() {
         check(compare(cache, {{1, {{{10, false}}}}, {2, {{{11, false}}}}},
                       {{1, false, 0, 0}, {2, false, -5, 0}}), "zero versus negative failed");
 
+        cache.clear();
+        cache.add(1, false, 0, 0);
+        std::weak_ptr<const Metadata> retained;
+        const auto owning_lookup = [&](int64_t id) {
+            check(id == 1, "unexpected lease-test node");
+            auto value = std::make_shared<Metadata>();
+            value->ref_paths.push_back({77, false});
+            retained = value;
+            return std::shared_ptr<const Metadata>(std::move(value));
+        };
+        check(cache.resolve(1, owning_lookup).ref_paths.front().path_handle == 77,
+              "owned metadata lookup failed");
+        check(!retained.expired(), "read cache did not retain metadata lease");
+        cache.clear();
+        check(retained.expired(), "read cache clear did not release metadata lease");
+
         const int64_t max = std::numeric_limits<int64_t>::max();
         const Catalog shared = {{1, {{{1, false}}}}, {2, {{{1, false}}}}, {3, {{{1, false}}}}};
         check(!compare(cache, shared, {{1, false, max, 0}, {2, false, -max, 0},
@@ -129,7 +149,7 @@ int main() {
         bool rejected = false;
         try {
             pathtally::NumericTallyMap output;
-            cache.expand(output, [&](int64_t id) -> const Metadata& { return large.at(id); });
+            cache.expand(output, [&](int64_t id) { return lease(large, id); });
         } catch (const std::out_of_range&) { rejected = true; }
         check(rejected, "absent graph node was not rejected");
         std::cout << "PASS: 2000 differential cases, zero/negative/orientation/duplicates, "

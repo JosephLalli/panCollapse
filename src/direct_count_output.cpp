@@ -322,6 +322,14 @@ void append_identity_json(std::ostringstream& out, const CountTableIdentity& ide
 CountOutputReceipt write_count_outputs(
     const CountRuntime& runtime, const CountRuntimeResult& result,
     const CountFactCatalog& facts, const CountOutputOptions& options) {
+    return write_count_outputs(runtime, result,
+        GeneMetadataLookup([&facts](std::string_view id) { return facts.gene(std::string(id)); }),
+        options);
+}
+
+CountOutputReceipt write_count_outputs(
+    const CountRuntime& runtime, const CountRuntimeResult& result,
+    const GeneMetadataLookup& gene_lookup, const CountOutputOptions& options) {
     if (options.output_directory.empty() || options.pancollapse_version.empty() ||
         options.analysis_scope.empty() || options.fact_bundle_content_id.empty() ||
         options.fact_authority.empty() ||
@@ -483,7 +491,7 @@ CountOutputReceipt write_count_outputs(
             arrow::StringBuilder type_builder;
             for (size_t index = begin; index < end; ++index) {
                 const std::string& gene_id = features[feature_source[index]];
-                const GeneFact& fact = facts.gene(gene_id);
+                const GeneFact fact = gene_lookup(gene_id);
                 const std::optional<std::string> gene_type =
                     fact.gene_types.empty() ? std::nullopt
                                             : std::optional<std::string>(join(fact.gene_types, ","));
@@ -661,7 +669,7 @@ CountOutputReceipt write_count_outputs(
                 GzipOutput feature_file(root / "features.tsv.gz");
                 for (const std::uint32_t source : feature_source) {
                     const std::string& gene_id = features[source];
-                    const GeneFact& fact = facts.gene(gene_id);
+                    const GeneFact fact = gene_lookup(gene_id);
                     feature_file.write(gene_id + "\t" + fact.gene_name.value_or(gene_id) +
                                        "\tGene Expression\n");
                 }
@@ -726,9 +734,12 @@ CountOutputReceipt write_count_outputs(
         std::ostringstream summary;
         summary << "scope\tprofile_id\tmetric\tvalue\n";
         const CountRuntimeCounters& counters = result.counters;
-        const std::array<std::pair<std::string_view, std::uint64_t>, 25> global{{
+        const std::array<std::pair<std::string_view, std::uint64_t>, 28> global{{
             {"input_records", options.input_records},
             {"input_read_groups", options.input_read_groups},
+            {"max_alignments_per_read", options.max_alignments_per_read},
+            {"high_complexity_read_groups", options.high_complexity_read_groups},
+            {"noncountable_molecule_groups", options.noncountable_molecule_groups},
             {"raw_molecule_missing_groups", options.raw_molecule_missing_groups},
             {"raw_molecule_malformed_groups", options.raw_molecule_malformed_groups},
             {"raw_molecule_unsupported_groups", options.raw_molecule_unsupported_groups},
@@ -807,13 +818,30 @@ CountOutputReceipt write_count_outputs(
         }
         std::ostringstream manifest;
         manifest << "{\"analysis_scope\":" << json_string(options.analysis_scope)
+                 << ",\"assignment_algorithm\":" << json_string(options.assignment_algorithm)
+                 << ",\"assignment_score_window\":" << (options.assignment_algorithm == "node-score-v1" ? "5" : "null")
+                 << ",\"alignment_complexity_filter\":{\"algorithm\":\"gamp-total-routes-v1\""
+                 << ",\"max_alignments_per_read\":" << options.max_alignments_per_read
+                 << ",\"high_complexity_read_groups\":" << options.high_complexity_read_groups
+                 << ",\"enabled\":" << (options.max_alignments_per_read ? "true" : "false") << '}'
                  << ",\"assignment_cache\":{\"capacity\":"
                  << options.assignment_cache_capacity << ",\"entries\":"
                  << options.assignment_cache_entries << ",\"hits\":"
                  << options.assignment_cache_hits << ",\"misses\":"
                  << options.assignment_cache_misses << ",\"uncached\":"
-                 << options.assignment_cache_uncached << "},\"command_line\":"
-                 << json_string(options.command_line)
+                 << options.assignment_cache_uncached << "},\"memory_plan\":";
+        if (options.memory_plan) {
+            const auto& plan = *options.memory_plan;
+            manifest << "{\"target_bytes\":" << plan.target_bytes
+                     << ",\"resident_bytes\":" << plan.resident_bytes
+                     << ",\"reserve_bytes\":" << plan.reserve_bytes
+                     << ",\"cache_pool_bytes\":" << plan.pool_bytes
+                     << ",\"cache_limits\":{\"node\":" << plan.limits[0]
+                     << ",\"edge\":" << plan.limits[1]
+                     << ",\"assignment\":" << plan.limits[2]
+                     << ",\"splice\":" << plan.limits[3] << "}}";
+        } else manifest << "null";
+        manifest << ",\"command_line\":" << json_string(options.command_line)
                  << ",\"compatibility_bundle\":";
         if (options.compatibility_bundle) {
             const CountCompatibilityIdentity& compatibility =
@@ -858,6 +886,8 @@ CountOutputReceipt write_count_outputs(
                  << ",\"fact_bundle_content_id\":"
                  << json_string(options.fact_bundle_content_id)
                  << ",\"fact_authority\":" << json_string(options.fact_authority)
+                 << (options.annotation_index_derivation_id.empty() ? std::string{} :
+                     ",\"annotation_index_derivation_id\":" + json_string(options.annotation_index_derivation_id))
                  << ",\"libraries\":{\"arrow\":\"" ARROW_VERSION_STRING
                     "\",\"parquet\":\"17.0.0\",\"zstd\":"
                  << json_string(ZSTD_versionString()) << "},\"inputs\":{";
@@ -866,9 +896,21 @@ CountOutputReceipt write_count_outputs(
             manifest << json_string(inputs[index].role) << ":{\"path\":"
                      << json_string(inputs[index].path.string()) << ",\"sha256\":"
                      << json_string(inputs[index].sha256) << ",\"size_bytes\":"
-                     << inputs[index].size_bytes << '}';
+                     << inputs[index].size_bytes;
+            if (inputs[index].identity_source) {
+                manifest << ",\"identity_source\":"
+                         << json_string(*inputs[index].identity_source);
+            }
+            if (inputs[index].sha256_verified) {
+                manifest << ",\"sha256_verified\":"
+                         << (*inputs[index].sha256_verified ? "true" : "false");
+            }
+            manifest << '}';
         }
-        manifest << "},\"memory_budget_bytes\":" << options.memory_budget_bytes
+        manifest << "},\"count_storage\":\"memory-only\"";
+        if (!options.reference_provenance_json.empty())
+            manifest << ",\"reference_provenance_json\":" << json_string(options.reference_provenance_json);
+        manifest
                  << ",\"outputs\":{";
         bool first = true;
         for (const auto& [name, identity] : receipt.additional_outputs) {
@@ -878,6 +920,9 @@ CountOutputReceipt write_count_outputs(
             append_identity_json(manifest, identity);
         }
         manifest << "},\"pancollapse_version\":" << json_string(options.pancollapse_version)
+                 << ",\"transcript_target_scheme\":" << json_string(options.transcript_target_scheme)
+                 << ",\"qualified_transcript_targets\":" << options.qualified_transcript_targets
+                 << ",\"transcript_target_mapping_id\":" << json_string(options.transcript_target_mapping_id)
                  << ",\"profiles\":[";
         for (size_t index = 0; index < profiles.size(); ++index) {
             if (index != 0) manifest << ',';

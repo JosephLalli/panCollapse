@@ -3,6 +3,47 @@
 All notable changes to panCollapse are recorded here. Versions follow the project's
 `major.minor.patch` scheme.
 
+## [Unreleased]
+
+- Adds a direct-facts reference compiler and standalone count reader: shared
+  numeric node memberships, ready model records and directional splice facts
+  are prepared once. `count` no longer loads XG/GBWT/RI or reconstructs reference
+  facts; those flags move to `index`. Node/edge/splice caches are removed from
+  counting; the configurable assignment cache remains. Annotation lists are
+  immutable and the scorer keeps only read-local model-ID sidecars. All 174
+  tests pass; whole-reference resource measurements and real-read parity are
+  pending.
+
+- Replaces `node-score-v1` complete-route enumeration with exact sparse DAG
+  maxima over exon/strand/splice summaries. Preserves independent body fallback,
+  exact-tie support and per-pool windows; retains enumeration only as an internal
+  differential-test oracle. Reports DP state/transition work separately from
+  the number of represented alignments. Shares identical node-score/splice-mask
+  calculations across transcripts while retaining their separate identities.
+- Adds prepared/native `count --assignment-scoring node-score-v1`: independent
+  complete-alignment node scores, whole-alignment E/P/B coverage classes,
+  strand-aware splice vetoes, six independent five-point score windows, and
+  antisense exon veto ranking. The manifest identifies the algorithm explicitly;
+  legacy scoring remains available and unchanged by default during validation.
+- Adds `count --max-alignments-per-read N` (default 64,000,000; zero disables).
+  A capped GAMP route count skips over-limit reads before reference queries,
+  retaining their barcode priors. Manifests and summaries expose the limit and
+  high-complexity drops. Compatibility capture/replay require zero; `convert`
+  is unchanged.
+- Reduces reference memory with exact 64-step GBWT coordinate checkpoints,
+  validated lexical ledger arrays, 24-byte Parent policy records with shared
+  categories, and numeric Parent ranks instead of duplicate pointer/name catalogs.
+  The existing annotation-index format is unchanged.
+- Bounds native node/model reference caches with lifetime-safe read leases,
+  releases graph/ledger/model state before UMI finalization, packs common UMI
+  keys losslessly, and frees consumed aggregate buffers. Counting rules and
+  output schemas are unchanged; whole-genome resource fit is not yet qualified.
+- Removes native-count disk fallback: aggregate, corrected-observation and
+  single-barcode UMI state now stay in RAM. Removes the separate aggregation
+  budget and rejects `--count-memory-budget`; use an external whole-process
+  memory cap. Manifests report `count_storage: "memory-only"`, and legacy spill
+  counters remain zero. Assignment and barcode/UMI policies are unchanged.
+
 ## [0.10.0]
 
 - Adds native `panCollapse count`, which consumes a verified `panSC-count-facts-v1` bundle

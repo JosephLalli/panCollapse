@@ -125,6 +125,7 @@ struct CompatibilityBundleIdentity {
 // intentionally excluded.
 std::string compatibility_structural_surface_id(
     const path_identity::PathIdentityLedger& path_ledger);
+std::string qualified_transcript_mapping_id(const path_identity::PathIdentityLedger& path_ledger);
 
 struct CompatibilityTableIdentity {
     std::string relative_path;

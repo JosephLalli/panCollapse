@@ -100,4 +100,4 @@ for threads in 1 8; do
     tail -n 1 "$invalid_root/stderr_$threads.txt" > "$invalid_root/error_$threads.txt"
 done
 cmp "$invalid_root/error_1.txt" "$invalid_root/error_8.txt"
-grep -q 'PARENT_000_BODY and PARENT_000_EXON' "$invalid_root/error_8.txt"
+grep -q 'body Parent BODY_000_000 changes counted gene from GENE_000 to OTHER_GENE_000' "$invalid_root/error_8.txt"

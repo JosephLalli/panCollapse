@@ -12,35 +12,12 @@
 namespace pancollapse {
 namespace {
 constexpr auto unselected = std::numeric_limits<std::size_t>::max();
-std::uint64_t add_length(std::uint64_t position, std::size_t length) {
-    if (length > std::numeric_limits<std::uint64_t>::max() - position) {
-        throw std::runtime_error("GBWT path base length exceeds 64-bit coordinates");
+std::uint64_t add_path_length(std::uint64_t length, std::size_t node_length) {
+    if (node_length > std::numeric_limits<std::uint64_t>::max() - length) {
+        throw std::runtime_error("GBWT path length exceeds 64-bit range");
     }
-    return position + length;
+    return length + node_length;
 }
-}
-
-void PathPositions::push(std::uint64_t position) {
-    if (!wide() && position > std::numeric_limits<std::uint32_t>::max()) {
-        wide_.reserve(narrow_.capacity());
-        wide_.assign(narrow_.begin(), narrow_.end());
-        // An empty prefix may widen on its very first value.
-        wide_.push_back(position);
-        std::vector<std::uint32_t>().swap(narrow_);
-    } else if (wide()) {
-        wide_.push_back(position);
-    } else {
-        narrow_.push_back(static_cast<std::uint32_t>(position));
-    }
-}
-std::uint64_t PathPositions::at(std::size_t ordinal) const {
-    return wide() ? wide_.at(ordinal) : narrow_.at(ordinal);
-}
-std::uint64_t GraphPathStep::base_position() const {
-    if (!position) {
-        throw std::runtime_error("graph input lacks path base positions required by exact overlap counting");
-    }
-    return *position;
 }
 
 void GraphInput::load_xg(std::istream& input) {
@@ -62,7 +39,39 @@ void GraphInput::load_gbwt(std::istream& input) {
     external_gbwt_->load(input);
     index_ = external_gbwt_.get();
 }
-void GraphInput::initialize_gbwt(std::size_t threads) {
+void GraphInput::load_r_index(std::istream& input) {
+    if (!index_) {
+        throw std::logic_error("r-index requires a loaded GBWT");
+    }
+    auto loaded = std::make_unique<gbwt::FastLocate>();
+    loaded->load(input);
+    loaded->setGBWT(*index_);
+    if (loaded->header.max_length == 0 || loaded->comp_to_run.size() != index_->effective() ||
+        loaded->samples.empty() || loaded->samples.size() != loaded->last_to_run.size() ||
+        loaded->last.ones() != loaded->samples.size()) {
+        throw std::runtime_error("r-index has invalid FastLocate structures for the GBWT");
+    }
+    locate_ = std::move(loaded);
+}
+void GraphInput::adopt_gbwt_input(GraphInput&& donor) {
+    if (this == &donor || !xg_ || nodes_ != xg_.get() || gbz_ || external_gbwt_ || index_ ||
+        locate_ || !selected_rank_.empty() || !selected_paths_.empty()) {
+        throw std::logic_error("GBWT adoption requires an uninitialized XG-only receiver");
+    }
+    if (donor.xg_ || donor.gbz_ || donor.nodes_ || !donor.external_gbwt_ ||
+        donor.index_ != donor.external_gbwt_.get() || !donor.selected_rank_.empty() ||
+        !donor.selected_paths_.empty() ||
+        (donor.locate_ && donor.locate_->index != donor.external_gbwt_.get())) {
+        throw std::logic_error("GBWT adoption requires an uninitialized GBWT-only donor");
+    }
+    // Move the allocation, not its contents: FastLocate::index continues to point
+    // at this exact GBWT object after ownership changes hands.
+    external_gbwt_ = std::move(donor.external_gbwt_);
+    locate_ = std::move(donor.locate_);
+    index_ = external_gbwt_.get();
+    donor.index_ = nullptr;
+}
+void GraphInput::initialize_gbwt(std::size_t threads, bool occurrence_lookup) {
     if (!index_) return;
     if (!nodes_) throw std::logic_error("GBWT requires a node graph");
     if (!index_->bidirectional()) {
@@ -88,8 +97,27 @@ void GraphInput::initialize_gbwt(std::size_t threads) {
         }
     }
     reference_samples_ = gbwtgraph::parse_reference_samples_tag(*index_);
+    if (!occurrence_lookup) return; // The compiler streams paths once; no RI is needed.
     selected_rank_.assign(metadata.paths(), unselected);
     const auto started = std::chrono::steady_clock::now();
+    if (locate_) {
+        // This happens only after main has accepted the sidecar identity (or its
+        // explicitly requested trusted receipt), so malformed bytes are never
+        // queried before their selected validation policy completes.
+        for (auto node = index_->firstNode(); node < index_->sigma(); ++node) {
+            if (index_->contains(node) && !index_->empty(node)) {
+                const auto positions = locate_->decompressSA(node);
+                if (positions.empty()) {
+                    throw std::runtime_error("r-index FastLocate sanity query returned no occurrences");
+                }
+                break;
+            }
+        }
+        std::cerr << "panCollapse: initialization: phase=fastlocate_load seconds="
+                  << std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count()
+                  << '\n';
+        return;
+    }
     // FastLocate's constructor uses OpenMP internally. Restore the caller's setting.
     const int previous_threads = omp_get_max_threads();
     omp_set_num_threads(static_cast<int>(std::min<std::size_t>(threads, INT_MAX)));
@@ -129,7 +157,7 @@ std::uint64_t GraphInput::get_path_length(handlegraph::path_handle_t path) const
     return index_ ? selected(path).length : xg_->get_path_length(path);
 }
 void GraphInput::prepare_paths(const std::vector<handlegraph::path_handle_t>& paths,
-                              bool positions, std::size_t threads) {
+                               std::size_t threads) {
     if (!index_) return;
     if (!locate_) throw std::logic_error("GBWT occurrence lookup is not initialized");
     if (!selected_paths_.empty()) throw std::logic_error("GBWT paths already prepared");
@@ -142,76 +170,71 @@ void GraphInput::prepare_paths(const std::vector<handlegraph::path_handle_t>& pa
     }
     std::exception_ptr error;
     std::mutex error_mutex;
+    std::uint64_t selected_steps = 0;
     const int workers = static_cast<int>(std::min<std::size_t>(threads, INT_MAX));
-    #pragma omp parallel for schedule(dynamic, 64) num_threads(workers)
+    #pragma omp parallel for schedule(dynamic, 64) num_threads(workers) \
+        reduction(+:selected_steps)
     for (std::size_t rank = 0; rank < selected_paths_.size(); ++rank) {
         try {
             auto& path = selected_paths_[rank];
             const auto walk = index_->extract(gbwt::Path::encode(path.id, false));
             path.steps = walk.size();
-            if (positions) path.positions.reserve(walk.size() + 1);
             for (auto node : walk) {
-                if (positions) path.positions.push(path.length);
-                path.length = add_length(path.length,
+                path.length = add_path_length(path.length,
                     nodes_->get_length(nodes_->get_handle(gbwt::Node::id(node))));
             }
-            if (positions) path.positions.push(path.length);
+            selected_steps += path.steps;
         } catch (...) {
             std::lock_guard lock(error_mutex);
             if (!error) error = std::current_exception();
         }
     }
     if (error) std::rethrow_exception(error);
-    positions_ready_ = positions;
+    path_preparation_stats_ = {
+        static_cast<std::uint64_t>(selected_paths_.size()), selected_steps, 0
+    };
+    std::cerr << "panCollapse: initialization: phase=selected_path_nodes paths="
+              << path_preparation_stats_.selected_paths
+              << " steps=" << path_preparation_stats_.selected_steps
+              << " coordinate_bytes=0\n";
 }
 void GraphInput::for_each_path_step(handlegraph::path_handle_t path,
-                                   const StepCallback& callback, bool positions) const {
+                                    const StepCallback& callback) const {
     std::uint64_t ordinal = 0;
     if (!index_) {
         xg_->for_each_step_in_path(path, [&](handlegraph::step_handle_t step) {
-            callback({path, xg_->get_handle_of_step(step), ordinal++, positions
-                ? std::optional<std::uint64_t>(xg_->get_position_of_step(step)) : std::nullopt});
+            callback({path, xg_->get_handle_of_step(step), ordinal++});
         });
     } else {
-        const auto& info = selected(path);
-        std::uint64_t position = 0;
-        for (auto node : index_->extract(gbwt::Path::encode(info.id, false))) {
+        const auto id = handlegraph::as_integer(path) - 1;
+        for (auto node : index_->extract(gbwt::Path::encode(id, false))) {
             const auto handle = nodes_->get_handle(gbwt::Node::id(node), gbwt::Node::is_reverse(node));
-            callback({path, handle, ordinal++, positions
-                ? std::optional<std::uint64_t>(position) : std::nullopt});
-            if (positions) position = add_length(position, nodes_->get_length(handle));
+            callback({path, handle, ordinal++});
         }
     }
 }
 void GraphInput::for_each_node_occurrence(handlegraph::nid_t node,
-                                        const StepCallback& callback, bool positions) const {
+                                          const StepCallback& callback) const {
     if (!index_) {
         xg_->for_each_step_on_handle(xg_->get_handle(node), [&](handlegraph::step_handle_t step) {
-            callback({xg_->get_path_handle_of_step(step), xg_->get_handle_of_step(step),
-                      std::nullopt, positions ? std::optional<std::uint64_t>(xg_->get_position_of_step(step))
-                                   : std::nullopt});
+            callback({xg_->get_path_handle_of_step(step), xg_->get_handle_of_step(step), std::nullopt});
         });
         return;
-    }
-    if (positions && !positions_ready_) {
-        throw std::runtime_error("GBWT input lacks path base positions required by exact overlap counting");
     }
     const auto encoded = gbwt::Node::encode(node, false);
     if (!index_->contains(encoded) || index_->empty(encoded)) return;  // Graph-only nodes carry no transcript evidence.
     // Query one orientation once. Both stored sequence directions represent the
     // physical visits in that node record; querying both would double-count them.
-    for (auto packed : locate_->decompressSA(encoded)) {
+    const auto occurrences = locate_->decompressSA(encoded);
+    for (const auto packed : occurrences) {
         const auto [sequence, back_offset] = locate_->unpack(packed);
         if (sequence >= index_->sequences()) throw std::runtime_error("invalid FastLocate sequence ID");
         const auto p = gbwt::Path::id(sequence);
         const auto rank = selected_rank_.at(p);
         if (rank == unselected) continue;
-        const auto& info = selected_paths_[rank];
-        if (back_offset >= info.steps) throw std::runtime_error("invalid FastLocate path step offset");
         const bool reverse = gbwt::Path::is_reverse(sequence);
-        const auto ordinal = reverse ? back_offset : info.steps - 1 - back_offset;
-        callback({handlegraph::as_path_handle(p + 1), nodes_->get_handle(node, reverse), ordinal,
-                  positions ? std::optional<std::uint64_t>(info.positions.at(ordinal)) : std::nullopt});
+        static_cast<void>(back_offset);
+        callback({handlegraph::as_path_handle(p + 1), nodes_->get_handle(node, reverse), std::nullopt});
     }
 }
 }  // namespace pancollapse

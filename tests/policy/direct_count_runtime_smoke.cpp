@@ -1,10 +1,13 @@
 #include "direct_count_runtime.hpp"
 
 #include <algorithm>
-#include <filesystem>
+#include <array>
+#include <cstdint>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -18,9 +21,11 @@ void expect(bool value, const char* message) {
     }
 }
 
-std::filesystem::path scratch(std::string_view name) {
-    return std::filesystem::temp_directory_path() /
-           ("pancollapse-direct-count-" + std::string(name));
+void expect_memory_only(const CountRuntimeResult& result, const char* message) {
+    expect(result.counters.aggregate_spill_runs == 0 &&
+               result.counters.aggregate_spill_rows == 0 &&
+               result.counters.aggregate_spill_bytes == 0,
+           message);
 }
 
 std::string barcode_from_index(std::uint32_t value) {
@@ -45,17 +50,33 @@ std::vector<CountTuple> count_tuples(const CountRuntimeResult& result) {
     return rows;
 }
 
-CountRuntimeResult large_run(const std::vector<std::string>& whitelist,
-                             bool reverse, std::string_view suffix) {
-    const auto spill = scratch(suffix);
-    std::filesystem::remove_all(spill);
+bool same_result(const CountRuntimeResult& left, const CountRuntimeResult& right) {
+    if (count_tuples(left) != count_tuples(right) ||
+        left.exact_barcode_priors != right.exact_barcode_priors ||
+        left.counters.assigned_observations != right.counters.assigned_observations ||
+        left.counters.direct_multigene_dropped != right.counters.direct_multigene_dropped ||
+        left.counters.invalid_umi_dropped != right.counters.invalid_umi_dropped ||
+        left.counters.barcode_correction_succeeded != right.counters.barcode_correction_succeeded ||
+        left.counters.barcode_correction_failed != right.counters.barcode_correction_failed) {
+        return false;
+    }
+    if (left.molecules.size() != right.molecules.size()) return false;
+    for (size_t index = 0; index < left.molecules.size(); ++index) {
+        const auto& a = left.molecules[index];
+        const auto& b = right.molecules[index];
+        if (std::tie(a.profile_index, a.barcode_whitelist_index, a.feature_catalog_index,
+                     a.corrected_umi, a.supporting_reads, a.raw_umis_collapsed) !=
+            std::tie(b.profile_index, b.barcode_whitelist_index, b.feature_catalog_index,
+                     b.corrected_umi, b.supporting_reads, b.raw_umis_collapsed)) return false;
+    }
+    return true;
+}
+
+CountRuntimeResult large_run(const std::vector<std::string>& whitelist, bool reverse) {
     CountRuntimeOptions options;
-    options.memory_budget_bytes = 1ULL << 20;
-    options.spill_directory = spill;
     options.raw_barcode_length = 8;
     options.raw_umi_length = 8;
-    CountRuntime runtime({effective_profile(ProfileId::cr7_v1)}, whitelist,
-                         {"G"}, options);
+    CountRuntime runtime({effective_profile(ProfileId::cr7_v1)}, whitelist, {"G"}, options);
     auto worker = runtime.make_worker(101);
     if (reverse) {
         for (auto it = whitelist.rbegin(); it != whitelist.rend(); ++it) {
@@ -76,11 +97,7 @@ CountRuntimeResult large_run(const std::vector<std::string>& whitelist,
 
 int main() {
     try {
-        const auto spill = scratch("resident");
-        std::filesystem::remove_all(spill);
         CountRuntimeOptions options;
-        options.memory_budget_bytes = 1ULL << 20;
-        options.spill_directory = spill;
         options.raw_barcode_length = 4;
         options.raw_umi_length = 4;
         CountRuntime runtime(
@@ -109,8 +126,7 @@ int main() {
                                   /*reaches_umi_filter=*/false);
         worker.flush();
         const CountRuntimeResult resident = runtime.finalize();
-        expect(resident.counters.aggregate_spill_runs == 0,
-               "small aggregation must remain resident");
+        expect_memory_only(resident, "memory-only runtime wrote aggregate storage metadata");
         expect(resident.counters.barcode_prior_groups == 102 &&
                    resident.counters.exact_barcode_prior_groups == 101,
                "all-read barcode priors");
@@ -145,11 +161,7 @@ int main() {
         // correct_cb precedes count_cr's UMI filter. An eligible read whose
         // ambiguous Hamming-1 barcode fails the posterior must not increment
         // either UMI-N or assigned-observation counters.
-        const auto posterior_spill = scratch("posterior-before-umi");
-        std::filesystem::remove_all(posterior_spill);
         CountRuntimeOptions posterior_options;
-        posterior_options.memory_budget_bytes = 1ULL << 20;
-        posterior_options.spill_directory = posterior_spill;
         posterior_options.raw_barcode_length = 4;
         posterior_options.raw_umi_length = 4;
         CountRuntime posterior_runtime(
@@ -162,6 +174,8 @@ int main() {
         posterior_worker.observe_assignment(1, "AAAG", std::nullopt, "NNNN", {"G"});
         posterior_worker.flush();
         const CountRuntimeResult posterior_result = posterior_runtime.finalize();
+        expect_memory_only(posterior_result,
+                           "barcode-correction runtime must remain memory-only");
         expect(posterior_result.counters.barcode_correction_failed == 1 &&
                    posterior_result.counters.invalid_umi_dropped == 0 &&
                    posterior_result.counters.assigned_observations == 0 &&
@@ -176,37 +190,32 @@ int main() {
         for (std::uint32_t index = 0; index < 10000; ++index) {
             whitelist.push_back(barcode_from_index(index));
         }
-        const CountRuntimeResult forward = large_run(whitelist, false, "spill-forward");
-        const CountRuntimeResult reverse = large_run(whitelist, true, "spill-reverse");
-        expect(forward.counters.aggregate_spill_runs > 0 &&
-                   reverse.counters.aggregate_spill_runs > 0,
-               "forced-spill fixture must exercise external merge");
+        const CountRuntimeResult forward = large_run(whitelist, false);
+        const CountRuntimeResult reverse = large_run(whitelist, true);
+        expect_memory_only(forward, "large forward aggregation must remain memory-only");
+        expect_memory_only(reverse, "large reverse aggregation must remain memory-only");
         expect(forward.counts.size() == whitelist.size() &&
                    forward.molecules.size() == whitelist.size(),
-               "forced-spill row count");
+               "large resident row count");
         expect(count_tuples(forward) == count_tuples(reverse) &&
                    forward.exact_barcode_priors == reverse.exact_barcode_priors,
-               "spill output must be insertion-order invariant");
+               "resident output must be insertion-order invariant");
 
-        // A single corrected barcode can remain below the global aggregate
-        // threshold yet still create a large post-1MM candidate set. Exercise
-        // the secondary per-barcode spill independently of aggregate spilling.
-        const auto single_barcode_spill = scratch("single-barcode-spill");
-        std::filesystem::remove_all(single_barcode_spill);
+        // Keep the formerly pathological single-barcode case wholly resident:
+        // 60,000 equal cross-gene candidates must still be tie-discarded.
         CountRuntimeOptions single_options;
-        single_options.memory_budget_bytes = 1ULL << 20;
-        single_options.spill_directory = single_barcode_spill;
         single_options.raw_barcode_length = 8;
         single_options.raw_umi_length = 8;
         std::vector<std::string> many_features;
-        many_features.reserve(6000);
-        for (size_t index = 0; index < 6000; ++index) {
+        constexpr size_t kSingleBarcodeFeatureCount = 60000;
+        many_features.reserve(kSingleBarcodeFeatureCount);
+        for (size_t index = 0; index < kSingleBarcodeFeatureCount; ++index) {
             many_features.push_back("G" + std::to_string(index));
         }
         CountRuntime single_runtime(
             {effective_profile(ProfileId::cr7_v1)}, {"AAAAAAAA"},
             many_features, single_options);
-        auto single_worker = single_runtime.make_worker(6000);
+        auto single_worker = single_runtime.make_worker(8192);
         single_worker.observe_barcode("AAAAAAAA");
         for (const std::string& feature : many_features) {
             single_worker.observe_assignment(
@@ -214,60 +223,16 @@ int main() {
         }
         single_worker.flush();
         const CountRuntimeResult single_result = single_runtime.finalize();
-        expect(single_result.counters.aggregate_spill_runs > 0,
-               "pathological single barcode must exercise secondary spill");
+        expect_memory_only(single_result,
+                           "single-barcode UMI finalization must remain in memory");
         expect(single_result.counts.empty() && single_result.molecules.empty(),
-               "equal cross-gene support remains a tie-discard after secondary spill");
-
-        // The ZSTD checksum follows the final decoded record. Truncating only
-        // that trailer used to leave every declared row readable, so finalization
-        // must explicitly authenticate the completed frame.
-        const auto corrupt_spill = scratch("corrupt-spill");
-        std::filesystem::remove_all(corrupt_spill);
-        CountRuntimeOptions corrupt_options;
-        corrupt_options.memory_budget_bytes = 1ULL << 20;
-        corrupt_options.spill_directory = corrupt_spill;
-        corrupt_options.raw_barcode_length = 8;
-        corrupt_options.raw_umi_length = 8;
-        CountRuntime corrupt_runtime(
-            {effective_profile(ProfileId::cr7_v1)}, whitelist, {"G"},
-            corrupt_options);
-        auto corrupt_worker = corrupt_runtime.make_worker(20000);
-        for (size_t index = 0; index < whitelist.size(); ++index) {
-            corrupt_worker.observe_barcode(whitelist[index]);
-            corrupt_worker.observe_assignment(
-                0, whitelist[index], std::nullopt, "ACGTACGT", {"G"});
-        }
-        corrupt_worker.flush();
-        std::vector<std::filesystem::path> spill_runs;
-        for (const auto& entry : std::filesystem::directory_iterator(corrupt_spill)) {
-            if (entry.is_regular_file()) {
-                spill_runs.push_back(entry.path());
-            }
-        }
-        expect(!spill_runs.empty(), "corruption fixture must create a spill run");
-        const auto corrupt_path = spill_runs.front();
-        const auto corrupt_size = std::filesystem::file_size(corrupt_path);
-        expect(corrupt_size > 1, "corruption fixture spill must be nonempty");
-        std::filesystem::resize_file(corrupt_path, corrupt_size - 1);
-        bool corrupt_rejected = false;
-        try {
-            static_cast<void>(corrupt_runtime.finalize());
-        } catch (const std::runtime_error&) {
-            corrupt_rejected = true;
-        }
-        expect(corrupt_rejected, "truncated aggregate spill must be rejected");
-        std::filesystem::remove_all(corrupt_spill);
+               "equal cross-gene support remains a tie-discard in memory");
 
         // MultiGeneUMI_CR raw guard: a raw UMI sequence that 1MM-collapses into a
         // neighbor inside one gene still counts as that gene's pre-correction
         // support. G2 has more raw ACGT reads than G1, so G1's ACGT molecule is
         // discarded even though G2 carries ACGT only inside its ACGA label.
-        const auto raw_guard_spill = scratch("raw-guard");
-        std::filesystem::remove_all(raw_guard_spill);
         CountRuntimeOptions raw_guard_options;
-        raw_guard_options.memory_budget_bytes = 1ULL << 20;
-        raw_guard_options.spill_directory = raw_guard_spill;
         raw_guard_options.raw_barcode_length = 4;
         raw_guard_options.raw_umi_length = 4;
         CountRuntime raw_guard_runtime({effective_profile(ProfileId::cr7_v1)},
@@ -279,29 +244,103 @@ int main() {
         raw_guard_worker.observe_assignment(0, "AAAA", std::nullopt, "ACGA", {"G2"}, 4);
         raw_guard_worker.flush();
         const CountRuntimeResult raw_guard_result = raw_guard_runtime.finalize();
+        expect_memory_only(raw_guard_result, "raw guard runtime must remain memory-only");
         expect(raw_guard_result.molecules.size() == 1 &&
                    raw_guard_result.molecules[0].feature_catalog_index == 1 &&
                    raw_guard_result.molecules[0].corrected_umi == "ACGA" &&
                    raw_guard_result.molecules[0].supporting_reads == 7,
                "raw guard must see pre-correction reads of a collapsed-away sequence");
-        expect(!std::filesystem::exists(raw_guard_spill),
-               "a runtime-created spill directory is removed after finalize");
 
-        // A caller-created spill directory is left in place.
-        const auto owned_spill = scratch("caller-owned-spill");
-        std::filesystem::remove_all(owned_spill);
-        std::filesystem::create_directories(owned_spill);
-        {
-            CountRuntimeOptions owned_options = raw_guard_options;
-            owned_options.spill_directory = owned_spill;
-            CountRuntime owned_runtime({effective_profile(ProfileId::cr7_v1)}, {"AAAA"},
-                                       {"G"}, owned_options);
-            static_cast<void>(owned_runtime.finalize());
+        // Packing is lossless, not another UMI filter. Variable lengths, leading
+        // A's, 31/32-base boundaries and unusual historically accepted symbols
+        // must retain the preexisting runtime API semantics.
+        CountRuntime packed_runtime({effective_profile(ProfileId::cr7_v1)},
+                                    {"AAAA"}, {"G"}, raw_guard_options);
+        auto packed_worker = packed_runtime.make_worker(2);
+        std::vector<std::string> packed_inputs{
+            "AACGT", "ACGT", "XCGY",
+            "ACGTACGTACGTACGTACGTACGTACGTACG",
+            "ACGTACGTACGTACGTACGTACGTACGTACGT"};
+        for (const auto& umi : packed_inputs) {
+            packed_worker.observe_barcode("AAAA");
+            packed_worker.observe_assignment(0, "AAAA", std::nullopt, umi, {"G"}, 2);
+            packed_worker.observe_assignment(0, "AAAA", std::nullopt, umi, {"G"}, 3);
         }
-        expect(std::filesystem::is_directory(owned_spill),
-               "a caller-created spill directory survives finalize");
-        std::filesystem::remove_all(owned_spill);
+        packed_worker.flush();
+        const auto packed_result = packed_runtime.finalize();
+        std::sort(packed_inputs.begin(), packed_inputs.end());
+        std::vector<std::string> packed_actual;
+        for (const auto& molecule : packed_result.molecules) {
+            packed_actual.push_back(molecule.corrected_umi);
+            expect(molecule.supporting_reads == 5, "packed UMI read support changed");
+        }
+        expect(packed_actual == packed_inputs, "packed UMI boundary/fallback changed identity");
+        // A writer-certified lexical feature catalog is queried in place: the
+        // native route must not reconstruct a reference-wide string map.
+        for (const bool prepared : {false, true}) {
+            auto ready_options = raw_guard_options;
+            ready_options.feature_catalog_prepared = prepared;
+            CountRuntime ready({effective_profile(ProfileId::cr7_v1)},
+                               {"AAAA"}, {"G1", "G2"}, ready_options);
+            auto ready_worker = ready.make_worker();
+            ready_worker.observe_barcode("AAAA");
+            ready_worker.observe_assignment(0, "AAAA", std::nullopt, "ACGT", {"G2"}, 3);
+            bool rejected = false;
+            try { ready_worker.observe_assignment(0, "AAAA", std::nullopt, "TGCA", {"absent"}); }
+            catch (const std::runtime_error&) { rejected = true; }
+            expect(rejected, "unknown feature must fail in both dictionary modes");
+            ready_worker.flush();
+            const auto ready_result = ready.finalize();
+            expect(ready_result.counts.size() == 1 &&
+                   ready_result.counts[0].feature_catalog_index == 1 &&
+                   ready_result.molecules[0].supporting_reads == 3,
+                   "prepared feature dictionary changed count identity");
+        }
 
+        // The native-ID entry point must retain the exact string-adapter
+        // semantics, while never reading a non-singleton ID value.
+        CountRuntime string_runtime({effective_profile(ProfileId::cr7_v1)},
+                                    {"AAAA", "AAAT"}, {"G1", "G2"}, raw_guard_options);
+        CountRuntime numeric_runtime({effective_profile(ProfileId::cr7_v1)},
+                                     {"AAAA", "AAAT"}, {"G1", "G2"}, raw_guard_options);
+        auto string_worker = string_runtime.make_worker();
+        auto numeric_worker = numeric_runtime.make_worker();
+        for (int index = 0; index < 20; ++index) {
+            string_worker.observe_barcode("AAAA");
+            numeric_worker.observe_barcode("AAAA");
+        }
+        expect(numeric_worker.potentially_countable("AAAA", "ACGT") &&
+                   numeric_worker.potentially_countable("AAAG", "ACGT") &&
+                   numeric_worker.potentially_countable("AAAN", "ACGT") &&
+                   !numeric_worker.potentially_countable("AANN", "ACGT") &&
+                   !numeric_worker.potentially_countable("CCCC", "ACGT") &&
+                   !numeric_worker.potentially_countable("AAAA", "ACNT") &&
+                   !numeric_worker.potentially_countable("AAAA", "AAAA"),
+               "numeric prefilter must be pure CB/UMI eligibility");
+        const auto both = [&](std::string_view barcode, std::string_view umi,
+                              const std::vector<std::string>& names,
+                              std::span<const std::uint32_t> ids, std::uint64_t reads,
+                              std::optional<std::string_view> quality = std::nullopt) {
+            string_worker.observe_assignment(0, barcode, quality, umi, names, reads);
+            numeric_worker.observe_assignment_ids(0, barcode, quality, umi, ids, reads);
+        };
+        const std::array<std::uint32_t, 1> id_g1{0}, id_g2{1}, bad_id{2};
+        const std::array<std::uint32_t, 2> ignored_multigene{999, 998};
+        both("AAAA", "ACGT", {"G1"}, id_g1, 2);
+        both("AAAA", "ACGT", {"G2"}, id_g2, 3);
+        both("AAAA", "ACGA", {"G2"}, id_g2, 4);
+        both("AAAG", "TATA", {"G1"}, id_g1, 1, std::string_view("FFFF"));
+        both("AAAA", "ACGT", {"G1", "G2"}, ignored_multigene, 2);
+        bool bad_id_rejected = false;
+        try { numeric_worker.observe_assignment_ids(0, "AAAA", std::nullopt, "TGCA", bad_id, 1); }
+        catch (const std::out_of_range&) { bad_id_rejected = true; }
+        expect(bad_id_rejected, "out-of-catalog singleton numeric feature must fail");
+        string_worker.flush();
+        numeric_worker.flush();
+        const auto string_result = string_runtime.finalize();
+        const auto numeric_result = numeric_runtime.finalize();
+        expect(same_result(string_result, numeric_result),
+               "numeric IDs must preserve strings, priors, 1MM and raw-guard semantics");
         std::cout << "direct_count_runtime_smoke passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

@@ -1660,7 +1660,9 @@ void write_fact_tables(const std::filesystem::path& staging,
 
 std::string compatibility_structural_surface_id(
     const path_identity::PathIdentityLedger& path_ledger) {
-    Sha256Digest digest("pancollapse-compatibility-structural-surface-v1");
+    const bool qualified = !path_ledger.qualified_targets.empty();
+    Sha256Digest digest(qualified ? "pancollapse-compatibility-structural-surface-source-gene-v1"
+                                 : "pancollapse-compatibility-structural-surface-v1");
     digest.append_u64(path_ledger.rows_by_path.size());
     for (const auto& [path_name, row] : path_ledger.rows_by_path) {
         const auto& annotation = row.annotation;
@@ -1674,6 +1676,30 @@ std::string compatibility_structural_surface_id(
         digest.append_string(annotation.strand);
         digest.append_string(annotation.start);
         digest.append_string(annotation.end);
+        if (qualified) {
+            const auto split = path_ledger.qualified_targets.find(annotation.canonical_transcript);
+            digest.append_string(split == path_ledger.qualified_targets.end()
+                ? std::string_view{} : path_ledger.normalized_source_genes.at(annotation.source_gene).view());
+        }
+    }
+    return "sha256:" + digest.finish();
+}
+
+std::string qualified_transcript_mapping_id(const path_identity::PathIdentityLedger& ledger) {
+    Sha256Digest digest("pancollapse-qualified-transcript-mapping-v1");
+    digest.append_u64(ledger.qualified_target_count());
+    for (const auto& [canonical, targets] : ledger.qualified_targets) {
+        for (const auto& [source, target] : targets) {
+            digest.append_string(canonical);
+            digest.append_string(source);
+            digest.append_string(target.gene_id);
+            digest.append_string(target.target);
+        }
+    }
+    digest.append_u64(ledger.escaped_targets.size());
+    for (const auto& [canonical, escaped] : ledger.escaped_targets) {
+        digest.append_string(canonical);
+        digest.append_string(escaped);
     }
     return "sha256:" + digest.finish();
 }

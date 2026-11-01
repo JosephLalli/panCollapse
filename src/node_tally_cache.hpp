@@ -2,10 +2,12 @@
 
 #include "pathtally.hpp"
 
+#include <memory>
+
 namespace pathtally {
 
-// Worker-owned and cleared between read groups. Metadata points into the immutable,
-// separately allocated shared node ledger, never into either flat hash table.
+// Worker-owned and cleared between read groups. Each resolved entry leases its
+// immutable node metadata even if the shared cache evicts that key concurrently.
 template<class Metadata>
 class ReadNodeTallyCache {
 public:
@@ -30,7 +32,7 @@ public:
     template<class Lookup>
     const Metadata& resolve(int64_t node_id, const Lookup& lookup) {
         Entry& entry = get(node_id);
-        if (entry.metadata == nullptr) entry.metadata = &lookup(node_id);
+        if (!entry.metadata) entry.metadata = lookup(node_id);
         return *entry.metadata;
     }
 
@@ -41,7 +43,7 @@ public:
         tallies.clear();
         for (const int64_t node_id : first_seen_) {
             Entry& entry = nodes_.at(node_id);
-            if (entry.metadata == nullptr) entry.metadata = &lookup(node_id);
+            if (!entry.metadata) entry.metadata = lookup(node_id);
             const HstTally& total = entry.totals;
             for (const auto& reference : entry.metadata->ref_paths) {
                 HstTally& tally = tallies[reference.path_handle];
@@ -64,7 +66,9 @@ public:
 private:
     struct Entry {
         HstTally totals;
-        const Metadata* metadata = nullptr;
+        // The shared cache may evict this value while the read is still using
+        // it. Retain one worker-local lease until clear() starts the next read.
+        std::shared_ptr<const Metadata> metadata;
     };
 
     Entry& get(int64_t node_id) {

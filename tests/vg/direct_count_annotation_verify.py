@@ -42,7 +42,7 @@ def main() -> None:
         common = [
             str(binary), "count", "--barcode-whitelist",
             str(fixture / "count_whitelist.txt"), "--cr7", "--pansc-strict-v1",
-            "--threads", "1", "--count-memory-budget", "1MiB",
+            "--threads", "1",
         ]
         graph = ["--gamp", str(work / "reads.gamp"), "--xg", str(work / "graph.xg")]
         authority = [
@@ -117,7 +117,8 @@ def main() -> None:
             ("no-ledger", absent_graph + authority[:4],
              "requires --annotation-reference and --path-identity-ledger"),
             ("bundle-ledger", absent_graph + bundle + authority[4:], "accepted only with --annotation"),
-            ("replay", ["--compatibility-in", str(root / "absent-compatibility")] + authority,
+            ("replay", ["--compatibility-in", str(root / "absent-compatibility"),
+             "--max-alignments-per-read", "0"] + authority,
              "--compatibility-in replays against a --count-bundle"),
         ]
         for name, arguments, diagnostic in cases:

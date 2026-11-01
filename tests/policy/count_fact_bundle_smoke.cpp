@@ -67,6 +67,7 @@ bool same_candidate(const AssignmentCandidate& left, const AssignmentCandidate& 
 }  // namespace
 
 int main() {
+    static_assert(ParentFactTable::compact_record_bytes() == 24);
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
     const std::filesystem::path root =
         std::filesystem::temp_directory_path() /
@@ -201,7 +202,7 @@ int main() {
         }
         const path_identity::PathIdentityLedger path_ledger = path_identity::read(
             bundle.files.at("path_identity_ledger").path, true);
-        const CountFactCatalog catalog = CountFactCatalog::load(bundle, path_ledger);
+        CountFactCatalog catalog = CountFactCatalog::load(bundle, path_ledger);
         const EffectiveProfile cr7_profile = effective_profile(ProfileId::cr7_v1);
         const EffectiveProfile pansc_profile =
             effective_profile(ProfileId::pansc_strict_v1);
@@ -209,6 +210,27 @@ int main() {
             ProfileId::cr7_v1,
             {parse_profile_override(
                 "cr7-v1:membership-class=conjunctive-2024-a")});
+        if (catalog.parents().compact_record_bytes() != 24 ||
+            catalog.parents().category_reference_count() != catalog.parents().size() ||
+            catalog.parents().category_dictionary_size() >= catalog.parents().size()) {
+            throw std::runtime_error("Parent facts are not compact shared-dictionary rows");
+        }
+        for (std::size_t rank = 0; rank < catalog.parents().size(); ++rank) {
+            const ParentFact parent = catalog.parent_by_rank(rank);
+            if (catalog.parent_key(rank) != parent.unique_parent ||
+                (rank != 0 && !(catalog.parent_key(rank - 1).view() <
+                                catalog.parent_key(rank).view()))) {
+                throw std::runtime_error("Parent rank no longer names lexical catalog row");
+            }
+            const AssignmentCandidate from_key = catalog.candidate(
+                cr7_profile, catalog.parent_key(rank), -11, EvidenceTier::exon,
+                EvidenceStrand::forward, 3);
+            const AssignmentCandidate from_rank = catalog.candidate_by_rank(
+                cr7_profile, rank, -11, EvidenceTier::exon, EvidenceStrand::forward, 3);
+            if (!same_candidate(from_key, from_rank)) {
+                throw std::runtime_error("ranked Parent candidate changed assignment fields");
+            }
+        }
         const AssignmentCandidate candidate = catalog.candidate(
             ProfileId::cr7_v1, "exon-parent", 100, EvidenceTier::exon,
             EvidenceStrand::forward);
@@ -252,7 +274,7 @@ int main() {
                 "novel-copy catalog policy differs from frozen lump/separate semantics");
         }
 
-        // Reusing an immutable ParentFact must preserve the string lookup API exactly,
+        // A materialized ParentFact must preserve the string lookup API exactly,
         // including alias equivalence, every dynamic field, and each novel-paralog policy.
         for (const EffectiveProfile& profile :
              std::vector<EffectiveProfile>{cr7_profile, pansc_profile, separate_profile,
@@ -328,8 +350,6 @@ int main() {
         }
 
         CountRuntimeOptions runtime_options;
-        runtime_options.memory_budget_bytes = 1ULL << 20;
-        runtime_options.spill_directory = root / "spill";
         runtime_options.raw_barcode_length = 4;
         runtime_options.raw_umi_length = 4;
         CountRuntime runtime({effective_profile(ProfileId::cr7_v1)}, {"ACGT"},
@@ -346,8 +366,41 @@ int main() {
         output_options.fact_bundle_content_id = bundle.content_id;
         output_options.fact_authority = "count-bundle";
         output_options.threads = 2;
-        output_options.memory_budget_bytes = runtime_options.memory_budget_bytes;
         output_options.write_10x_mex = true;
+        const std::string content_id_before_release = catalog.content_id();
+        const std::string authority_before_release = catalog.authority();
+        const GeneFact gene_before_release = catalog.gene("ENSG000001");
+        const ProfileGeneFact profile_before_release =
+            catalog.profile_gene(ProfileId::cr7_v1, "ENSG000001");
+        catalog.release_parent_facts();
+        const GeneFact& gene_after_release = catalog.gene("ENSG000001");
+        const ProfileGeneFact& profile_after_release =
+            catalog.profile_gene(ProfileId::cr7_v1, "ENSG000001");
+        if (catalog.parents().size() != 0 ||
+            catalog.content_id() != content_id_before_release ||
+            catalog.authority() != authority_before_release ||
+            gene_after_release.count_gene != gene_before_release.count_gene ||
+            gene_after_release.gene_types != gene_before_release.gene_types ||
+            gene_after_release.gene_name != gene_before_release.gene_name ||
+            profile_after_release.profile_id != profile_before_release.profile_id ||
+            profile_after_release.count_gene != profile_before_release.count_gene ||
+            profile_after_release.competition != profile_before_release.competition ||
+            profile_after_release.competition_reason != profile_before_release.competition_reason ||
+            profile_after_release.equivalence_gene != profile_before_release.equivalence_gene ||
+            profile_after_release.source_annotation != profile_before_release.source_annotation ||
+            profile_after_release.nested_host != profile_before_release.nested_host) {
+            throw std::runtime_error("releasing Parent facts changed retained catalog facts");
+        }
+        bool released_parent_rejected = false;
+        try {
+            static_cast<void>(catalog.candidate_by_rank(
+                cr7_profile, 0, 1, EvidenceTier::exon, EvidenceStrand::forward));
+        } catch (const std::out_of_range&) {
+            released_parent_rejected = true;
+        }
+        if (!released_parent_rejected) {
+            throw std::runtime_error("released Parent facts remained accessible");
+        }
         const CountOutputReceipt receipt =
             write_count_outputs(runtime, count_result, catalog, output_options);
         if (receipt.tables.size() != 4 ||

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,10 +15,11 @@
 namespace pancollapse::direct_count {
 
 struct CountRuntimeOptions {
-    std::uint64_t memory_budget_bytes = 128ULL << 30;
-    std::filesystem::path spill_directory;
     size_t raw_barcode_length = 16;
     size_t raw_umi_length = 12;
+    // Certified lexical dictionary from the native index: use it directly,
+    // without sorting or rebuilding a reference-wide string hash table.
+    bool feature_catalog_prepared = false;
 };
 
 struct CountRuntimeCounters {
@@ -31,14 +33,17 @@ struct CountRuntimeCounters {
     std::uint64_t off_whitelist_uncorrectable_dropped = 0;
     std::uint64_t barcode_correction_succeeded = 0;
     std::uint64_t barcode_correction_failed = 0;
+    // Retained in the public result schema for compatibility. The memory-only
+    // runtime never writes aggregate runs, so these always remain zero.
     std::uint64_t aggregate_spill_runs = 0;
     std::uint64_t aggregate_spill_rows = 0;
     std::uint64_t aggregate_spill_bytes = 0;
 };
 
-// The barcode prior, profile-zero-owned barcode-correction counters, and spill
-// counters are pass-global. Every profile-sensitive counter below is retained
-// separately so a joint pass can be compared exactly with single-profile runs.
+// The barcode prior, profile-zero-owned barcode-correction counters, and legacy
+// compatibility counters are pass-global. Every profile-sensitive counter below
+// is retained separately so a joint pass can be compared exactly with
+// single-profile runs.
 struct ProfileCountRuntimeCounters {
     std::uint64_t assigned_observations = 0;
     std::uint64_t direct_multigene_dropped = 0;
@@ -99,6 +104,19 @@ class CountWorker {
                             const std::vector<std::string>& genes,
                             std::uint64_t read_count = 1,
                             bool reaches_umi_filter = true);
+    // Native assignment path: singleton feature IDs are already resolved by
+    // the prepared count index and never require feature-name materialization.
+    void observe_assignment_ids(std::uint32_t profile_index,
+                                std::string_view raw_barcode,
+                                std::optional<std::string_view> barcode_quality,
+                                std::string_view umi,
+                                std::span<const std::uint32_t> gene_ids,
+                                std::uint64_t read_count = 1,
+                                bool reaches_umi_filter = true);
+    // This is deliberately counter-free: it is only a CB/UMI prefilter, not
+    // barcode posterior correction (which depends on EOF priors).
+    bool potentially_countable(std::string_view raw_barcode,
+                               std::string_view umi) const;
     void flush();
 
   private:
@@ -138,8 +156,20 @@ class CountRuntime {
     std::optional<CountWorker::Pending> prepare_assignment(
         std::uint32_t profile_index, std::string_view raw_barcode,
         std::optional<std::string_view> barcode_quality, std::string_view umi,
+        std::uint8_t disposition, std::optional<std::uint32_t> feature_index,
+        std::uint64_t read_count);
+    std::optional<CountWorker::Pending> prepare_string_assignment(
+        std::uint32_t profile_index, std::string_view raw_barcode,
+        std::optional<std::string_view> barcode_quality, std::string_view umi,
         const std::vector<std::string>& genes, std::uint64_t read_count,
         bool reaches_umi_filter);
+    std::optional<CountWorker::Pending> prepare_id_assignment(
+        std::uint32_t profile_index, std::string_view raw_barcode,
+        std::optional<std::string_view> barcode_quality, std::string_view umi,
+        std::span<const std::uint32_t> gene_ids, std::uint64_t read_count,
+        bool reaches_umi_filter);
+    bool potentially_countable(std::string_view raw_barcode,
+                               std::string_view umi) const;
     void merge_worker_batch(std::vector<CountWorker::Pending>& pending);
     std::unique_ptr<Impl> impl_;
 };

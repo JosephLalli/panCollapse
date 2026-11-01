@@ -22,7 +22,6 @@ int main() {
     std::filesystem::create_directories(root);
     try {
         CountRuntimeOptions runtime_options;
-        runtime_options.spill_directory = root / "spill";
         runtime_options.raw_barcode_length = 4;
         runtime_options.raw_umi_length = 4;
         CountRuntime runtime({effective_profile(ProfileId::cr7_v1),

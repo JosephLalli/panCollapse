@@ -6,12 +6,32 @@ prescribing the code architecture. The GAMP-to-RAD algorithm is defined by D048 
 
 ## Native count interface (v0.10)
 
+**Current D110 interface:** `count` accepts name-grouped GAMP, a complete
+direct-facts `--annotation-index`, a barcode whitelist, profile selectors and
+an output directory. It does not accept XG/GBWT/RI inputs or earlier annotation
+catalogs/bindings as runtime substitutes. Compile those once with `index` using
+the [index guide](annotation-index.md). There is no runtime reconstruction
+fallback. Parquet and optional `--10x-mex` are the active count sinks; RAD/BAM
+remain on deprecated `convert`, and count replay/per-read export are retired.
+Only the assignment cache remains configurable; obsolete reference-cache
+limits fail rather than being ignored. Earlier preparation/replay contracts
+below describe superseded interfaces, not alternate active count routes.
+
 `panCollapse count` requires GAMP, a graph input, a barcode whitelist, at least one frozen profile, and
 exactly one count-fact authority. The command refuses external legacy identity/policy, BAM,
 debug, compact-BAM, and allowlist options, and the convert-only policy switches `--strand`,
 `--count-mode`, `--bam-multigene`, and `--no-ex50-score-window`. Its default output is an
 atomic Parquet dataset and manifest; `count` has no BAM sink and no production Python
 dependency. `--10x-mex` and `--rad-out` add compatibility outputs.
+
+Count aggregation, barcode correction and UMI reduction are memory-only (D100).
+There is no aggregate, corrected-observation or single-barcode disk fallback,
+and `--count-memory-budget` is rejected with a migration error. An external
+whole-process memory limit covers reference initialization and counting; RAM
+exhaustion fails rather than changing storage mode. `manifest.json` records
+`count_storage: "memory-only"`; legacy aggregate-spill counters remain zero for
+summary compatibility. This does not prohibit compressed final outputs or
+explicitly requested diagnostic staging.
 
 `--read-assignments-out <relative/path.parquet>` optionally adds ordered per-read diagnostic
 Parquet. The path must be normalized, relative to `--out-dir`, end in `.parquet`, and not
@@ -219,12 +239,22 @@ remapping. Ambiguous selected names, missing ledger paths and incorrect path len
 Unselected extra GBWT paths do not contribute evidence. Every GBWT node must exist in the node
 graph; the tool cannot infer which sequence was originally assigned that ID during mapping.
 
-Standard FastLocate is constructed in memory from the loaded GBWT. Occurrence-level queries
+Standard FastLocate is constructed in memory from the loaded GBWT unless native count
+explicitly supplies `--r-index FILE --r-index-manifest FILE` with XG+GBWT. The strict
+`pancollapse-r-index-binding-v1` sidecar contains exactly the schema, GBWT SHA-256/size,
+and RI SHA-256/size fields. Both identities are checked in their load streams by default.
+Explicit `--trust-r-index-manifest` uses the recorded RI digest without recomputing it,
+while preserving GBWT verification, actual RI-size checks, native framing/structure checks
+and a sanity query. Its manifest input is marked `trusted-preparation-receipt` and
+`sha256_verified:false`. This controlled-local-file mode cannot detect same-size RI
+corruption. Invalid input never falls back to construction. RI requires native count with
+XG+GBWT; GBZ, replay and convert reject the option. Occurrence-level queries
 preserve repeated visits, strand and step offsets. Exact-overlap modes, including native count,
-add in-memory base-position prefixes for selected paths, using checked 32-bit storage with a
-64-bit fallback. Membership-only modes omit prefixes; a request for unavailable positions fails
-explicitly. These structures are discarded at exit. No external `.ri` flag or panCollapse-specific
-persistent index is introduced.
+retain in-memory base-position checkpoints for selected paths at step zero, every 64 steps, and
+the terminal step, using checked 32-bit storage with a 64-bit fallback. At most 63 LF steps
+recover an exact coordinate. Membership-only modes omit coordinate storage; a request for
+unavailable positions fails explicitly. Position checkpoints are discarded at exit. RI is
+not auto-detected and does not persist selected-path checkpoints or exact model geometry.
 
 Count manifests and compatibility provenance truthfully identify `xg`, `gbz`, or `xg` plus
 `gbwt`; graph identity never enters scientific tables or RAD. Scientific equivalence uses the
@@ -253,6 +283,16 @@ identity. A canonical transcript maps to one gene. Exon rows self-reference
 `exon_unique_parent`; each body row crosslinks to an existing exon Parent with the same canonical
 transcript and gene. For `source_transcript=N/A`, fallback is explicit and the canonical identity
 is the exon Parent (`unique_parent` on exon rows, `exon_unique_parent` on body rows).
+
+For native `count` and replay only, D097 allows a canonical label associated with
+different explicit normalized source-gene IDs to form separate internal targets.
+Each `(canonical transcript, normalized source gene)` pair must map to one raw
+gene ID. These labels and the input files are not rewritten; optional RAD uses
+unique length-framed target keys. The manifest records `transcript_target_scheme`,
+`qualified_transcript_targets`, and `transcript_target_mapping_id`. Split replay
+surfaces hash the source-gene partition, while unsplit v1 hashes stay unchanged.
+Legacy t2g assertions are rejected explicitly for split targets. `convert` keeps
+the original single-gene canonical rule.
 
 Every `vg_path_name` must exist exactly in the XG and have the recorded `vg_path_length`; extra
 non-ledger genomic XG paths are allowed. Names are opaque, so `_H<n>`/`_R<n>` are never stripped.
@@ -406,3 +446,23 @@ GAMP input streams from a file or from stdin via `--gamp -` (D049), so `vg mpmap
 panCollapse convert --gamp - ...` works with the same grouping/recurrence validation. A
 stdout RAD mode is not in the active CLI, because the seek-and-backpatch writer needs a
 seekable output file.
+
+## Compiled annotation identities and facts (D099/D103)
+
+`panCollapse index --annotation A --annotation-reference R --path-identity-ledger L
+--out annotation.pci` produces `pancollapse-annotation-index-v3` (`PCANIDX3`) with
+both profiles. GFF3 is the default; select GTF using `--annotation-format gtf` /
+`--annotation-reference-format gtf`. Inputs may be plain/gzip/BGZF. GTF requires
+explicit gene/transcript features and exact ledger Parent IDs.
+
+`count --annotation-index annotation.pci` is exclusive
+with `--annotation` and `--count-bundle`; replay is unsupported on this route.
+Source annotations and the TSV ledger are not needed after indexing. Original source fact identity
+is retained; manifests add `annotation_index_derivation_id` and artifact identity.
+Integrity, source/ledger binding and numeric-reference checks precede GAMP. Independent
+reference, XG and GBWT/RI loads overlap at three or more threads, then cross-input validation
+runs before evidence processing. The binary includes compiled ledger identities, but excludes
+FastLocate, positions and geometry. Legacy PCANIDX2 still requires its external TSV; upgrade
+once with `index --from-annotation-index old-v2.pci --path-identity-ledger L --out reference.pci`.
+Embedded-ledger receipts retain the original TSV identity without reopening it. See
+[annotation indexing](annotation-index.md) for commands and limits.

@@ -8,14 +8,15 @@
 namespace pancollapse::direct_count {
 
 // All varying arguments to CountFactCatalog::candidate. Use only within one
-// immutable catalog/profile context, with complete provenance. Parent facts
-// must outlive the synchronous lookup/miss builder; pointer addresses are not keys.
+// immutable catalog/profile context, with complete provenance. Lexical Parent
+// identity is the cache key; numeric rank only locates its compact policy row.
 struct AssignmentCandidateInput {
-    const ParentFact* parent;
+    CompactIdentityText unique_parent;
     std::int64_t score;
     EvidenceTier tier;
     EvidenceStrand strand;
     std::uint32_t body_sample_support = 0;
+    std::uint32_t parent_rank = 0;
 };
 
 // Digest supplies length-framed string(), fixed-width integer(), and byte().
@@ -28,7 +29,7 @@ void digest_assignment_inputs(
     rows.reserve(inputs.size());
     for (const auto& input : inputs) rows.push_back(&input);
     const auto key = [](const AssignmentCandidateInput& input) {
-        return std::tuple(std::string_view(input.parent->unique_parent), input.score, input.tier,
+        return std::tuple(std::string_view(input.unique_parent), input.score, input.tier,
                           input.strand, input.body_sample_support);
     };
     std::sort(rows.begin(), rows.end(), [&](const auto* left, const auto* right) {
@@ -36,7 +37,7 @@ void digest_assignment_inputs(
     });
     digest.integer(rows.size());
     for (const auto* input : rows) {
-        digest.string(input->parent->unique_parent);
+        digest.string(input->unique_parent);
         digest.integer(static_cast<std::uint64_t>(input->score));
         digest.byte(static_cast<std::uint8_t>(input->tier));
         digest.byte(static_cast<std::uint8_t>(input->strand));

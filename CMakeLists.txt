@@ -75,6 +75,7 @@ add_library(panCollapse_direct_count STATIC
   src/direct_count_assignment.cpp
   src/direct_count_diagnostics.cpp
   src/direct_count_facts.cpp
+  src/annotation_fact_index.cpp
   src/direct_count_output.cpp
   src/direct_count_runtime.cpp
 )

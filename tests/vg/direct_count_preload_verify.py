@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix="preload-", dir=fixture) as temporary:
         program, "count", "--preload-only", "--gamp", str(unread),
         "--xg", str(fixture / "graph.xg"), "--count-bundle", bundle,
         "--barcode-whitelist", str(source / "count_whitelist.txt"),
-        "--cr7", "--pansc-strict-v1", "--count-memory-budget", "1MiB",
+        "--cr7", "--pansc-strict-v1",
         "--out-dir", str(output),
     ]
     completed = subprocess.run(arguments, capture_output=True, text=True, timeout=30)
@@ -34,6 +34,8 @@ with tempfile.TemporaryDirectory(prefix="preload-", dir=fixture) as temporary:
     receipt = json.loads(completed.stdout)
     assert receipt["schema"] == "pancollapse-count-preload-v1", receipt
     assert receipt["status"] == "preload_complete", receipt
+    assert receipt["count_storage"] == "memory-only", receipt
+    assert "count_memory_budget_bytes" not in receipt, receipt
     assert receipt["input_read_groups"] == 0, receipt
     assert receipt["path_rows"] > 0 and receipt["parents"] > 0, receipt
     assert receipt["exact_models"] > 0 and receipt["whitelist_barcodes"] > 0, receipt
@@ -61,8 +63,14 @@ with tempfile.TemporaryDirectory(prefix="preload-", dir=fixture) as temporary:
         assert not output.exists() and not list(root.glob(".counts.staging-*"))
 
     invalid = list(arguments)
-    invalid.extend(["--compatibility-in", str(root / "missing-compatibility")])
+    invalid.extend(["--compatibility-in", str(root / "missing-compatibility"),
+                    "--max-alignments-per-read", "0"])
     completed = subprocess.run(invalid, capture_output=True, text=True, timeout=30)
     assert completed.returncode != 0 and "--preload-only" in completed.stderr
 
-print("direct count preload verified: unopened GAMP, production validation, no publication")
+    invalid = list(arguments) + ["--count-memory-budget", "1MiB"]
+    completed = subprocess.run(invalid, capture_output=True, text=True, timeout=30)
+    assert completed.returncode != 0 and "memory-only" in completed.stderr
+    assert not output.exists() and not list(root.glob(".counts.staging-*"))
+
+print("direct count preload verified: unopened GAMP, production validation, memory-only, no publication")

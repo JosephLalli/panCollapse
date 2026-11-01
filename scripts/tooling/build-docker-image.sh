@@ -158,7 +158,7 @@ docker run --rm \
   --t2g /source-fixture/count_t2g.tsv \
   --body-t2g /source-fixture/count_body_t2g.tsv \
   --cr7 --pansc-strict-v1 \
-  --threads 2 --count-memory-budget 1MiB \
+  --threads 2 \
   --10x-mex --rad-out \
   --read-assignments-out diagnostics/read_assignments.parquet \
   --out-dir /smoke/counts

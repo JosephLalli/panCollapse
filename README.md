@@ -1,17 +1,88 @@
 # panCollapse
 
-`panCollapse` converts pangenome single-cell RNA-seq alignments from `vg mpmap` (GAMP,
-multipath format) into mapper-style, uncollated RAD records that
-[alevin-fry](https://github.com/COMBINE-lab/alevin-fry) quantifies into a cell-by-gene matrix.
+`panCollapse` counts genes directly from pangenome single-cell RNA-seq alignments
+produced by `vg mpmap` (GAMP, multipath format). Run `panCollapse index` once to
+prepare reference annotations, then `panCollapse count` for each sample. Native
+counting writes compact Parquet counts and molecule tables, with optional 10x MEX
+output; it needs no intermediate BAM.
 
-Version 0.10 also provides native `panCollapse count`: a count-fact-bundle-authoritative
-path that emits a verified Parquet count dataset by default. It can additionally emit 10x
-MEX and RAD with explicit flags. Legacy `panCollapse convert` remains the independent
-GAMP-to-RAD/BAM evidence interface.
+`panCollapse convert` is retained as a third, **deprecated** command for BAM
+conversion. It is not part of the native counting workflow.
 
 ## Current work
 
-**CURRENT: GBZ and graph-only XG+GBWT inputs are implemented.** Both `convert` and `count`
+**CURRENT: [PROGRESS.md](PROGRESS.md) records the direct-facts index change
+(D110).** The compiler stores numeric node memberships, ready model metadata
+and directional splice facts in one graph-specific object. Counting reads these
+facts directly, without loading XG/GBWT/RI or rebuilding reference structures.
+The index contains no graph sequence, path-step arrays or reference positions.
+D105 removes whole-read ordered-path containment; D107 excludes known wrong-way
+splice candidates. All 174 tests pass, including direct-fact oracle and frozen
+count-fixture parity checks. Full-reference compilation and real-read parity are
+in progress; whole-genome performance remains unproven. Earlier controls and the
+stopped PCANCOUNT2 attempt are preserved.
+
+### Required native-count inputs
+
+Direct counting requires `--gamp`, a complete direct-facts `--annotation-index`,
+`--barcode-whitelist`, one or more profile selectors, and `--out-dir`.
+XG, transcript GBWT and its existing RI are **compiler inputs only**. No GFF,
+ledger TSV, path lookup or splice discovery runs during counting. Build the
+object once using the [annotation-index guide](docs/annotation-index.md).
+Earlier PCANBND1 objects must be compiled into direct facts before counting.
+Direct counting supports
+Parquet and optional `--10x-mex`. BAM/RAD conversion is a separate deprecated
+command; compatibility replay and per-read diagnostics are retired. GCSA/LCP and distance are mapper
+inputs, not count inputs.
+
+The assignment-cache ceiling scales from `--memory-budget SIZE` (or detected
+available memory) and can be overridden with `--cache-limit assignment=SIZE`.
+Node/edge/splice reference caches no longer exist on the count path. The cache
+allocates on demand and does not spill. See [memory targeting](docs/annotation-index.md#choose-a-memory-target)
+for the planning reserve, defaults and hard-limit distinction.
+
+### Limit expensive reads
+
+`panCollapse count` defaults to `--max-alignments-per-read 64000000`. It counts
+complete alignment alternatives represented by the GAMP, including duplicates,
+summed across all records for each read. Reads with more alternatives are skipped
+before graph/annotation lookup; reads exactly at the limit are retained. This is
+an input-complexity filter, not a gene-assignment rule. It does not enumerate or
+score the alternatives, and skipped reads still contribute to the barcode prior.
+
+Set a different nonnegative integer with `--max-alignments-per-read N`, or use
+`0` to disable the filter. The manifest records the effective limit and
+`high_complexity_read_groups`; the summary also reports the per-profile
+`unassigned_high_complexity` terminal. The first-million-read fixture drops
+982 reads (0.0982%) at the default; this is not a whole-genome accuracy result.
+
+### Score complete alignments in node space
+
+Counting uses the node-score scorer. It computes complete-alignment maxima
+directly over each GAMP DAG without enumerating complete routes. At merges it
+keeps separate best scores for distinct exon coverage, strand and directed-splice
+eligibility summaries; models with identical local behavior share computation.
+It never sums mutually exclusive alignments or requires an ordered annotated
+reference walk. Known wrong-direction splices veto their transcript candidates.
+
+Candidates compete in six exon-fraction/strand pools: fully exonic, at least
+50% exonic, and below 50% exonic with gene-body support, on each strand. Each pool
+retains transcript maxima within five flat VG score points of its best. Ranking
+is sense E, antisense E, sense P, antisense P, sense B, antisense B before the
+selected downstream counting policy. The manifest records
+`assignment_algorithm: "node-score-v1"` and its five-point window.
+
+Run `index` to compile annotations, bind their numeric metadata and prepare the
+complete direct facts before counting. `count` accepts only the resulting
+direct-facts index; it does not parse GFF/ledger text, query GBWT or build
+expanded path-step indexes. Raw-annotation counting, expanded PCANCOUNT indexes,
+compatibility capture/replay and the old assignment selector are retired.
+The node-score algorithm is not claimed equivalent to legacy assignments.
+BAM/RAD conversion remains available through deprecated `convert`.
+
+## Historical current-work records
+
+**GBZ and graph-only XG+GBWT inputs are implemented.** Both `convert` and `count`
 accept the new graph flags through the same projection code. XG remains the default. All
 projection fixtures pass in all three modes, and 382 scientific fixture products match per
 alternative. All three modes produce identical scientific outputs on the named 100,000-read
@@ -21,8 +92,6 @@ identical. See the measurements and limits in the
 [PROGRESS.md](PROGRESS.md), and [D094](docs/decisions.md). The
 [measured design](docs/research/gbz-gbwt-count-inputs-design-20260926.md) records chr21 graph
 footprints and the explicitly conditional chr2 resource estimate.
-
-## Historical current-work records
 
 **The full real input has a throughput cliff, and the current frontier is decoder cost after it.**
 The full-input native count is complete: 25,755,749 reads and 124,261,698 alignments in a
@@ -301,11 +370,12 @@ panCollapse count (--gamp reads.gamp GRAPH_INPUT \
                    [--compatibility-out compatibility] | \
                    --compatibility-in compatibility) \
                   (--count-bundle bundle | \
+                   --annotation-index annotation.pci --path-identity-ledger ledger.tsv | \
                    --annotation corrected.gff3 --annotation-reference reference.gff3 \
                    --path-identity-ledger ledger.tsv) \
                   --barcode-whitelist barcodes.txt PROFILE_SELECTOR [PROFILE_SELECTOR ...] \
                   --out-dir counts [--t2g transcripts.tsv] [--body-t2g bodies.tsv] \
-                  [--threads N] [--count-memory-budget 128GiB] \
+                  [--threads N] \
                   [--10x-mex] [--rad-out] \
                   [--read-assignments-out diagnostics/read_assignments.parquet]
 
@@ -313,11 +383,12 @@ GRAPH_INPUT := --xg transcripts.xg | --gbz transcripts.gbz | --xg graph_only.xg 
 PROFILE_SELECTOR := --cr7 | --pansc-strict-v1 | --profile ID
 ```
 
-`count` takes annotation identity and policy from exactly one fact authority: either its
+`count` takes annotation identity and policy from exactly one fact authority: its
 checksum-verified `panSC-count-facts-v1` bundle (`--count-bundle`), or a corrected GFF3 carrying
 the correction chain's classifier tags together with its reference GFF3 and the path-identity
-ledger (`--annotation`, `--annotation-reference`, `--path-identity-ledger`). Supplying both, or
-neither, is a usage error, and `--path-identity-ledger` is accepted only on the annotation route.
+ledger (`--annotation`, `--annotation-reference`, `--path-identity-ledger`), or compiled
+annotation facts (`--annotation-index`, with the same `--path-identity-ledger`). Select exactly
+one route. See [building an annotation index](docs/annotation-index.md).
 Either annotation file may be gzipped. The annotation route is recorded as D088 in
 [`docs/decisions.md`](docs/decisions.md). The corrected 1M comparison establishes CR7 parity;
 panSC-strict differs on nested-host/protection facts, with strict parity no longer an
@@ -328,6 +399,40 @@ evidence options. At least one unique profile selector is required. The
 `pansc-strict-v1`; they may be combined in one GAMP pass or mixed with repeatable
 `--profile ID`. Optional `--t2g` and `--body-t2g` inputs are compatibility assertions
 against the fact authority, not assignment inputs.
+
+From the repository root, with `build/src/panCollapse` built, compile facts once:
+
+```bash
+build/src/panCollapse index \
+  --annotation corrected.gff3.gz --annotation-reference reference.gff3.gz \
+  --path-identity-ledger ledger.tsv --out annotation.pci
+
+build/src/panCollapse count \
+  --gamp reads.gamp --xg graph.xg --gbwt transcripts.gbwt \
+  --annotation-index annotation.pci --path-identity-ledger ledger.tsv \
+  --barcode-whitelist barcodes.txt --cr7 --pansc-strict-v1 --out-dir counts
+```
+
+This skips annotation parsing and fact derivation, but does **not** yet persist the ledger,
+graph lookup structures, path positions, or exon/splice geometry. Whole-genome memory fit
+is unproven. Annotation inputs may be plain or gzipped; explicitly select GTF with
+`--annotation-format gtf` and/or `--annotation-reference-format gtf` during indexing.
+GTF requires explicit gene/transcript features with IDs matching the ledger; exon-only
+GTF is not supported. Legacy `convert` is unchanged.
+
+Count aggregation, barcode correction and UMI reduction are memory-only. No temporary
+aggregate spill/merge files are written. `--count-memory-budget` has been removed;
+use the whole-process/container memory limit. If memory is exhausted the run fails,
+without publishing partial counts. This does not remove normal compressed count output.
+
+Reference loading retains compact lexical ledger tables and numeric Parent policy records.
+GBWT base positions use exact 64-step checkpoints rather than a coordinate for every step;
+stderr reports selected steps, checkpoint counts and coordinate-buffer bytes. Native counting
+uses bounded, discardable node/model lookup caches (1 GiB/256 MiB of accounted resident data),
+while active reads may retain additional leased values beyond those bounds. Reference state is released
+before UMI finalization. These are storage changes, not annotation filters or assignment rules;
+existing `annotation.pci` files remain compatible. Whole-genome peak RAM and throughput are
+not yet qualified for this implementation.
 
 `--compatibility-out` additionally publishes a checksum-bound, non-BAM Parquet
 bundle containing the complete ordered read-group denominator and its policy-neutral
@@ -409,7 +514,8 @@ output schemas are in [`docs/input-output-contract.md`](docs/input-output-contra
   on a bounded representative slice, then increase only while measured throughput improves.
   For `convert`, supported requested thread counts produce byte-identical persisted artifacts.
   For native `count`, canonical rows and logical hashes are identical; operational manifest and
-  summary fields still report the requested/active threads, timings, cache, and spill behavior.
+  summary fields still report the requested/active threads, timings and cache behavior;
+  legacy aggregate-spill counters are always zero in the memory-only counter.
   Compatibility production uses this worker count and is byte-deterministic across supported
   counts. Compatibility replay currently scans with one active worker and reports that fact on
   stderr and in its count manifest; graph traversal has already been eliminated from replay.
