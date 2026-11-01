@@ -1,6 +1,6 @@
 # Progress
 
-## CURRENT: D111 measured optimization phase; R7 validated baseline preserved (2026-11-01)
+## CURRENT: 3b4c76f 64-core full terminal; time failed, memory/parity passed (2026-11-01)
 
 User explicitly reactivated the 66,601,887-group full 10/30 whole-GAMP per-gene
 objective: <2h wall and <300e9 B. R7 authoritative terminal audit at 17:03:05Z
@@ -13,6 +13,18 @@ Counts: [R7/full/counts](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancoll
 authority: [full-terminal.json](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_posting_reuse_20261101_nf6RG9/full-terminal.json).
 Tool goal state is complete after root receipt/documentation review. This is not F1,
 biological truth, external CR7 workflow equivalence, release, or causal-speedup proof.
+
+**Full64 terminal:** Frozen candidate C completed original 66,601,887 groups/
+166,824,266 records, container/native exit 0, in 8,770.10s (2h26m10.1): the
+64-core <2h target failed by 1,570.10s. Memory passed—HWM 225,357,627,392B,
+memcg 184,388,919,296B, zero max/OOM/swap/spill—and independent Parquet/MEX plus
+exact R7 four-Parquet/six-MEX byte/decoded/logical/profile/prior parity passed
+with unchanged counters. CPU was 534,792.51s vs R7 760,250.94s (~29.66% lower),
+but differing threads/shared host prevent causal inference. Authority:
+[candidate-c64-full-terminal.json](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_remaining_optimizations_20261101_gGNqCQ/candidate-c64-full-terminal.json).
+The prior 128-core objective remains historically achieved; do not mark 64-core
+achieved. Targeted profiling, remaining scratch reuse, or a 96-core comparison
+are evidence-gated and unlaunched; no automatic rerun.
 
 **D111 implementation gate:** Clean 119-file baseline commit `c408857` was made
 after source archive comparison and binary `cmp` to frozen R7. User authorizes
@@ -66,11 +78,10 @@ and consolidated C64 1M exact R7 parity pass, independent of the isolated proof.
 No 168GB rebuild or cleanup-only whole run; jobs/frozen A/B/R7/indexes untouched.
 Receipt: [v1-cleanup-integration.json](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_remaining_optimizations_20261101_gGNqCQ/v1-cleanup-integration.json).
 
-**Next authorized gate:** D112 is manually integrated as a six-file active patch
-with PCANIDX2/3 retained, no index-byte change or 168GB rebuild. Root reviewed the
-prelaunch documentation checkpoint. Next is the already-authorized full original
-66,601,887-group 64-core optimization gate under
-<7200s/<300e9/no spill/swap and exact full R7 parity; it is not cleanup-only.
+**Consolidated gate completed:** D112 retained PCANIDX2/3 with no index-byte
+change or 168GB rebuild. After root's prelaunch checkpoint review, the original
+66,601,887-group 64-core optimization run completed with full R7 parity and
+memory acceptance, but missed <7200s as recorded above. No cleanup-only run.
 
 **R4 compact empirical gate (terminal):** Repack exited 0 at 12:20:20Z
 (5,822.268 s real) with 167,968,148,664-B final index. Its queued 1M count and
@@ -467,6 +478,20 @@ checker. This is an operational terminal receipt, not independent matrix
 validation or a scientific comparison result. T2T remains indexing with its
 count queued. The next work is matrix validation for GRCh38 and terminal/matrix
 validation for T2T, then the existing comparison plan.
+
+**Subsequent T2T terminal status (2026-11-01):** T2T now has `STATUS=complete`;
+Docker records exit 0/OOM=false at 18:21:39Z, `Log.final.out` records all
+66,601,887 reads, and the actual command passed the CR7-preset checker. Its
+independent raw-MEX validation is in progress. Both linear executions are
+terminal, but common-caller, ID/barcode crosswalk, QC, and comparison work have
+not started; no scientific result follows from completion receipts.
+
+**Subsequent T2T validation status (2026-11-01):** T2T's actual command and all
+three raw MEX matrices now independently pass their recorded checks. Both linear
+arms are terminal and command/matrix validated. The remaining work is the
+shared-core ID/barcode crosswalk and common metadata, followed by the planned
+QC/calling and descriptive comparison; no biological or cross-method conclusion
+follows from structural validation.
 
 ## Historical checkpoint: approved Stage 6 performance implementation; whole count stopped (2026-10-31)
 

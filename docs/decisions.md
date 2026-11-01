@@ -7519,3 +7519,39 @@ logical/profile/prior parity against R7 passed. Shared membership reuse was
 decoded; this is single-prefix evidence only. Next is the already authorized
 full original 66,601,887-group 64-core gate <7200s/<300e9/no spill/swap with
 exact full R7 parity, not a cleanup-only run.
+
+**D112 committed launch-state reconciliation (2026-11-01):** Active clean HEAD
+`3b4c76f54b708c94b2c36e48eede9ef4f3bc3807` is the exact full-gate source;
+`RUN.json` records candidate-C plus V2-only cleanup 174-test/exact-million-pass,
+and `v1-cleanup-integration.json` records active-tree validation. C receipt
+confirms preserved A/C, B absent, and same-64 baseline comparison; cleanup
+receipt confirms no index rebuild and no cleanup-only whole run. Thus one already
+authorized full original 66,601,887-group 64-core <7200s/<300e9/no-swap/no-spill
+measurement with exact full R7 parity is next. This is the only full gate; it is
+not launched or proven. Singleflight, metadata views/accounting, full-byte QNAME,
+multiplicity, locality, structural factorization, SIMD and grammar remain
+evidence-gated, not implementation commitments.
+
+**D111 full64 launch (2026-11-01 18:10:54Z):** After root reviewed the fresh
+documentation checkpoint, frozen candidate C source/binary matched active
+production code at `3b4c76f`. The one optimization full gate is running in
+`pancollapse-d111-candidate-c64-full-20261101-ggnqcq` (`b09511c5c7d0`) with 64
+threads/CPU quota, 300e9 hard RAM/no swap, unchanged original GAMP/index and
+both profiles/MEX. `gGNqCQ/candidate-c64-full-launch.json` retains the input,
+resource and output identities. Startup 160k/20.1481s and zero max/OOM/swap do
+not establish full performance or parity. No rebuild, input hash, extra
+cleanup-only whole run, profiling, or scientific-policy change.
+
+**D112 full64 terminal reconciliation (2026-11-01):**
+[`candidate-c64-full-terminal.json`](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_remaining_optimizations_20261101_gGNqCQ/candidate-c64-full-terminal.json)
+audits native exit 0 and container exit 0 (20:46:08Z) after original 66,601,887 groups/
+166,824,266 records. Native 8,770.10s (2h26m10.1) misses the 64-core <7200s
+target by 1,570.10s. Memory/parity pass: HWM 225,357,627,392B, memcg
+184,388,919,296B, zero max/OOM/swap/spill; `parity.json` expected 66,601,887,
+`changed_counters={}`, independent Parquet/MEX pass, and exact R7 four-Parquet/
+six-MEX byte/decoded/logical/profile/prior parity. Counts are 11,327,565 rows/
+29,287,473 molecules. CPU 534,792.51s vs R7 760,250.94s is ~29.66% lower but
+not an isolated causal claim across differing threads/shared host. Prior 128-core
+goal stays historical achieved; 64-core goal failed. Future targeted profiling,
+scratch reuse or 96-core comparison are evidence-gated/unlaunched; no automatic
+full rerun or new phase authorization.

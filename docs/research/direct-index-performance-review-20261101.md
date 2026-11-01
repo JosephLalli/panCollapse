@@ -122,5 +122,29 @@ Follow-up: C64 exact 1M passed in 123.46s/6,596.85 CPU-s with 66,413,420KiB HWM
 and exact R7 output parity, after reusing 3,327,984 membership lists and
 8,837,666,038 posting rows. This supports the authorized 64-core full
 measurement but is not itself whole-run proof. D112 V1 cleanup integrated without
-index-format/byte change; the next run remains the original full GAMP exact-R7
-parity gate, not a cleanup experiment.
+index-format/byte change. The subsequent original full-GAMP gate was an
+optimization measurement, not a cleanup-only experiment.
+
+## Full64 terminal result — 2026-11-01 20:46:13Z
+
+The frozen A/C/D112 build at production source `3b4c76f` completed all original
+66,601,887 groups/166,824,266 records at 64 threads/CPU quota. Native wall
+8,770.10s (2h26m10.1) **misses the two-hour target by 1,570.10s**. Kernel HWM
+225,357,627,392B and count-memcg peak 184,388,919,296B pass <300e9, with zero
+max/OOM/swap/spill. Container/native exited 0; independent Parquet/MEX checks
+and exact full R7 four-Parquet/six-MEX byte, decoded/logical, profile and complete
+barcode-prior comparisons passed, with no changed manifest counters.
+
+Native user+system CPU was 534,792.51s versus R7's 760,250.94s (observed 29.66%
+less, rather than the prefix's ~42%). Different core counts/shared-host runs
+are not isolated causal-speedup or energy evidence. Full reuse avoided
+166,016,109 list decodes and 453,136,791,100 posting-row decodes; per-node
+incidence/scoring remained unchanged. All original inputs, index and controls
+are preserved. Counts and terminal evidence:
+[`candidate-c64-full/counts`](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_remaining_optimizations_20261101_gGNqCQ/candidate-c64-full/counts),
+[`candidate-c64-full-terminal.json`](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_remaining_optimizations_20261101_gGNqCQ/candidate-c64-full-terminal.json).
+
+The 64-core objective remains unmet. Targeted profiling of the remaining resolver
+allocation/frontier work is the next evidence gate before another code candidate;
+96-core performance is unmeasured. Neither another full run nor another candidate
+was launched during monitoring. No frozen scoring or biological rules changed.
