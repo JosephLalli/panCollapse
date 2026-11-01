@@ -249,6 +249,7 @@ int run(const Config& config) {
             << " balance_unsaturated_groups=" << node_stats.balance_unsaturated_groups << '\n';
         std::osyncstream(std::cerr) << "panCollapse: assignment-cache-stats: entries="
                   << assignment_cache->entries() << " hits=" << assignment_cache->hits()
+                  << " duplicate_builds=" << assignment_cache->duplicate_builds()
                   << " misses=" << assignment_cache->misses()
                   << " uncached=" << assignment_cache->uncached()
                   << " charged_bytes=" << assignment_cache->charged_bytes() << '\n';
@@ -268,7 +269,8 @@ int run(const Config& config) {
     const std::size_t capacity = std::max<std::size_t>(2, workers * 2);
     std::deque<Job> jobs; std::mutex mutex; std::condition_variable ready, space;
     bool closed = false, stopped = false; std::exception_ptr failure;
-    std::uint64_t groups = 0, input_records = 0;
+    std::uint64_t groups = 0, input_records = 0, wire_records = 0, wire_bytes = 0;
+    std::uint64_t peek_fallbacks = 0, full_queue_submissions = 0;
     std::atomic<std::uint64_t> completed_groups{0};
     std::atomic<std::uint64_t> missing_molecules{0}, malformed_molecules{0}, unsupported_molecules{0};
     std::atomic<std::uint64_t> high_complexity_groups{0};
@@ -413,19 +415,29 @@ int run(const Config& config) {
         catch (...) { std::lock_guard lock(mutex); if (!failure) failure = std::current_exception(); stopped = true; ready.notify_all(); space.notify_all(); }
     }); } catch (...) { { std::lock_guard lock(mutex); failure = std::current_exception(); stopped = true; closed = true; } ready.notify_all(); space.notify_all(); for (auto& thread : pool) thread.join(); std::rethrow_exception(failure); }
     try {
+        const auto ingest_started = std::chrono::steady_clock::now();
         Job current;
         bool has_current=false;
-        auto submit = [&] { if (!has_current) return; std::unique_lock lock(mutex); space.wait(lock, [&] { return stopped || jobs.size() < capacity; }); if (stopped) std::rethrow_exception(failure); jobs.push_back(std::move(current)); ++groups; lock.unlock(); ready.notify_one(); };
+        auto submit = [&] { if (!has_current) return; std::unique_lock lock(mutex); if (jobs.size() >= capacity) ++full_queue_submissions; space.wait(lock, [&] { return stopped || jobs.size() < capacity; }); if (stopped) std::rethrow_exception(failure); jobs.push_back(std::move(current)); ++groups; lock.unlock(); ready.notify_one(); };
         std::unordered_set<std::string> completed_names;
         const auto stream_stats = input::raw_gamp_for_each(*input, [&](std::unique_ptr<std::string> bytes) {
+            ++wire_records;
+            wire_bytes += bytes->size();
             input::MultipathRecordPeek peek; std::string fallback;
-            if (!input::peek_multipath_record(*bytes, peek)) { vg::MultipathAlignment decoded; input::decode_multipath_record(*bytes, decoded); fallback = decoded.name(); peek.name = fallback; peek.has_subpath = decoded.subpath_size() != 0; }
+            if (!input::peek_multipath_record(*bytes, peek)) { ++peek_fallbacks; vg::MultipathAlignment decoded; input::decode_multipath_record(*bytes, decoded); fallback = decoded.name(); peek.name = fallback; peek.has_subpath = decoded.subpath_size() != 0; }
             if (!has_current) { current.name = peek.name; has_current=true; }
             else if (current.name != peek.name) { completed_names.insert(current.name); if (completed_names.contains(std::string(peek.name))) throw std::runtime_error("GAMP read name recurred after its group closed"); submit(); current.name = peek.name; }
             if (peek.has_subpath) current.records.push_back(std::move(bytes));
         }, 2);
         submit(); { std::lock_guard lock(mutex); closed = true; } ready.notify_all();
         input_records = stream_stats.records;
+        std::osyncstream(std::cerr) << "panCollapse: ingest-stats: wire_records=" << wire_records
+            << " wire_bytes=" << wire_bytes << " peek_fallbacks=" << peek_fallbacks
+            << " closed_names=" << completed_names.size()
+            << " full_queue_submissions=" << full_queue_submissions
+            << " producer_wall_seconds_including_backpressure="
+            << std::chrono::duration<double>(std::chrono::steady_clock::now()-ingest_started).count()
+            << '\n';
     } catch (...) { std::lock_guard lock(mutex); if (!failure) failure = std::current_exception(); stopped = true; closed = true; ready.notify_all(); space.notify_all(); }
     for (auto& thread : pool) thread.join();
     if (periodic_progress.joinable()) {
@@ -434,6 +446,13 @@ int run(const Config& config) {
     }
     if (failure) std::rethrow_exception(failure);
     report_native_queries();
+    const auto membership_stats = node_resolver.stats();
+    std::cerr << "panCollapse: membership-reuse-stats: nodes_with_shared_id="
+              << membership_stats.nodes_with_shared_id
+              << " lists_decoded=" << membership_stats.membership_lists_decoded
+              << " lists_reused=" << membership_stats.membership_lists_reused
+              << " posting_rows_decoded=" << membership_stats.posting_rows_decoded
+              << " posting_rows_reused=" << membership_stats.posting_rows_reused << '\n';
     const auto assignment_cache_entries = assignment_cache->entries();
     const auto assignment_cache_hits = assignment_cache->hits();
     const auto assignment_cache_misses = assignment_cache->misses();

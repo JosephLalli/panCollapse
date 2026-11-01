@@ -13,9 +13,6 @@
 
 namespace pancollapse::direct_index {
 
-void repack(const std::filesystem::path& input, const std::filesystem::path& output,
-            std::size_t memory_limit_bytes);
-
 using GeneRecord = count_reference::GeneRecord;
 using PolicyRecord = count_reference::PolicyRecord;
 using ModelRecord = count_reference::ModelRecord;
@@ -66,7 +63,6 @@ class Writer {
     Stats stats() const;
     void finish();
   private:
-    friend void repack(const std::filesystem::path&, const std::filesystem::path&, std::size_t);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
@@ -103,7 +99,6 @@ class Source final : public count_reference::Source {
     std::span<const count_reference::ScoringBinding> scoring_bindings(const count_reference::ScoringClassRecord&) const override;
     std::span<const count_reference::EdgePosting> edge(std::uint64_t, std::uint64_t) const override;
   private:
-    friend void repack(const std::filesystem::path&, const std::filesystem::path&, std::size_t);
     Source();
     struct Impl;
     std::unique_ptr<Impl> impl_;

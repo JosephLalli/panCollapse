@@ -27,7 +27,6 @@ static_assert(sizeof(GeneRecord) == 36 && sizeof(PolicyRecord) == 16 &&
 
 constexpr std::array<char, 8> magic = {'P', 'C', 'D', 'I', 'R', 'E', 'C', 'T'};
 constexpr std::array<char, 8> trailer = {'P', 'C', 'D', 'E', 'N', 'D', '0', '1'};
-constexpr std::uint32_t legacy_version = 1;
 constexpr std::uint32_t version = 2;
 constexpr std::uint32_t complete = 1;
 constexpr std::uint64_t endian = 0x0102030405060708ULL;
@@ -120,6 +119,9 @@ struct TempFile {
     std::filesystem::path path;
     int fd = -1;
     std::uint64_t size = 0;
+    std::uint64_t flushed_size = 0;
+    std::array<std::byte, scratch_bytes> pending{};
+    std::size_t pending_size = 0;
     TempFile() = default;
     TempFile(const TempFile&) = delete;
     TempFile& operator=(const TempFile&) = delete;
@@ -135,19 +137,56 @@ struct TempFile {
         fd = ::mkstemp(writable.data());
         if (fd < 0) fail("staging create failed");
         path = writable.data();
+        size = 0;
+        flushed_size = 0;
+        pending_size = 0;
+    }
+    void flush() {
+        if (pending_size == 0) return;
+        write_at(fd, pending.data(), pending_size, flushed_size);
+        flushed_size = add(flushed_size, pending_size);
+        pending_size = 0;
     }
     void append(const void* value, std::size_t count) {
         const auto next = add(size, static_cast<std::uint64_t>(count));
-        write_at(fd, value, count, size);
+        const auto* cursor = static_cast<const std::byte*>(value);
+        while (count != 0) {
+            if (pending_size == pending.size()) flush();
+            if (pending_size == 0 && count >= pending.size()) {
+                write_at(fd, cursor, count, flushed_size);
+                flushed_size = add(flushed_size, count);
+                break;
+            }
+            const auto copied = std::min(count, pending.size() - pending_size);
+            std::memcpy(pending.data() + pending_size, cursor, copied);
+            pending_size += copied;
+            cursor += copied;
+            count -= copied;
+        }
         size = next;
     }
     void read(std::uint64_t offset, void* value, std::size_t count) const {
         if (offset > size || count > size - offset) fail("staging range");
-        read_all(fd, value, count, offset);
+        auto* cursor = static_cast<std::byte*>(value);
+        if (offset < flushed_size) {
+            const auto disk = static_cast<std::size_t>(std::min<std::uint64_t>(count, flushed_size - offset));
+            read_all(fd, cursor, disk, offset);
+            cursor += disk;
+            count -= disk;
+            offset = flushed_size;
+        }
+        if (count != 0) {
+            if (offset < flushed_size || offset - flushed_size > pending_size ||
+                count > pending_size - static_cast<std::size_t>(offset - flushed_size)) {
+                fail("staging pending range");
+            }
+            std::memcpy(cursor, pending.data() + static_cast<std::size_t>(offset - flushed_size), count);
+        }
     }
-    void sync() const { if (fd < 0 || ::fsync(fd) != 0) fail("staging fsync failed"); }
+    void sync() { flush(); if (fd < 0 || ::fsync(fd) != 0) fail("staging fsync failed"); }
     void close_checked() {
         if (fd < 0) return;
+        flush();
         const auto closing = fd;
         fd = -1;
         if (::close(closing) != 0) fail("staging close failed");
@@ -159,6 +198,7 @@ struct TempFile {
     }
     void discard() noexcept {
         if (fd >= 0) { static_cast<void>(::close(fd)); fd = -1; }
+        pending_size = 0;
         if (!path.empty()) { static_cast<void>(::unlink(path.c_str())); path.clear(); }
     }
 };
@@ -379,7 +419,8 @@ void pad(TempFile& output, std::uint64_t target) {
         output.append(zeroes.data(), count);
     }
 }
-void copy_stream(TempFile& output, const TempFile& input) {
+void copy_stream(TempFile& output, TempFile& input) {
+    input.flush();
     std::array<std::byte, scratch_bytes> scratch{};
     for (std::uint64_t offset = 0; offset < input.size;) {
         const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(scratch.size(), input.size - offset));
@@ -799,14 +840,13 @@ bool is_index(const std::filesystem::path& path) noexcept {
     static_cast<void>(::close(fd));
     const auto file_version = seen == header.size() ? get32(header.data() + 8) : 0;
     return seen == header.size() && std::memcmp(header.data(), magic.data(), magic.size()) == 0 &&
-           (file_version == legacy_version || file_version == version) &&
+           file_version == version &&
            get32(header.data() + 12) == complete &&
            get64(header.data() + 16) == endian && get64(header.data() + 24) == section_count;
 }
 
 struct Source::Impl {
     int fd = -1; Mapping map;
-    std::uint32_t format_version = 0;
     std::vector<std::string> strings, catalog;
     std::vector<std::vector<std::uint32_t>> sets;
     std::string content, provenance;
@@ -818,7 +858,6 @@ struct Source::Impl {
     const NodeSlot* slots = nullptr; std::size_t slot_count = 0;
     const std::uint64_t* list_offsets = nullptr; std::size_t list_count = 0;
     const std::uint32_t* list_counts = nullptr;
-    const Posting* posting_values = nullptr; std::size_t posting_count = 0;
     const std::byte* encoded_postings = nullptr; std::size_t encoded_posting_bytes = 0;
     const PairRow* splice_rows = nullptr; std::size_t splice_count = 0;
     const std::uint32_t* splice_values = nullptr; std::size_t splice_value_count = 0;
@@ -864,24 +903,19 @@ void parse_sets(const std::byte* base, const Range& range, std::uint64_t count,
     }
     if (cursor != end) fail("set framing");
 }
-struct FramedRanges {
-    std::uint32_t version = 0;
-    std::array<Range, section_count> ranges{};
-};
+using FramedRanges = std::array<Range, section_count>;
 template<class State>
 FramedRanges frame(const State& state) {
     if (state.map.size < header_bytes + trailer_bytes) fail("truncated frame");
     const auto* base = state.map.data;
     const auto file_version = get32(base + 8);
     if (std::memcmp(base, magic.data(), magic.size()) != 0 ||
-        (file_version != legacy_version && file_version != version) || get32(base + 12) != complete ||
+        file_version != version || get32(base + 12) != complete ||
         get64(base + 16) != endian || get64(base + 24) != section_count) fail("frame header");
     const auto trailer_at = state.map.size - trailer_bytes;
     if (std::memcmp(base + trailer_at, trailer.data(), trailer.size()) != 0 ||
         get64(base + trailer_at + trailer.size()) != state.map.size) fail("frame trailer");
-    FramedRanges result;
-    result.version = file_version;
-    auto& ranges = result.ranges;
+    FramedRanges ranges{};
     std::uint64_t expected = header_bytes;
     for (std::size_t index = 0; index < section_count; ++index) {
         const auto offset = get64(base + 32 + index * 16), size = get64(base + 40 + index * 16);
@@ -890,7 +924,7 @@ FramedRanges frame(const State& state) {
         if (expected > trailer_at) fail("section framing");
     }
     if (expected != trailer_at) fail("section framing");
-    return result;
+    return ranges;
 }
 
 }  // namespace
@@ -905,9 +939,7 @@ std::unique_ptr<Source> Source::load(const std::filesystem::path& path) {
     state.fd = ::open(path.c_str(), O_RDONLY); if (state.fd < 0) fail("index open");
     struct stat status {}; if (::fstat(state.fd, &status) != 0 || status.st_size < 0) fail("index stat");
     state.map.map(state.fd, static_cast<std::uint64_t>(status.st_size));
-    const auto framed = frame(state);
-    state.format_version = framed.version;
-    const auto& ranges = framed.ranges;
+    const auto ranges = frame(state);
     const auto* base = state.map.data;
     if (ranges[Section::meta].size < metadata_words * 8) fail("metadata framing");
     const auto* fields = base + as_size(ranges[Section::meta].offset, "metadata framing");
@@ -924,42 +956,31 @@ std::unique_ptr<Source> Source::load(const std::filesystem::path& path) {
     state.genes = fixed<GeneRecord>(base, ranges[Section::genes], ngenes, "gene section"); state.gene_count = as_size(ngenes, "gene count");
     state.policies = fixed<PolicyRecord>(base, ranges[Section::policies], npolicies, "policy section"); state.policy_count = as_size(npolicies, "policy count");
     state.model_count = as_size(nmodels, "model count");
-    if (state.format_version == legacy_version) {
-        state.models = fixed<ModelRecord>(base, ranges[Section::models], nmodels, "model section");
-    } else {
-        const auto model_bytes = multiply(nmodels, sizeof(ModelRecord));
-        const auto support_bytes = multiply(nmodels, sizeof(std::uint32_t));
-        if (ranges[Section::models].size != add(model_bytes, support_bytes)) fail("model section");
-        const Range records{ranges[Section::models].offset, model_bytes};
-        state.models = fixed<ModelRecord>(base, records, nmodels, "model section");
-        state.model_supports = reinterpret_cast<const std::uint32_t*>(
-            base + as_size(add(ranges[Section::models].offset, model_bytes), "model support section"));
-    }
+    const auto model_bytes = multiply(nmodels, sizeof(ModelRecord));
+    const auto support_bytes = multiply(nmodels, sizeof(std::uint32_t));
+    if (ranges[Section::models].size != add(model_bytes, support_bytes)) fail("model section");
+    const Range records{ranges[Section::models].offset, model_bytes};
+    state.models = fixed<ModelRecord>(base, records, nmodels, "model section");
+    state.model_supports = reinterpret_cast<const std::uint32_t*>(
+        base + as_size(add(ranges[Section::models].offset, model_bytes), "model support section"));
     const auto maximum_slots = std::numeric_limits<std::size_t>::max() / sizeof(NodeSlot);
     if (state.max_node >= static_cast<std::uint64_t>(maximum_slots)) fail("node id list limit");
     const auto slot_count = add(state.max_node, 1);
     state.slots = fixed<NodeSlot>(base, ranges[Section::slots], slot_count, "node slots"); state.slot_count = as_size(slot_count, "slot count");
     if (nlists == 0 || nlists >= count_reference::missing) fail("list count");
     state.list_count = as_size(nlists, "list count");
-    state.posting_count = as_size(npostings, "posting count");
-    if (state.format_version == legacy_version) {
-        state.list_offsets = fixed<std::uint64_t>(base, ranges[Section::lists], add(nlists, 1), "list offsets");
-        state.posting_values = fixed<Posting>(base, ranges[Section::postings], npostings, "posting section");
-        if (state.list_offsets[0] != 0 || state.list_offsets[state.list_count] != npostings)
-            fail("list endpoints");
-    } else {
-        const auto offset_bytes = multiply(add(nlists, 1), sizeof(std::uint64_t));
-        const auto count_bytes = multiply(nlists, sizeof(std::uint32_t));
-        if (ranges[Section::lists].size != add(offset_bytes, count_bytes)) fail("list section");
-        const Range offsets{ranges[Section::lists].offset, offset_bytes};
-        state.list_offsets = fixed<std::uint64_t>(base, offsets, add(nlists, 1), "list offsets");
-        state.list_counts = reinterpret_cast<const std::uint32_t*>(
-            base + as_size(add(ranges[Section::lists].offset, offset_bytes), "list counts"));
-        state.encoded_postings = base + as_size(ranges[Section::postings].offset, "posting section");
-        state.encoded_posting_bytes = as_size(ranges[Section::postings].size, "posting section");
-        if (state.list_offsets[0] != 0 || state.list_offsets[state.list_count] != ranges[Section::postings].size ||
-            state.list_counts[0] != 0) fail("list endpoints");
-    }
+    static_cast<void>(as_size(npostings, "posting count"));
+    const auto offset_bytes = multiply(add(nlists, 1), sizeof(std::uint64_t));
+    const auto count_bytes = multiply(nlists, sizeof(std::uint32_t));
+    if (ranges[Section::lists].size != add(offset_bytes, count_bytes)) fail("list section");
+    const Range offsets{ranges[Section::lists].offset, offset_bytes};
+    state.list_offsets = fixed<std::uint64_t>(base, offsets, add(nlists, 1), "list offsets");
+    state.list_counts = reinterpret_cast<const std::uint32_t*>(
+        base + as_size(add(ranges[Section::lists].offset, offset_bytes), "list counts"));
+    state.encoded_postings = base + as_size(ranges[Section::postings].offset, "posting section");
+    state.encoded_posting_bytes = as_size(ranges[Section::postings].size, "posting section");
+    if (state.list_offsets[0] != 0 || state.list_offsets[state.list_count] != ranges[Section::postings].size ||
+        state.list_counts[0] != 0) fail("list endpoints");
     const auto splice_rows_bytes = multiply(nsplices, sizeof(PairRow)), target_bytes = multiply(ntargets, sizeof(std::uint32_t));
     if (ranges[Section::splices].size != add(splice_rows_bytes, target_bytes)) fail("splice section");
     state.splice_rows = reinterpret_cast<const PairRow*>(base + as_size(ranges[Section::splices].offset, "splice section")); state.splice_count = as_size(nsplices, "splice count");
@@ -989,22 +1010,15 @@ std::optional<count_reference::NodeView> Source::node_view(std::uint64_t id) con
     if (slot.list == count_reference::missing) return std::nullopt;
     if (slot.list >= state.list_count) fail("node list id");
     const auto first = state.list_offsets[slot.list], last = state.list_offsets[slot.list + 1];
-    if (state.format_version == legacy_version) {
-        if (first > last || last > state.posting_count) fail("node posting range");
-        const auto count = as_size(last - first, "node posting count");
-        if (count == 0) return count_reference::NodeView{slot.length, {}};
-        return count_reference::NodeView{slot.length,
-            std::span<const Posting>(state.posting_values + first, count)};
-    }
     if (first > last || last > state.encoded_posting_bytes) fail("node posting range");
     const auto count = state.list_counts[slot.list];
     if (count == 0) {
         if (first != last) fail("empty node posting range");
-        return count_reference::NodeView{slot.length, {}};
+        return count_reference::NodeView{slot.length, {}, slot.list};
     }
     return count_reference::NodeView{slot.length, count_reference::PostingView::encoded(
         {state.encoded_postings + first, as_size(last - first, "node posting bytes")}, count,
-        {state.model_supports, state.model_count}, state.sets.size())};
+        {state.model_supports, state.model_count}, state.sets.size()), slot.list};
 }
 
 std::span<const std::uint32_t> Source::splice_targets(std::uint64_t a, std::uint64_t b) const {
@@ -1046,82 +1060,5 @@ std::span<const Posting> Source::node_postings(const count_reference::NodeRecord
 std::span<const count_reference::ScoringPosting> Source::node_scoring(const count_reference::NodeRecord&) const { fail("unsupported scoring query"); }
 std::span<const count_reference::ScoringBinding> Source::scoring_bindings(const count_reference::ScoringClassRecord&) const { fail("unsupported scoring query"); }
 std::span<const count_reference::EdgePosting> Source::edge(std::uint64_t, std::uint64_t) const { fail("unsupported legacy edge query"); }
-
-void repack(const std::filesystem::path& input, const std::filesystem::path& output,
-            std::size_t memory_limit_bytes) {
-    if (memory_limit_bytes < scratch_bytes) fail("repack memory limit");
-    struct stat output_state {};
-    if (::lstat(output.c_str(), &output_state) == 0) fail("output already exists");
-    if (errno != ENOENT) fail("output inspection");
-
-    auto source = Source::load(input);
-    auto& source_state = *source->impl_;
-    if (source_state.format_version == version) {
-        TempFile copy;
-        copy.create(output, "repack");
-        std::array<std::byte, scratch_bytes> scratch{};
-        for (std::uint64_t offset = 0; offset < source_state.map.size;) {
-            const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(
-                scratch.size(), source_state.map.size - offset));
-            read_all(source_state.fd, scratch.data(), count, offset);
-            copy.append(scratch.data(), count);
-            offset = add(offset, count);
-        }
-        publish(copy, output);
-        return;
-    }
-    if (source_state.format_version != legacy_version) fail("unsupported repack input version");
-
-    Metadata metadata;
-    metadata.strings = std::move(source_state.strings);
-    metadata.feature_catalog = std::move(source_state.catalog);
-    metadata.sets = std::move(source_state.sets);
-    metadata.genes.assign(source_state.genes, source_state.genes + source_state.gene_count);
-    metadata.policies.assign(source_state.policies, source_state.policies + source_state.policy_count);
-    metadata.models.assign(source_state.models, source_state.models + source_state.model_count);
-    metadata.content_id = std::move(source_state.content);
-    metadata.provenance_json = std::move(source_state.provenance);
-
-    Writer writer(output, std::move(metadata), source_state.max_node, memory_limit_bytes);
-    auto& destination = *writer.impl_;
-    if (source_state.list_count == 0 || source_state.list_offsets[0] != 0 ||
-        source_state.list_offsets[1] != 0) fail("legacy empty list");
-    // V1 already interned complete logical lists. Model support is a function
-    // of each model, so removing it from rows cannot merge two valid lists.
-    for (std::uint32_t id = 1; id < source_state.list_count; ++id) {
-        const auto first = source_state.list_offsets[id];
-        const auto last = source_state.list_offsets[id + 1];
-        if (first > last || last > source_state.posting_count) fail("legacy list range");
-        const auto count = as_size(last - first, "legacy list count");
-        const auto values = std::span<const Posting>(source_state.posting_values + first, count);
-        destination.accept_postings(values);
-        if (destination.list(values) != id) fail("legacy list identity changed");
-    }
-    if (destination.stored_postings != source_state.posting_count)
-        fail("legacy posting count changed");
-    for (std::size_t id = 0; id < source_state.slot_count; ++id) {
-        const auto slot = source_state.slots[id];
-        if (slot.list == count_reference::missing) continue;
-        if (slot.list >= destination.list_info.size()) fail("legacy node list id");
-        destination.node_slots[id] = slot;
-        ++destination.nodes;
-    }
-    writer.seal_nodes();
-    for (std::size_t index = 0; index < source_state.splice_count; ++index) {
-        const auto& row = source_state.splice_rows[index];
-        if (row.first > source_state.splice_value_count ||
-            row.count > source_state.splice_value_count - row.first) fail("legacy splice range");
-        writer.append_splice(row.from, row.to,
-            {source_state.splice_values + row.first, row.count});
-    }
-    for (std::size_t index = 0; index < source_state.junction_count; ++index) {
-        const auto& row = source_state.junction_rows[index];
-        if (row.first > source_state.junction_value_count ||
-            row.count > source_state.junction_value_count - row.first) fail("legacy junction range");
-        writer.append_junction(row.from, row.to,
-            {source_state.junction_values + row.first, row.count});
-    }
-    writer.finish();
-}
 
 }  // namespace pancollapse::direct_index

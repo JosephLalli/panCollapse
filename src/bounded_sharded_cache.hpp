@@ -67,6 +67,7 @@ class BoundedShardedCache {
             // Another worker inserted this key while ours was building. Report it as a hit so the
             // pre-retirement counters stay those of single-flight construction.
             hits_.fetch_add(1, std::memory_order_relaxed);
+            duplicate_builds_.fetch_add(1, std::memory_order_relaxed);
             return found->second;
         }
 
@@ -122,6 +123,11 @@ class BoundedShardedCache {
     }
 
     std::size_t hits() const { return hits_.load(std::memory_order_relaxed); }
+    // After join, avoided builds are hits() - duplicate_builds(), and completed
+    // builders are misses() + duplicate_builds(), including uncached results.
+    std::size_t duplicate_builds() const {
+        return duplicate_builds_.load(std::memory_order_relaxed);
+    }
     std::size_t misses() const { return misses_.load(std::memory_order_relaxed); }
     std::size_t entries() const { return entries_.load(std::memory_order_relaxed); }
     std::size_t uncached() const { return uncached_.load(std::memory_order_relaxed); }
@@ -186,6 +192,7 @@ class BoundedShardedCache {
     std::function<std::size_t(const Value&)> value_bytes_;
     std::array<Shard, ShardCount> shards_;
     std::atomic<std::size_t> hits_{0};
+    std::atomic<std::size_t> duplicate_builds_{0};
     std::atomic<std::size_t> misses_{0};
     std::atomic<std::size_t> entries_{0};
     std::atomic<std::size_t> uncached_{0};

@@ -178,12 +178,55 @@ Reference write_load(const std::filesystem::path& path, const Data& value) {
     return Reference::load(path);
 }
 
+class MembershipViewSource final : public Source {
+  public:
+    MembershipViewSource(const Source& source, bool share) : source_(source), share_(share) {}
+    const std::vector<std::string>& strings() const override { return source_.strings(); }
+    const std::vector<std::vector<std::uint32_t>>& sets() const override { return source_.sets(); }
+    std::span<const GeneRecord> genes() const override { return source_.genes(); }
+    std::span<const PolicyRecord> policies() const override { return source_.policies(); }
+    const std::string& content_id() const override { return source_.content_id(); }
+    std::size_t model_count() const override { return source_.model_count(); }
+    ModelRecord model(std::uint32_t id) const override { return source_.model(id); }
+    std::size_t scoring_class_count() const override { return source_.scoring_class_count(); }
+    ScoringClassRecord scoring_class(std::uint32_t id) const override { return source_.scoring_class(id); }
+    const NodeRecord* node(std::uint64_t id) const override { return source_.node(id); }
+    std::span<const Posting> node_postings(const NodeRecord& record) const override {
+        return source_.node_postings(record);
+    }
+    std::span<const ScoringPosting> node_scoring(const NodeRecord& record) const override {
+        return source_.node_scoring(record);
+    }
+    std::span<const ScoringBinding> scoring_bindings(const ScoringClassRecord& record) const override {
+        return source_.scoring_bindings(record);
+    }
+    std::span<const EdgePosting> edge(std::uint64_t from, std::uint64_t to) const override {
+        return source_.edge(from, to);
+    }
+    std::span<const std::uint32_t> splice_targets(std::uint64_t a, std::uint64_t b) const override {
+        return source_.splice_targets(a, b);
+    }
+    std::span<const JunctionOwner> junction_owners(std::uint64_t from, std::uint64_t to) const override {
+        return source_.junction_owners(from, to);
+    }
+    std::optional<NodeView> node_view(std::uint64_t id) const override {
+        auto view = source_.node_view(id);
+        if (view) view->shared_membership_id = share_ && (id == 100 || id == 101) ? 7 : missing;
+        return view;
+    }
+    void begin_read_group() const override { source_.begin_read_group(); }
+
+  private:
+    const Source& source_;
+    bool share_ = false;
+};
+
 struct DifferentialModes {
     std::vector<ResolvedAssignment> oracle, sparse, automatic;
     NodeScoreStats sparse_stats, automatic_stats;
 };
 
-DifferentialModes differential_modes(const Reference& reference,
+DifferentialModes differential_modes(const Source& reference,
                                      const std::vector<const vg::MultipathAlignment*>& records,
                                      const char* name) {
     const auto profile_set = profiles();
@@ -241,6 +284,42 @@ int main() try {
     adverse.set_sequence(std::string(28, 'A'));
     differential(hostile_reference, {&adverse},
                  "adverse fixture: threshold/masks/orientation/bridges/deletions/repeats");
+    require(hostile_reference.node_view(1)->shared_membership_id == missing,
+            "generic raw references must not claim a shared posting-list identity");
+
+    // Two differently sized nodes intentionally share their exact ordered
+    // postings. A third list overlaps one model, while the 100->101 edge is
+    // directional, so the reused decoded list cannot replace node incidence.
+    Data shared_memberships = data();
+    shared_memberships.sets = {{}, {10}, {20}, {30}};
+    const std::vector<Posting> shared_rows{{0, 1, 5}, {1, 2, 10}};
+    node(shared_memberships, 100, 5, shared_rows);
+    node(shared_memberships, 101, 7, shared_rows);
+    node(shared_memberships, 102, 5, {{1, 2, 4}, {2, 3, 4}});
+    shared_memberships.splice_records = {{100, 101, 0, 2, 0}};
+    shared_memberships.splice_targets = {4, 5};
+    shared_memberships.junction_records = {{200, 203, 0, 2, 0}};
+    shared_memberships.junction_owners = {{4, 1}, {5, 2}};
+    auto shared_reference = write_load(root / "shared-memberships.pcr", shared_memberships);
+    MembershipViewSource shared_source(shared_reference, true);
+    MembershipViewSource missing_source(shared_reference, false);
+    auto shared_read = dag({{{100, false, 5, 5}}, {{101, true, 7, 7}}, {{102, false, 5, 5}}},
+                           {{1}, {2}, {}});
+    const auto shared_modes = differential_modes(shared_source, {&shared_read},
+                                                  "shared membership lists preserve resolver oracle parity");
+    const auto missing_modes = differential_modes(missing_source, {&shared_read},
+                                                   "missing membership IDs preserve resolver oracle parity");
+    require(same(shared_modes.automatic, missing_modes.automatic) &&
+                shared_modes.automatic_stats.nodes_with_shared_id == 2 &&
+                shared_modes.automatic_stats.membership_lists_decoded == 2 &&
+                shared_modes.automatic_stats.membership_lists_reused == 1 &&
+                shared_modes.automatic_stats.posting_rows_decoded == 4 &&
+                shared_modes.automatic_stats.posting_rows_reused == 2 &&
+                missing_modes.automatic_stats.nodes_with_shared_id == 0 &&
+                missing_modes.automatic_stats.membership_lists_decoded == 3 &&
+                missing_modes.automatic_stats.membership_lists_reused == 0 &&
+                missing_modes.automatic_stats.posting_rows_decoded == 6,
+            "shared membership reuse must only skip equivalent posting-list decode");
 
     // Three read bases make the start/end bonuses common: three matches score
     // 13, one mismatch then two matches scores 8, and a one-base deletion
@@ -422,6 +501,27 @@ int main() try {
                 candidate_for(across_modes.automatic[0], "B").body_support_units ==
                     std::vector<std::string>({"20", "30"}),
             "every record must use the complete QNAME support mode and tied support union");
+
+    // Repeated body credits must coalesce per piece without retaining support
+    // slots into the next record.
+    Data repeated_credits = data();
+    repeated_credits.sets = {{}, {10}, {20}};
+    node(repeated_credits, 88, 5, {{0, 1, 4}, {1, 2, 4}});
+    auto repeated_credits_reference = write_load(root / "repeated-credits.pcr", repeated_credits);
+    auto repeated_credit_first = dag({{{88, false, 5, 5}, {88, false, 5, 5}}}, {{}});
+    auto repeated_credit_second = dag({{{88, true, 5, 5}}}, {{}});
+    const auto repeated_credit_modes = differential_modes(
+        repeated_credits_reference, {&repeated_credit_first, &repeated_credit_second},
+        "repeated body credits retain support across records");
+    require(candidate_for(repeated_credit_modes.automatic[0], "A").body_support_units ==
+                std::vector<std::string>({"10"}) &&
+                candidate_for(repeated_credit_modes.automatic[0], "B").body_support_units ==
+                    std::vector<std::string>({"20"}) &&
+                candidate_for(repeated_credit_modes.automatic[1], "A").body_support_units ==
+                    std::vector<std::string>({"10"}) &&
+                candidate_for(repeated_credit_modes.automatic[1], "B").body_support_units ==
+                    std::vector<std::string>({"20"}),
+            "repeated credits and a second record retain only their fixed support IDs");
 
     // Repeated annotation-free nodes cannot suppress later body evidence, and
     // the read-local posting descriptors must preserve the shared support ID.

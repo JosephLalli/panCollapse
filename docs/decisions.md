@@ -7436,3 +7436,86 @@ and complete/exact-whitelist priors identical. Counts are
 All twelve reviews are complete; only R7 read-local reuse and authorized R6 work
 implemented. No F1/biological-truth/external-CR7-workflow equivalence, release,
 or isolated causal-speedup claim follows.
+
+## D111 — Measured count-preserving optimization phase (2026-11-01)
+
+**Decision source: User. Status: implementation/measurement authorized after
+baseline commit; no biology or release decision.** Baseline `c408857` is clean
+(119 files); root verified frozen R7 source archive by `tar --compare` and
+`build/src/panCollapse` by `cmp`. R7 terminal remains the preserved oracle:
+66,601,887 groups/166,824,266 records, 6,372.41s, 245,153,902,592-B HWM,
+167,968,148,664-B index, all 174 tests and exact R6 four-Parquet/six-MEX parity.
+
+Authorized order: fresh bounded R7 profile plus aggregate-only cache saved-work
+and ingest metrics; read-local scratch allocation removal; independent buffered
+index writer; conditional cache canonical keys only after original complexity cap
+and measured duplicate work, then per-key singleflight only if justified.
+Metadata mapped views/accounting, exact full-byte QNAME guard, conditional exact
+observation multiplicity, bounded complete-group locality, and structural
+factorization/SIMD/grammar are evidence-gated fallbacks. Per patch requires
+oracle/CTest; consolidate exact 1M R7 parity, then one full original GAMP under
+<7200s/<300e9/no OOM/swap/spill. Diagnostic counters may differ, counts may not.
+Revert unhelpful changes. No scoring/biology/UMI/input XG-GAMP-RI/spill/release
+change. Root solely runs Ninja; at most two children active.
+
+**D111 64-core target / fresh-profile follow-up (2026-11-01):** User clarifies
+the optimization endpoint as <2h on 64 cores (96 intermediate), <300GB and exact
+R7 counts. R7 user+system CPU was 760,250.94s; 64*7200=460,800, requiring at
+least 39.4% less CPU work before overhead—not a predicted wall speedup. In
+`pancollapse_remaining_optimizations_20261101_gGNqCQ`, frozen R7 fresh-profile
+count exited 0 with exact 1M R7 parity: native 107.48s/HWM 80,584,964KiB;
+profile timing is not a causal unprofiled A/B. Caller sample 23,036/61.562883s,
+zero lost/empty: resolver-other 96.4273%, splice 0.05209%; no-children self
+resolve/posting-decode/model/malloc/free 35.44/9.41/4.99/3.89/3.29%. Fractions
+are not additive. 64KiB buffered TempFile tails/read-your-writes boundary patch,
+Delta scratch patch, and aggregate cache duplicate-build/ingest metrics are
+implemented but unbuilt; next root build/CTest then 64/96/128 prefix comparisons.
+No scientific count change.
+
+**D111 A/B measurement and C preimplementation checkpoint (2026-11-01):** In
+`pancollapse_remaining_optimizations_20261101_gGNqCQ`, A passed full 174 (32.45s),
+exact 1M R7 parity and 64-core prefix: native 141.03s/7,690.11 CPU-s/HWM
+68,703,408KiB versus frozen R7 same-64 197.86s/11,367.23 CPU-s (~29% wall/~32%
+CPU). This shared-host prefix is not whole/64-core goal proof. A metrics report
+10,469 duplicate builds/685,400 completed (1.53% build count, not CPU cost),
+286,140 ready hits, and ingest zero fallbacks/854,778 full-queue submissions.
+B adds only exact sorted/deduplicated length-framed cache records after original
+cap, never scoring records; Sol accepted max/tie-union proof, focused 3/full 174
+passed, 1M/64 pending. C is conditionally exact: expose existing direct
+`NodeSlot.list` via optional source-local `shared_membership_id`, no file/index/
+GAMP/XG/RI change; cache per-read decoded memberships only, retaining every node
+length/ID/incidence/credit/strand/splice check. Missing-source fallback is unique;
+ID 0 valid. Require contract/direct shared-vs-missing oracles then 64-prefix
+byte parity/CPU/RAM before promotion. No full-64 claim.
+
+## D112 — V1 direct-index cleanup integration gate (2026-11-01)
+
+**Decision source: User. Status: manual integration authorized; active-tree
+validation pending.** Source is uncommitted isolated worktree
+`/mnt/ssd/lalli/panCollapse/.codex/worktrees/direct-index-v2-only-20261101` and
+supplied `remove-v1-direct-index.patch` in
+`pancollapse_v2_only_validation_20261101_Az1LNV`. Scope removes only PCDIRECTV1
+reading/decoding, repack/upgrader API/CLI and obsolete V1/repack fixtures/tests.
+Keep compact V2 count, PCANIDX2/3 and native annotation preparation. Isolated
+evidence is bounded: `RUN.json` `validated-v2-only-cleanup`, `parity.json` pass
+at expected 1,000,000 with `changed_counters={}`, and `validation.json` passed
+(982,842 count/1,302,814 molecule rows); it does not validate active D111.
+
+Root manually resolves index/index-test overlaps, preserving D111 64KiB writer
+boundaries and partial C shared-ID API; C is paused. B is rejected after exact
+1M/64: 153.54s/8,524.55 CPU-s vs A 141.03s/7,690.11, only 765 keys saved
+(674,166 vs 674,931); key header/native-query test restored. Required active
+gates: full build, 174 CTest, consolidated 1M exact R7 parity. No 168GB rebuild
+or cleanup-only whole run; jobs/frozen A/B/R7/indexes remain untouched.
+
+**D112 integration complete / 64-core full prelaunch (2026-11-01):** Root
+manually integrated the six-file cleanup patch, preserving D111 A writer tests/C
+sharing; PCANIDX2/3 retained, no 168GB rebuild/index-byte change. Candidate C64
+exited 0 with `PARITY_PASSED`: native 123.46s, CPU 6,514.29+82.56=6,596.85s,
+HWM 66,413,420KiB, memcg 17,943,756,800B, zero memory max/OOM/swap; full 174
+tests 31.25s (`candidate-c/d112-candidate-c-ctest.log`). Four Parquet/six MEX,
+logical/profile/prior parity against R7 passed. Shared membership reuse was
+3,327,984 lists/8,837,666,038 posting rows versus 8,662,357/16,616,919,983
+decoded; this is single-prefix evidence only. Next is the already authorized
+full original 66,601,887-group 64-core gate <7200s/<300e9/no spill/swap with
+exact full R7 parity, not a cleanup-only run.

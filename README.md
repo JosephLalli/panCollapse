@@ -11,16 +11,15 @@ conversion. It is not part of the native counting workflow.
 
 ## Current work
 
-**CURRENT: [PROGRESS.md](PROGRESS.md) records the direct-facts index change
-(D110).** The compiler stores numeric node memberships, ready model metadata
-and directional splice facts in one graph-specific object. Counting reads these
-facts directly, without loading XG/GBWT/RI or rebuilding reference structures.
-The index contains no graph sequence, path-step arrays or reference positions.
-D105 removes whole-read ordered-path containment; D107 excludes known wrong-way
-splice candidates. All 174 tests pass, including direct-fact oracle and frozen
-count-fixture parity checks. Full-reference compilation and real-read parity are
-in progress; whole-genome performance remains unproven. Earlier controls and the
-stopped PCANCOUNT2 attempt are preserved.
+**CURRENT: [PROGRESS.md](PROGRESS.md) records the validated direct-facts count
+(D110) and the next bounded optimization phase (D111).** The compiler stores
+numeric node memberships, ready model metadata and directional splice facts in
+one graph-specific object; count reads these facts directly without XG/GBWT/RI.
+R7 completed the original 66,601,887-group GAMP in 6,372.41s with 245,153,902,592-B
+HWM, exact R6 four-Parquet/six-MEX parity, and all 174 tests. Baseline commit
+`c408857` preserves those artifacts and source. D111 permits only measured,
+count-preserving engineering under the same <2h/<300e9-B/no-swap/no-spill gate;
+it does not change biology, scoring, UMI handling, inputs, or release status.
 
 ### Required native-count inputs
 

@@ -1,6 +1,6 @@
 # Progress
 
-## CURRENT: R7 full terminal validated; <2h/<300e9-B objective achieved (2026-11-01)
+## CURRENT: D111 measured optimization phase; R7 validated baseline preserved (2026-11-01)
 
 User explicitly reactivated the 66,601,887-group full 10/30 whole-GAMP per-gene
 objective: <2h wall and <300e9 B. R7 authoritative terminal audit at 17:03:05Z
@@ -13,6 +13,64 @@ Counts: [R7/full/counts](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancoll
 authority: [full-terminal.json](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_posting_reuse_20261101_nf6RG9/full-terminal.json).
 Tool goal state is complete after root receipt/documentation review. This is not F1,
 biological truth, external CR7 workflow equivalence, release, or causal-speedup proof.
+
+**D111 implementation gate:** Clean 119-file baseline commit `c408857` was made
+after source archive comparison and binary `cmp` to frozen R7. User authorizes
+only count-preserving measured optimization: fresh bounded R7 profile plus
+aggregate cache/ingest telemetry; read-local scratch allocation removal; independent
+buffered index writer; then conditional cache key canonicalization after the
+original cap, measured duplicate work, and per-key singleflight. Metadata mapped
+views/accounting, compact exact QNAME guard, observation multiplicity, bounded
+locality, and structural/SIMD/grammar ideas require their stated evidence gates.
+Per patch oracle/CTest; then consolidated 1M exact R7 parity and one full original
+GAMP under <7200s/<300e9/no OOM/swap/spill. Counts must remain identical;
+diagnostic counters may change. Revert unhelpful code; no biology/scoring/UMI,
+input XG/GAMP/RI, spill, or release change.
+
+**D111 64-core evidence checkpoint:** New target is <2h on 64 cores (96
+intermediate), <300GB and exact R7 counts. R7 used 760,250.94 CPU seconds, so
+64*7200 permits 460,800: at least 39.4% less CPU work before overhead is needed,
+not a promised speedup. Fresh R7 profile baseline passed exact 1M parity
+(107.48s native/HWM 80,584,964KiB); profile timing is not a causal A/B. Its
+23,036-sample/61.562883s zero-loss caller profile is 96.4273% resolver-other,
+0.05209% splice; no-children self is resolve 35.44%, posting decode 9.41%, model
+4.99%, malloc/free 3.89/3.29%. Do not sum caller/self fractions. The buffered
+64KiB writer, Delta scratch and aggregate cache/ingest metrics are validated
+below; the fresh profile motivated these changes rather than proving speedup.
+
+**D111 A/C validated on prefix; B rejected:** A (buffered writer, Delta scratch and
+metrics) passed full 174 (32.45s), exact 1M parity, and 64-core prefix: 141.03s/
+7,690.11 CPU-s/HWM 68,703,408KiB versus frozen R7 197.86s/11,367.23 CPU-s
+(~29% wall/~32% CPU). Shared-host prefix comparison is not full proof. Duplicate
+builds were 10,469/685,400 (1.53%, count not CPU cost); ingest had zero fallbacks
+and 854,778 full-queue submissions, so it is not priority. B added only exact
+post-cap sorted/deduplicated length-framed cache records but was rejected:
+1M/64 153.54s/8,524.55 CPU-s versus A 141.03s/7,690.11, only 765 keys saved
+(674,166 vs 674,931); root restored baseline key header/test hunks. No rejected
+B implementation or feature flag remains active.
+C now passed its direct/shared-vs-missing contract/oracles and 64-core exact 1M
+gate: 123.46s/6,596.85 CPU-s/HWM 66,413,420KiB, zero memory max/OOM/swap and
+four-Parquet/six-MEX/logical/profile/prior R7 parity. It reuses 3,327,984 lists
+and 8,837,666,038 posting rows versus 8,662,357/16,616,919,983 decoded. This is
+still single-prefix engineering evidence, not a full 64-core proof.
+
+**D112 V1 cleanup integrated and validated:** User authorized manual integration of
+uncommitted isolated `remove-v1-direct-index.patch` from
+`direct-index-v2-only-20261101`. Remove only PCDIRECTV1 reading/decoding,
+repack/upgrader API/CLI and obsolete V1/repack fixtures/tests; retain compact V2
+counting, PCANIDX2/3 and native annotation preparation. Root compared the actual
+uncommitted six-file diff with the supplied patch, then manually retained D111's
+buffered writer/boundary tests and C's V2 shared-list identity while removing
+only the obsolete compatibility code. Active-tree build, full 174 CTest (31.25s)
+and consolidated C64 1M exact R7 parity pass, independent of the isolated proof.
+No 168GB rebuild or cleanup-only whole run; jobs/frozen A/B/R7/indexes untouched.
+Receipt: [v1-cleanup-integration.json](/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_remaining_optimizations_20261101_gGNqCQ/v1-cleanup-integration.json).
+
+**Next authorized gate:** D112 is manually integrated as a six-file active patch
+with PCANIDX2/3 retained, no index-byte change or 168GB rebuild. Root reviewed the
+prelaunch documentation checkpoint. Next is the already-authorized full original
+66,601,887-group 64-core optimization gate under
+<7200s/<300e9/no spill/swap and exact full R7 parity; it is not cleanup-only.
 
 **R4 compact empirical gate (terminal):** Repack exited 0 at 12:20:20Z
 (5,822.268 s real) with 167,968,148,664-B final index. Its queued 1M count and
@@ -374,6 +432,41 @@ question is what matched linear dataset/workflow, feature namespace, cell set,
 and comparison metrics can support that design; no current record establishes
 their match. Preserve the distinction between `cr7-v1` profile semantics and
 external Cell Ranger equivalence.
+
+**Subsequent authorization (2026-11-01):** the independent root now contains
+the frozen R7 count/receipt snapshot at
+`/mnt/ssd/lalli/pancollapse-wg-analysis-20261101/data/pancollapse/r7-20261101/`
+and records its live gate in
+[`PROGRESS.md`](/mnt/ssd/lalli/pancollapse-wg-analysis-20261101/PROGRESS.md).
+User additionally authorizes a reference/command audit followed by two new
+whole-genome, same-FASTQ STARsolo runs (GRCh38 and T2T), not a claim that a
+matched linear comparison already exists. The raw STAR proposal is 2.7.11b,
+`GeneFull_Ex50pAS` primary with `Gene` and `GeneFull` secondary, and later
+separate common cell calling; exact reference/annotation namespaces remain an
+open freeze gate. The comparison plan is root-owned at
+`/mnt/ssd/lalli/pancollapse-wg-analysis-20261101/docs/comparison-plan.md`.
+No Nextflow/BAM workflow, GAMP or index copy, PanCollapse source/count-policy
+tuning, heavy analysis, or automatic goal transition is authorized.
+
+**Subsequent run status (2026-11-01):** the independent analysis root now exists
+with byte-verified, read-only copied R7 counts/receipts, locked analysis image,
+and vendor raw/filtered H5 context; no GAMP or index was copied and no C++ source
+or count policy changed. GRCh38 indexing finished exit 0 at 17:57:09Z and its
+full raw STARsolo count is live; the saved command passed the explicit CR7 bundle
+checker. T2T native-local indexing is live with the same 32-CPU/96-GiB/no-swap,
+no-BAM envelope and its count queued; T2T command validation awaits count start.
+Neither raw matrix is ready for analysis until full EOF and matrix checks pass.
+Next work is monitor/validate both arms, then execute the existing comparison
+plan under its stated annotation, coverage, and scientific limits—not a claim of
+linear equivalence or biological superiority.
+
+**Subsequent GRCh38 terminal status (2026-11-01):** GRCh38 now has
+`STATUS=complete`; Docker records exit 0/OOM=false at 18:04:46Z, `Log.final.out`
+records all 66,601,887 input reads, and the saved command passed the CR7-preset
+checker. This is an operational terminal receipt, not independent matrix
+validation or a scientific comparison result. T2T remains indexing with its
+count queued. The next work is matrix validation for GRCh38 and terminal/matrix
+validation for T2T, then the existing comparison plan.
 
 ## Historical checkpoint: approved Stage 6 performance implementation; whole count stopped (2026-10-31)
 

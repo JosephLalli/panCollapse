@@ -17,6 +17,8 @@ struct NodeScoreStats {
     std::uint64_t membership_groups = 0, raw_model_transfers = 0;
     std::uint64_t frontier_compactions = 0;
     std::uint64_t balance_saturated_groups = 0, balance_unsaturated_groups = 0;
+    std::uint64_t nodes_with_shared_id = 0, membership_lists_decoded = 0, membership_lists_reused = 0;
+    std::uint64_t posting_rows_decoded = 0, posting_rows_reused = 0;
 };
 
 // Explicit test controls, never a production fallback or a counting-policy flag.
@@ -47,7 +49,12 @@ class NodeScoreResolver {
                 raw_model_transfers_.load(std::memory_order_relaxed),
                 frontier_compactions_.load(std::memory_order_relaxed),
                 balance_saturated_groups_.load(std::memory_order_relaxed),
-                balance_unsaturated_groups_.load(std::memory_order_relaxed)};
+                balance_unsaturated_groups_.load(std::memory_order_relaxed),
+                nodes_with_shared_id_.load(std::memory_order_relaxed),
+                membership_lists_decoded_.load(std::memory_order_relaxed),
+                membership_lists_reused_.load(std::memory_order_relaxed),
+                posting_rows_decoded_.load(std::memory_order_relaxed),
+                posting_rows_reused_.load(std::memory_order_relaxed)};
     }
 
   private:
@@ -60,6 +67,9 @@ class NodeScoreResolver {
     mutable std::atomic<std::uint64_t> membership_groups_{0}, raw_model_transfers_{0};
     mutable std::atomic<std::uint64_t> frontier_compactions_{0};
     mutable std::atomic<std::uint64_t> balance_saturated_groups_{0}, balance_unsaturated_groups_{0};
+    mutable std::atomic<std::uint64_t> nodes_with_shared_id_{0}, membership_lists_decoded_{0};
+    mutable std::atomic<std::uint64_t> membership_lists_reused_{0}, posting_rows_decoded_{0};
+    mutable std::atomic<std::uint64_t> posting_rows_reused_{0};
 };
 
 }  // namespace pancollapse

@@ -94,3 +94,33 @@ passed in 32.09s. All twelve review findings remain bounded: only R7 read-local
 reuse and separately authorized R6 work were implemented; alternate proposals
 remain unadopted. This result is not F1, biological truth, external CR7 whole-
 workflow equivalence, release, or isolated causal-speedup proof.
+
+## D111 implementation status
+
+Baseline `c408857` commits the validated R7 state. The user authorized the
+ordered, evidence-gated plan recorded in D111. A/C are implemented and passed
+the consolidated million-read gate below; B was measured and rejected. Remaining
+proposals stay conditional on evidence and exact parity/resource gates.
+
+Fresh R7 profile evidence now sets the 64-core target: 760,250.94 baseline CPU
+seconds versus 460,800 available in two hours means at least 39.4% work reduction
+before overhead, not a speed prediction. Exact-1M profile control passed
+(107.48s/HWM 80,584,964KiB); its profile is diagnostic, not A/B. It supports
+read-local allocation/decode work. The 64KiB buffered writer, Delta scratch and
+aggregate cache/ingest metrics subsequently passed build/CTest and exact parity.
+All later plan items remain conditional.
+
+Implementation status: A validated exact 1M at 64 cores (141.03s/7,690.11 CPU-s
+versus baseline 197.86s/11,367.23 CPU-s), but remains a shared-host prefix result.
+B's exact post-cap key canonicalization passed parity but regressed to
+153.54s/8,524.55 CPU-s while saving only 765 keys, so it was removed. C's
+source-local shared membership reuse preserves per-node downstream evidence.
+Neither establishes a 64-core full result; all remaining actions require their
+stated exact parity/resource gates.
+
+Follow-up: C64 exact 1M passed in 123.46s/6,596.85 CPU-s with 66,413,420KiB HWM
+and exact R7 output parity, after reusing 3,327,984 membership lists and
+8,837,666,038 posting rows. This supports the authorized 64-core full
+measurement but is not itself whole-run proof. D112 V1 cleanup integrated without
+index-format/byte change; the next run remains the original full GAMP exact-R7
+parity gate, not a cleanup experiment.

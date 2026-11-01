@@ -218,6 +218,10 @@ class PostingView {
 struct NodeView {
     std::uint64_t length = 0;
     PostingView postings;
+    // Opaque list identity comparable only within the same Source and read
+    // group. Equal non-missing IDs guarantee an identical ordered logical
+    // Posting sequence; zero is a valid identity for an empty list.
+    std::uint32_t shared_membership_id = missing;
 };
 struct ScoringPosting {
     std::uint32_t class_id = missing, forward = 0, reverse = 0;

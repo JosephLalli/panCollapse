@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <compare>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <map>
@@ -31,6 +32,7 @@ struct Delta {
     std::int64_t score = 0, gene_score = 0;
     std::uint64_t exon = 0, body = 0, forward = 0, reverse = 0;
     std::vector<std::uint32_t> support_slots;
+    bool touched = false;
 };
 struct Veto { std::uint32_t model = 0; bool forward = false, reverse = false; };
 using EdgeEffects = std::vector<Veto>;
@@ -48,10 +50,13 @@ struct Piece {
 struct LocalPosting {
     std::uint32_t local_model = 0, support_set = 0, flags = 0;
 };
-struct Node {
-    std::uint64_t length = 0;
+struct LocalPostingList {
     std::vector<LocalPosting> postings;
     bool has_annotation = false;
+};
+struct Node {
+    std::uint64_t length = 0;
+    const LocalPostingList* posting_list = nullptr;
 };
 struct Winner {
     std::int64_t score = no_score;
@@ -137,6 +142,10 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
     std::unordered_map<std::uint64_t, Node> nodes;
     std::unordered_map<std::uint32_t, std::uint32_t> model_index;
     std::vector<Model> models;
+    std::deque<LocalPostingList> decoded_membership_lists;
+    std::unordered_map<std::uint32_t, const LocalPostingList*> shared_membership_lists;
+    std::uint64_t nodes_with_shared_id = 0, membership_lists_decoded = 0, membership_lists_reused = 0;
+    std::uint64_t posting_rows_decoded = 0, posting_rows_reused = 0;
     // Annotation lookup is paid once per distinct node, never once per route.
     for (const auto* alignment : records) {
         if (!alignment) throw std::runtime_error("node-score received null GAMP record");
@@ -147,18 +156,38 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
             if (!record) throw std::runtime_error("GAMP node is absent from prepared count reference: " + std::to_string(id));
             Node node;
             node.length = record->length;
-            node.postings.reserve(record->postings.size());
-            for (const auto posting : record->postings) {
-                auto [found, inserted] = model_index.try_emplace(posting.model, models.size());
-                if (inserted) {
-                    Model model;
-                    model.record = reference_.model(posting.model);
-                    models.push_back(std::move(model));
+            const auto decode = [&] {
+                decoded_membership_lists.emplace_back();
+                auto& decoded = decoded_membership_lists.back();
+                decoded.postings.reserve(record->postings.size());
+                for (const auto posting : record->postings) {
+                    auto [found, inserted] = model_index.try_emplace(posting.model, models.size());
+                    if (inserted) {
+                        Model model;
+                        model.record = reference_.model(posting.model);
+                        models.push_back(std::move(model));
+                    }
+                    decoded.postings.push_back({found->second, posting.support_set, posting.flags});
+                    decoded.has_annotation = decoded.has_annotation ||
+                        (posting.flags & (exon_flags | body_flags));
+                    if (posting.flags & body_flags) models[found->second].support_sets.push_back(posting.support_set);
                 }
-                node.postings.push_back({found->second, posting.support_set, posting.flags});
-                node.has_annotation = node.has_annotation ||
-                    (posting.flags & (exon_flags | body_flags));
-                if (posting.flags & body_flags) models[found->second].support_sets.push_back(posting.support_set);
+                ++membership_lists_decoded;
+                posting_rows_decoded += decoded.postings.size();
+                return &decoded;
+            };
+            if (record->shared_membership_id == count_reference::missing) {
+                node.posting_list = decode();
+            } else {
+                ++nodes_with_shared_id;
+                auto [found, inserted] = shared_membership_lists.try_emplace(record->shared_membership_id);
+                if (inserted) {
+                    node.posting_list = found->second = decode();
+                } else {
+                    node.posting_list = found->second;
+                    ++membership_lists_reused;
+                    posting_rows_reused += node.posting_list->postings.size();
+                }
             }
             nodes.emplace(id, std::move(node));
         }
@@ -247,7 +276,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                 piece.last = endpoint;
                 piece.bases += bases;
                 piece.credits.push_back({id, bases, scores[m], reverse});
-                has_annotation = has_annotation || node.has_annotation;
+                has_annotation = has_annotation || node.posting_list->has_annotation;
             }
             const auto mark = [&](std::uint32_t next) {
                 if (next >= size || next <= index) throw std::runtime_error("GAMP subpaths are not topologically ordered");
@@ -329,7 +358,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
         std::vector<std::vector<Membership>> memberships(models.size());
         for (const auto id : record_nodes) {
             const auto& node = nodes.at(id);
-            for (const auto posting : node.postings) {
+            for (const auto posting : node.posting_list->postings) {
                 if (!(posting.flags & (exon_flags | body_flags))) continue;
                 const auto& support = models[posting.local_model].support_sets;
                 const auto slot = posting.flags & body_flags ? static_cast<std::uint32_t>(
@@ -357,14 +386,23 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
             classes.push_back({std::move(aliases), {}, std::get<3>(signature), std::get<1>(signature) == 1});
         }
         membership_groups += classes.size();
+        std::vector<Delta> deltas(classes.size());
+        std::vector<std::uint32_t> touched_classes;
         for (std::uint32_t i = 0; i < size; ++i) {
-            std::map<std::uint32_t, Delta> deltas;
+            touched_classes.clear();
             for (const auto& credit : pieces[i].credits) {
                 const auto found = class_nodes.find(credit.node);
                 if (found == class_nodes.end()) continue;
                 for (const auto& posting : found->second) {
                     auto& delta = deltas[posting.class_id];
-                    delta.model = posting.class_id;
+                    if (!delta.touched) {
+                        delta.model = posting.class_id;
+                        delta.score = delta.gene_score = 0;
+                        delta.exon = delta.body = delta.forward = delta.reverse = 0;
+                        delta.support_slots.clear();
+                        delta.touched = true;
+                        touched_classes.push_back(posting.class_id);
+                    }
                     delta.score = pathtally::route_checked_add(delta.score, credit.score);
                     const bool exon = (posting.flags & exon_flags) != 0;
                     const bool body = (posting.flags & body_flags) != 0;
@@ -380,12 +418,15 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                     else delta.reverse += credit.bases;
                 }
             }
-            for (auto& [class_id, delta] : deltas) {
+            std::sort(touched_classes.begin(), touched_classes.end());
+            for (const auto class_id : touched_classes) {
+                auto& delta = deltas[class_id];
                 unique(delta.support_slots);
                 classes[class_id].operations.emplace_back(i, delta.score, delta.gene_score, delta.exon,
                     delta.body, delta.forward, delta.reverse, std::move(delta.support_slots));
                 ++model_visits;
                 raw_model_transfers += classes[class_id].aliases.size();
+                delta.touched = false;
             }
         }
         // Different incidence classes can still yield the same complete piece
@@ -589,6 +630,11 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
     frontier_compactions_.fetch_add(frontier_compactions, std::memory_order_relaxed);
     balance_saturated_groups_.fetch_add(balance_saturated_groups, std::memory_order_relaxed);
     balance_unsaturated_groups_.fetch_add(balance_unsaturated_groups, std::memory_order_relaxed);
+    nodes_with_shared_id_.fetch_add(nodes_with_shared_id, std::memory_order_relaxed);
+    membership_lists_decoded_.fetch_add(membership_lists_decoded, std::memory_order_relaxed);
+    membership_lists_reused_.fetch_add(membership_lists_reused, std::memory_order_relaxed);
+    posting_rows_decoded_.fetch_add(posting_rows_decoded, std::memory_order_relaxed);
+    posting_rows_reused_.fetch_add(posting_rows_reused, std::memory_order_relaxed);
     return result;
 }
 }  // namespace pancollapse

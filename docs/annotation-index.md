@@ -40,6 +40,10 @@ facts; it does not revive the retired path-position/occurrence builder.
 Historical expanded PCANCOUNT indexes and raw-annotation count routes remain
 retired. BAM/RAD export remains a separate, deprecated `convert` command.
 
+Direct facts are written in compact V2 format as they are compiled; no expanded
+intermediate or separate repacking step is needed. Counting accepts only this
+direct-index format. Older direct indexes must be rebuilt from preparation inputs.
+
 ## Choose a memory target
 
 `count --memory-budget 300GB` sets an overall planning target. Without it, count

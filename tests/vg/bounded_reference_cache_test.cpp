@@ -476,6 +476,31 @@ int main() {
               "publication-exception flight was not retryable");
 
         using ShardedCache = pancollapse::BoundedShardedCache<int, std::string, 1>;
+        ShardedCache racing_cache(16, 4096, string_bytes);
+        BuilderGate duplicate_gate;
+        auto race_builder = [&] {
+            return racing_cache.get_or_build(1, [&] {
+                duplicate_gate.enter_and_wait();
+                return std::string("same");
+            });
+        };
+        auto first_racer = std::async(std::launch::async, race_builder);
+        auto second_racer = std::async(std::launch::async, race_builder);
+        const bool both_racers_entered = duplicate_gate.wait_for_entered(2);
+        duplicate_gate.release();
+        const auto first_race_value = first_racer.get();
+        const auto second_race_value = second_racer.get();
+        check(both_racers_entered && first_race_value == second_race_value &&
+                  racing_cache.entries() == 1 && racing_cache.hits() == 1 &&
+                  racing_cache.misses() == 1 && racing_cache.duplicate_builds() == 1,
+              "racing completed builders were confused with avoided work");
+        const auto ready_hit = racing_cache.get_or_build(1, []() -> std::string {
+            throw std::runtime_error("ready hit rebuilt its value");
+        });
+        check(ready_hit == first_race_value && racing_cache.hits() == 2 &&
+                  racing_cache.duplicate_builds() == 1 && racing_cache.misses() == 1,
+              "ready hit changed the duplicate-build accounting");
+
         ShardedCache pressure_cache(16, 4096, string_bytes);
         const auto pressure_lease = pressure_cache.get_or_build(
             1, [] { return std::string(128, 'p'); });

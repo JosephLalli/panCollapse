@@ -236,8 +236,6 @@ constexpr const char* kUsageText =
     "       panCollapse index --from-annotation-index native.pci --xg graph.xg "
     "--gbwt paths.gbwt --r-index paths.ri --r-index-manifest binding.json "
     "--out direct.pci [--threads N] [--memory-budget SIZE]\n"
-    "       panCollapse index --from-annotation-index direct.pci --out compact.pci "
-    "[--memory-budget SIZE]  (repack existing direct facts; no graph inputs)\n"
     "       Direct facts contain all reference lookups; count needs no XG/GBWT/RI.\n"
     "       PROFILE_SELECTOR is --cr7, --pansc-strict-v1, or --profile ID; "
     "selectors may be combined";
@@ -2082,32 +2080,9 @@ private:
 int run_annotation_index(int argc, char** argv) {
     using namespace pancollapse::direct_count;
     bool direct_facts = false;
-    std::filesystem::path direct_source;
     for (int i = 2; i < argc; ++i) {
         const std::string_view key = argv[i];
         direct_facts |= key == "--xg";
-        if (key == "--from-annotation-index" && i + 1 < argc) direct_source = argv[i + 1];
-    }
-    if (!direct_facts && !direct_source.empty() &&
-        pancollapse::direct_index::is_index(direct_source)) {
-        std::filesystem::path input, output;
-        std::size_t memory_limit = 300000000000ULL;
-        std::set<std::string> seen;
-        for (int i = 2; i < argc; ++i) {
-            const std::string key = argv[i];
-            if (key == "--help" || key == "-h") { std::cout << kUsageText << '\n'; return 0; }
-            if (!seen.insert(key).second || i + 1 == argc)
-                throw std::runtime_error("index requires unique options with values");
-            const std::string value = argv[++i];
-            if (key == "--from-annotation-index") input = value;
-            else if (key == "--out") output = value;
-            else if (key == "--memory-budget") memory_limit = pancollapse::count_memory::parse_bytes(value);
-            else throw std::runtime_error("unsupported direct repack option: " + key);
-        }
-        if (input.empty() || output.empty() || memory_limit == 0)
-            throw std::runtime_error("direct repack requires --from-annotation-index, --out, and positive --memory-budget");
-        pancollapse::direct_index::repack(input, output, memory_limit);
-        return 0;
     }
     if (direct_facts) {
         pancollapse::direct_index::BuildOptions options;

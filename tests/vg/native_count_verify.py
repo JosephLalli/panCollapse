@@ -70,27 +70,11 @@ def main() -> None:
     direct_serial = root / "direct-serial.pci"
     run(compile_args + ["--threads", "1", "--out", direct_serial])
     assert index.read_bytes() == direct_serial.read_bytes(), "direct index bytes depend on threads"
-    repacked = root / "direct-repacked.pci"
+    assert int.from_bytes(index.read_bytes()[8:12], "little") == 2, "direct index is not compact V2"
+    destination = root / "unsupported-direct-source.pci"
     run([program, "index", "--from-annotation-index", index,
-         "--out", repacked, "--memory-budget", "1GiB"])
-    repacked_again = root / "direct-repacked-again.pci"
-    run([program, "index", "--from-annotation-index", repacked,
-         "--out", repacked_again, "--memory-budget", "1GiB"])
-    assert repacked.read_bytes() == repacked_again.read_bytes(), "repacking is not canonical"
-    for label, extra in (
-        ("duplicate", ["--memory-budget", "1GiB", "--memory-budget", "1GiB"]),
-        ("graph-input", ["--gbwt", gbwt]),
-        ("zero-memory", ["--memory-budget", "0B"]),
-        ("bad-memory", ["--memory-budget", "not-a-size"]),
-    ):
-        destination = root / f"invalid-repack-{label}.pci"
-        run([program, "index", "--from-annotation-index", index,
-             "--out", destination, *extra], succeeds=False)
-        assert not destination.exists(), f"failed repack published {label}"
-    before_repack = repacked.read_bytes()
-    run([program, "index", "--from-annotation-index", index,
-         "--out", repacked], succeeds=False)
-    assert repacked.read_bytes() == before_repack, "repack overwrote an existing output"
+         "--out", destination], succeeds=False)
+    assert not destination.exists(), "index accepted a direct index as a preparation source"
     # Counting must work with every compiler-only graph input unavailable.
     for path in (xg, gbwt, ri, binding, bound):
         path.rename(path.with_name(path.name + ".compiler-only"))
@@ -111,12 +95,6 @@ def main() -> None:
         output = root / f"node-score-{profile}"
         run(node_score + [flag, "--threads", "4", "--out-dir", output])
         assert_profile_output(node_baseline, output, profile)
-    repack_output = root / "repacked-counts"
-    repack_command = native.copy()
-    repack_command[repack_command.index("--annotation-index") + 1] = repacked
-    run(repack_command + ["--cr7", "--pansc-strict-v1", "--threads", "4",
-                          "--out-dir", repack_output])
-    check_counts(node_baseline, repack_output)
     # Cache capacity changes retention only, never assignment or molecule rules.
     for label, limit in (("tiny", "1B"), ("generous", "64MiB")):
         output = root / f"cache-limits-{label}"
