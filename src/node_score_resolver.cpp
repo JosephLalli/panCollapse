@@ -28,7 +28,6 @@ struct Model {
     std::vector<std::uint32_t> support_sets;
 };
 struct Delta {
-    std::uint32_t model = 0;
     std::int64_t score = 0, gene_score = 0;
     std::uint64_t exon = 0, body = 0, forward = 0, reverse = 0;
     std::vector<std::uint32_t> support_slots;
@@ -140,6 +139,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
     const std::vector<const vg::MultipathAlignment*>& records,
     std::span<const NumericAssignmentProfile> profiles) const {
     reference_.begin_read_group();
+    const auto ready_models = reference_.ready_models();
     std::unordered_map<std::uint64_t, Node> nodes;
     std::unordered_map<std::uint32_t, std::uint32_t> model_index;
     std::vector<Model> models;
@@ -166,7 +166,12 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                     auto [found, inserted] = model_index.try_emplace(posting.model, models.size());
                     if (inserted) {
                         Model model;
-                        model.record = reference_.model(posting.model);
+                        if (ready_models.empty()) model.record = reference_.model(posting.model);
+                        else {
+                            if (posting.model >= ready_models.size())
+                                throw std::runtime_error("invalid node-score model id");
+                            model.record = ready_models[posting.model];
+                        }
                         models.push_back(std::move(model));
                     }
                     decoded.postings.push_back({found->second, posting.support_set, posting.flags});
@@ -248,6 +253,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
     std::uint64_t incidence_node_rows = 0, incidence_list_rows = 0;
     std::uint64_t frontier_compactions = 0;
     std::uint64_t balance_saturated_groups = 0, balance_unsaturated_groups = 0;
+    std::uint64_t balance_prepare_bypassed = 0;
     std::uint64_t dp_states = 0, dp_transitions = 0, max_frontier = 0, group_count = 0, offset_conflicts = 0;
     for (const auto* alignment : records) {
         const auto size = static_cast<std::size_t>(alignment->subpath_size());
@@ -256,11 +262,13 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
         std::vector<Piece> pieces(size);
         std::vector<bool> incoming(size, false);
         std::vector<std::uint64_t> record_nodes;
+        std::vector<std::int64_t> scores;
         bool has_annotation = false;
+        bool has_join = false;
         for (std::size_t index = 0; index < size; ++index) {
             const auto& subpath = alignment->subpath(static_cast<int>(index));
             auto& piece = pieces[index];
-            std::vector<std::int64_t> scores;
+            scores.clear();
             pathtally::flat_scorer()(*alignment, static_cast<int>(index), offsets[index], scores);
             for (int m = 0; m < subpath.path().mapping_size(); ++m) {
                 const auto& mapping = subpath.path().mapping(m);
@@ -283,6 +291,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
             }
             const auto mark = [&](std::uint32_t next) {
                 if (next >= size || next <= index) throw std::runtime_error("GAMP subpaths are not topologically ordered");
+                has_join = has_join || incoming[next];
                 incoming[next] = true;
             };
             for (const auto next : subpath.next()) mark(next);
@@ -292,6 +301,9 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
         std::vector<std::uint32_t> starts(alignment->start().begin(), alignment->start().end());
         if (starts.empty()) for (std::uint32_t i = 0; i < size; ++i) if (!incoming[i]) starts.push_back(i);
         for (const auto start : starts) if (start >= size) throw std::runtime_error("GAMP start index is out of range");
+        // With one start and no joins, each subpath receives at most one
+        // prefix: threshold-based merging cannot reduce its frontier.
+        const bool single_start_no_join = starts.size() == 1 && !has_join;
 
         // Count represented routes cheaply for telemetry only; never enumerate.
         std::vector<std::uint64_t> routes(size, 0);
@@ -327,8 +339,10 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
         // reference-consuming piece replaces them with its own last endpoint.
         std::vector<std::vector<std::uint64_t>> endpoints(size);
         std::vector<const EdgeEffects*> local_edges;
+        std::vector<std::uint64_t> previous;
         for (std::size_t i = 0; i < size; ++i) if (reachable[i]) {
-            auto previous = std::move(endpoints[i]);
+            previous.clear();
+            previous.swap(endpoints[i]);
             unique(previous);
             const auto& piece = pieces[i];
             local_edges.insert(local_edges.end(), piece.internal_edges.begin(), piece.internal_edges.end());
@@ -391,7 +405,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                         std::move(splice_operations[model])}].push_back(model);
         }
         std::vector<MemberClass> classes;
-        std::unordered_map<std::uint64_t, std::vector<ClassPosting>> class_lists;
+        std::vector<std::vector<ClassPosting>> class_lists(decoded_membership_lists.size());
         for (auto& [signature, aliases] : partitions) {
             const auto class_id = static_cast<std::uint32_t>(classes.size());
             for (const auto& [list, flags, slot] : std::get<2>(signature))
@@ -404,12 +418,9 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
         for (std::uint32_t i = 0; i < size; ++i) {
             touched_classes.clear();
             for (const auto& credit : pieces[i].credits) {
-                const auto found = class_lists.find(credit.membership);
-                if (found == class_lists.end()) continue;
-                for (const auto& posting : found->second) {
+                for (const auto& posting : class_lists.at(credit.membership)) {
                     auto& delta = deltas[posting.class_id];
                     if (!delta.touched) {
-                        delta.model = posting.class_id;
                         delta.score = delta.gene_score = 0;
                         delta.exon = delta.body = delta.forward = delta.reverse = 0;
                         delta.support_slots.clear();
@@ -455,17 +466,24 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                     std::move(member.splices)}].push_back(id);
         }
         group_count += groups.size();
+        // Reuse within the scoring loops; nothing needs to survive a record.
+        std::vector<const Op*> by_piece;
+        std::vector<threshold_balance::Delta> balance_deltas;
+        std::vector<std::uint8_t> internal_masks;
         for (const auto& [signature, aliases] : groups) {
             const auto representative = classes[aliases.front()].aliases.front();
             // Native pairs have a fixed body-support set: body_seen already
             // determines this payload, so no per-state vector is necessary.
             const bool fixed_support = std::get<1>(signature);
             const std::vector<std::uint32_t> fixed_slots{0};
-            std::vector<const Op*> by_piece(size, nullptr);
+            by_piece.assign(size, nullptr);
             for (const auto& op : std::get<2>(signature)) by_piece[std::get<0>(op)] = &op;
             std::vector<threshold_balance::Bounds> balance_bounds;
-            if (execution_ == NodeScoreExecution::automatic) {
-                std::vector<threshold_balance::Delta> deltas;
+            if (execution_ == NodeScoreExecution::automatic && single_start_no_join)
+                ++balance_prepare_bypassed;
+            if (execution_ == NodeScoreExecution::automatic && !single_start_no_join) {
+                auto& deltas = balance_deltas;
+                deltas.clear();
                 deltas.reserve(size);
                 for (std::size_t i = 0; i < size; ++i) {
                     const auto* op = by_piece[i];
@@ -491,7 +509,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                     key.strand_balance = balance_bounds[next].strand.normalize(key.strand_balance);
                 }
             };
-            std::vector<std::uint8_t> internal_masks(size, 3);
+            internal_masks.assign(size, 3);
             for (std::size_t i = 0; i < size; ++i)
                 for (const auto* effect : pieces[i].internal_edges)
                     internal_masks[i] &= allowed(effect, representative);
@@ -643,6 +661,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
     frontier_compactions_.fetch_add(frontier_compactions, std::memory_order_relaxed);
     balance_saturated_groups_.fetch_add(balance_saturated_groups, std::memory_order_relaxed);
     balance_unsaturated_groups_.fetch_add(balance_unsaturated_groups, std::memory_order_relaxed);
+    balance_prepare_bypassed_.fetch_add(balance_prepare_bypassed, std::memory_order_relaxed);
     nodes_with_shared_id_.fetch_add(nodes_with_shared_id, std::memory_order_relaxed);
     membership_lists_decoded_.fetch_add(membership_lists_decoded, std::memory_order_relaxed);
     membership_lists_reused_.fetch_add(membership_lists_reused, std::memory_order_relaxed);

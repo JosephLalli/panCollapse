@@ -246,7 +246,8 @@ int run(const Config& config) {
             << " raw_model_transfers=" << node_stats.raw_model_transfers
             << " frontier_compactions=" << node_stats.frontier_compactions
             << " balance_saturated_groups=" << node_stats.balance_saturated_groups
-            << " balance_unsaturated_groups=" << node_stats.balance_unsaturated_groups << '\n';
+            << " balance_unsaturated_groups=" << node_stats.balance_unsaturated_groups
+            << " balance_prepare_bypassed=" << node_stats.balance_prepare_bypassed << '\n';
         std::osyncstream(std::cerr) << "panCollapse: assignment-cache-stats: entries="
                   << assignment_cache->entries() << " hits=" << assignment_cache->hits()
                   << " duplicate_builds=" << assignment_cache->duplicate_builds()

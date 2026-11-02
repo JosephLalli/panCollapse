@@ -17,6 +17,7 @@ struct NodeScoreStats {
     std::uint64_t membership_groups = 0, raw_model_transfers = 0;
     std::uint64_t frontier_compactions = 0;
     std::uint64_t balance_saturated_groups = 0, balance_unsaturated_groups = 0;
+    std::uint64_t balance_prepare_bypassed = 0;
     std::uint64_t nodes_with_shared_id = 0, membership_lists_decoded = 0, membership_lists_reused = 0;
     std::uint64_t posting_rows_decoded = 0, posting_rows_reused = 0;
     // Per-record incidence construction before/after shared-list reuse; credits
@@ -53,6 +54,7 @@ class NodeScoreResolver {
                 frontier_compactions_.load(std::memory_order_relaxed),
                 balance_saturated_groups_.load(std::memory_order_relaxed),
                 balance_unsaturated_groups_.load(std::memory_order_relaxed),
+                balance_prepare_bypassed_.load(std::memory_order_relaxed),
                 nodes_with_shared_id_.load(std::memory_order_relaxed),
                 membership_lists_decoded_.load(std::memory_order_relaxed),
                 membership_lists_reused_.load(std::memory_order_relaxed),
@@ -76,6 +78,7 @@ class NodeScoreResolver {
     mutable std::atomic<std::uint64_t> membership_lists_reused_{0}, posting_rows_decoded_{0};
     mutable std::atomic<std::uint64_t> posting_rows_reused_{0};
     mutable std::atomic<std::uint64_t> incidence_node_rows_{0}, incidence_list_rows_{0};
+    mutable std::atomic<std::uint64_t> balance_prepare_bypassed_{0};
 };
 
 }  // namespace pancollapse

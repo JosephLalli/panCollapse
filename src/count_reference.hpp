@@ -336,6 +336,9 @@ class Source {
     virtual const std::string& content_id() const = 0;
     virtual std::size_t model_count() const = 0;
     virtual ModelRecord model(std::uint32_t id) const = 0;
+    // Optional, immutable ID-indexed table, valid for the Source lifetime.
+    // Empty means use model(id); exposing a table must not prepare or scan it.
+    virtual std::span<const ModelRecord> ready_models() const { return {}; }
     virtual std::size_t scoring_class_count() const = 0;
     virtual ScoringClassRecord scoring_class(std::uint32_t id) const = 0;
     virtual const NodeRecord* node(std::uint64_t id) const = 0;

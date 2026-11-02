@@ -1,6 +1,51 @@
 # Progress
 
-## CURRENT: 3b4c76f 64-core full terminal; time failed, memory/parity passed (2026-11-01)
+## CURRENT: D116 checkpoint: commit E, profile E, then one measured exact-count iteration (2026-11-02)
+
+**D116 authorized next phase (not yet started):** The user has authorized this
+strict sequence only: commit the already validated E source on base `a4138e0`;
+obtain the missing E profile on the same real first-1M input at 64 threads; use
+that profile to select and implement one smallest measured exact-count
+optimization; then run the full 175-test suite, exact 1M parity, and a repeat
+timing at the same 64-thread scope. The commit, profile, implementation, and
+measurements remain pending at this documentation checkpoint. Preserve the
+existing inputs and resource envelope: no whole-GAMP count, index rebuild,
+GAMP/XG/RI or input-hash work, biology/CB/UMI/profile/scorer/cap change, spill,
+release, or other job manipulation.
+
+The D115 R7/E observation is the only current E timing: a sequential,
+shared-host `n=1` comparison showing E 15.702% lower wall and 17.172% lower CPU
+than original R7 under its stated confounders. It is neither a causal E speedup
+nor a latest-E-versus-F comparison: R7 is not asserted to be later intermediate
+F, cache warmth differed, major faults were 87/0, and an unrelated 128-thread
+job remained busy. The missing same-scope E profile is therefore the required
+selection evidence; the later repeat timing can assess only the one selected
+iteration under its observed host conditions, not whole-GAMP or <2h performance.
+
+**Matched benchmark terminal:** The two sequential real-first-1M cases completed
+with terminal driver exit 0 at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_r7_e_current_host_20261102_hgbDBv`
+(`RESULTS.json`, `RUN.json`, and per-case validation/parity receipts). They used
+the frozen original R7 binary at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_posting_reuse_20261101_nf6RG9/panCollapse`
+and immutable E at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_buffer_dense_reuse_20261102_93jnXf/candidate-e/panCollapse`.
+Both used 1,000,000 groups/2,502,433 records, both profiles, Parquet plus MEX,
+the same 167,968,148,664-B direct `.pci`, 64 threads/64-CPU quota, 300e9-B
+no-swap envelope, and verified identical Docker image IDs. Both passed exact
+frozen-R7 parity for four Parquet and six MEX bytes plus decoded, logical,
+profile, prior, and counter comparisons; both had zero OOM/swap. R7/E wall was
+299.70/252.64s; CPU 17,395.35/14,408.16s (4.83204/4.00227h); HWM
+69,774,120/66,551,840KiB. The observed E reduction is 15.702% wall and 17.172%
+CPU (1.18627x throughput).
+
+This is a single sequential R7→E shared-host observation (n=1), not an isolated
+causal claim, a whole-GAMP <2h prediction, or an isolated latest-E-versus-F
+effect: major faults were 87/0, cache warmth was neither identical nor flushed,
+and a separate 128-thread job was busy before both cases and after all work;
+that job was preserved. Production code was unchanged in this phase; no index
+or hash work, full run, or release occurred. The bounded comparison gate is
+complete; no automatic next launch is authorized.
 
 User explicitly reactivated the 66,601,887-group full 10/30 whole-GAMP per-gene
 objective: <2h wall and <300e9 B. R7 authoritative terminal audit at 17:03:05Z
@@ -74,7 +119,57 @@ the reliable evidence. No new live profiler, full count, index or input change.
 F remains a count-validated optimization-branch candidate, not a promoted
 performance result. The next speed gate needs a quiet/coordinated 64-core window.
 
-**64-core feasibility/comparator question (read-only):** Current HEAD is
+**D113 bounded-iteration clarification:** The user accepts exact one-million-
+read validation for current optimization iterations. This does not establish the
+64-core target, release F, request an automatic whole-GAMP run, or replace the
+pending controlled-performance gate. No implementation or experiment was
+performed in this read-only Q&A; the additional suggestions were reported in
+chat and are not newly accepted design decisions.
+
+**D114 exact-count optimization gate:** The user now authorizes narrowly scoped
+implementation of worker-buffer reuse; dense list-ID class lookup; batch posting/
+model access; and conditional omission of threshold preparation only for a
+single-start, no-join DAG, while retaining every alignment score. Membership
+preparation reuse across alternatives is authorized only after measuring repeat
+record-list sets. Each independent patch requires proof/feasibility review before
+subtle algorithm or concurrency edits, full CTest, then exact 1M R7 parity
+(four Parquet, six MEX, decoded/logical/profile/prior/counters) and resource
+statistics at the same 64-core quota, 300GB, and no-swap envelope. No full run
+or <2h/release claim is authorized. Do not change GAMP/XG/RI, CB/UMI, profiles,
+scorer semantics, or caps; do not hash inputs, spill, or build an index. The
+earlier F timing remains inconclusive because of later-window and affinity-control
+confounding; it is not adopted as a speed estimate. The current gate is this
+per-patch exact 1M validation sequence.
+
+**D114 A--D archived; E is the active gate:** In
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_buffer_dense_reuse_20261102_93jnXf`,
+A (workspace plus dense lookup) and B (ready models plus temporary recurrence)
+each passed 175 CTest and exact 1M validation. Their observed baseline-F/A/B
+wall/CPU-s were 210.42/11,991.94, 265.46/15,282.72, and 262.28/15,233.19.
+D passed 175 CTest and exact 1M validation at 236.30s/13,561.54 CPU-s; the final
+F control passed at 223.44s/12,905.47 CPU-s. All current timing occurred under
+heavy competition and is provisional: it establishes neither a causal regression
+nor speedup, nor full/under-two-hour evidence. The membership-preparation result
+(4,001/1,574,890 repeats; 0.254%, and 104,542,815/16,966,500,631 repeat/list
+rows; 0.616%) rejects a plan cache; its telemetry is deleted.
+
+Following the user's simplicity preference, parent selected E to remove the entire `NodeScoreWorkspace` API,
+implementation, guard/thread ownership/budget/logging, and unused `Delta.model`.
+It retains only record-local vector reuse across piece/group loops, dense-ID
+lookup, immutable `ready_models`, and the no-join bypass; the production diff is
+now 28 lines. A--D artifacts/results remain preserved but are superseded by E,
+not active parallel engines. E's full 175-test suite passed in 34.97s; its
+native 1M run completed in 229.69s with 13,097.69 CPU-s and 66,792,380KiB HWM.
+The Docker driver exited 0, validation/MEX-validation/parity JSONs are present,
+and `PARITY_PASSED`/`VALIDATED` establish exact 1M output parity. Source/binary
+snapshots at `R/candidate-e` exactly match current uncommitted code on base
+`a4138e0`; this is neither a commit nor release. F's 210.42s then 223.44s
+controls and E's 229.69s observation are all contended/provisional and do not
+demonstrate a speedup or under-two-hour result. The next safe gate is quiet, controlled 1M
+performance validation only; no full run, release, index, UMI, or policy change
+is authorized.
+
+**64-core feasibility/comparator question (read-only):** At that comparison, HEAD was
 `5003be0` over source `3b4c76f`. C64 consumed 534,792.51 CPU-s = 148.553475
 CPU-hours for both count profiles including MEX, and is 1,570.10s/21.8% over
 target: it needs 17.9% less wall time (1.218x throughput). Its fresh C profile

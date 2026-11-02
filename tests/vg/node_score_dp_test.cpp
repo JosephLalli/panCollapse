@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -178,7 +179,7 @@ Reference write_load(const std::filesystem::path& path, const Data& value) {
     return Reference::load(path);
 }
 
-class MembershipViewSource final : public Source {
+class MembershipViewSource : public Source {
   public:
     MembershipViewSource(const Source& source, bool share,
                          std::vector<std::pair<std::uint64_t, std::uint32_t>> ids = {{100, 7}, {101, 7}})
@@ -228,6 +229,18 @@ class MembershipViewSource final : public Source {
     std::vector<std::pair<std::uint64_t, std::uint32_t>> ids_;
 };
 
+class ReadyModelSource final : public MembershipViewSource {
+  public:
+    ReadyModelSource(const Reference& source, std::size_t limit)
+        : MembershipViewSource(source, true), models_(source.models().first(limit)) {}
+    std::span<const ModelRecord> ready_models() const override { return models_; }
+    ModelRecord model(std::uint32_t) const override {
+        throw std::runtime_error("ready source must not perform per-model lookups");
+    }
+  private:
+    std::span<const ModelRecord> models_;
+};
+
 struct DifferentialModes {
     std::vector<ResolvedAssignment> oracle, sparse, automatic;
     NodeScoreStats sparse_stats, automatic_stats;
@@ -259,12 +272,56 @@ void differential(const Reference& reference, const std::vector<const vg::Multip
     (void)differential_modes(reference, records, name);
 }
 
+void threshold_bypass_cases(const std::filesystem::path& root) {
+    auto facts = data();
+    for (std::uint64_t id = 800; id < 804; ++id) node(facts, id, 1, {{0, 0, 5}});
+    auto reference = write_load(root / "no-join.pcr", facts);
+    const auto check = [&](const vg::MultipathAlignment& read, bool bypass) {
+        const auto modes = differential_modes(reference, {&read},
+            "no-join bypass must preserve oracle, sparse, map and frontier-batch parity");
+        require((modes.automatic_stats.balance_prepare_bypassed > 0) == bypass,
+                "only one-start DAGs without joins may bypass threshold preparation");
+        require(modes.sparse_stats.balance_prepare_bypassed == 0,
+                "explicit sparse test control must not use automatic bypass");
+    };
+    check(dag({{{800, false, 1, 1}}, {{801, false, 1, 1}}, {{802, false, 1, 1}}},
+              {{1}, {2}, {}}), true);
+    check(dag({{{800, false, 1, 1}}, {{801, false, 1, 1}}, {{802, false, 1, 1}}},
+              {{1, 2}, {}, {}}), true);
+    check(dag({{{800, false, 1, 1}}, {{801, false, 1, 1}}, {{802, false, 1, 1}},
+               {{803, false, 1, 1}}}, {{1, 2}, {3}, {3}, {}}), false);
+    auto multiple_starts = dag({{{800, false, 1, 1}}, {{801, false, 1, 1}}}, {{}, {}});
+    multiple_starts.add_start(0); multiple_starts.add_start(1);
+    check(multiple_starts, false);
+    auto duplicate_start = multiple_starts;
+    duplicate_start.set_start(1, 0);
+    check(duplicate_start, false);
+    check(dag({{{800, false, 1, 1}}, {{801, false, 1, 1}}}, {{1, 1}, {}}), false);
+    auto duplicate_connection = dag({{{800, false, 1, 1}}, {{801, false, 1, 1}}}, {{1}, {}});
+    duplicate_connection.mutable_subpath(0)->add_connection()->set_next(1);
+    check(duplicate_connection, false);
+    auto unreachable_join = dag({{{800, false, 1, 1}}, {{801, false, 1, 1}},
+                                 {{802, false, 1, 1}}}, {{}, {2, 2}, {}});
+    unreachable_join.add_start(0);
+    check(unreachable_join, false);
+    for (unsigned invalid = 0; invalid < 2; ++invalid) {
+        auto malformed = duplicate_connection;
+        if (invalid == 0) malformed.add_start(100);
+        else malformed.mutable_subpath(0)->mutable_connection(0)->set_next(0);
+        bool rejected = false;
+        try { (void)TextNodeScoreResolver(reference).resolve({&malformed}, profiles()); }
+        catch (const std::runtime_error&) { rejected = true; }
+        require(rejected, "topology/start validation must precede no-join classification");
+    }
+}
+
 }  // namespace
 
 int main() try {
     const auto root = std::filesystem::temp_directory_path() / "pancollapse-node-score-dp-test";
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root);
+    threshold_bypass_cases(root);
 
     // Named hostile fixture: threshold crossing, late strand flips, all four
     // splice masks, insertion bridge, deletion/reference coverage, repeated
@@ -316,6 +373,15 @@ int main() try {
                                                   "shared membership lists preserve resolver oracle parity");
     const auto missing_modes = differential_modes(missing_source, {&shared_read},
                                                    "missing membership IDs preserve resolver oracle parity");
+    require(shared_source.ready_models().empty(), "generic source must retain model lookup fallback");
+    ReadyModelSource ready_source(shared_reference, shared_reference.model_count());
+    require(same(TextNodeScoreResolver(ready_source).resolve({&shared_read}, profiles()), shared_modes.automatic),
+            "direct model table must preserve fallback-source assignments");
+    ReadyModelSource short_source(shared_reference, 1);
+    bool short_rejected = false;
+    try { (void)TextNodeScoreResolver(short_source).resolve({&shared_read}, profiles()); }
+    catch (const std::runtime_error&) { short_rejected = true; }
+    require(short_rejected, "model IDs outside ready table must fail before indexing");
     require(same(shared_modes.automatic, missing_modes.automatic) &&
                 shared_modes.automatic_stats.nodes_with_shared_id == 2 &&
                 shared_modes.automatic_stats.membership_lists_decoded == 2 &&
@@ -370,6 +436,49 @@ int main() try {
                 subset_stats.dp_states == subset_control.dp_states &&
                 subset_stats.dp_transitions == subset_control.dp_transitions,
             "shared-list quotient must preserve record-local partitions and DP work");
+    (void)differential_modes(subset_source, {&subset_one, &subset_two, &subset_one},
+        "repeated alternatives must preserve independent alignment facts");
+
+    TextNodeScoreResolver repeated_resolver(shared_source);
+    const auto repeated_profiles = profiles();
+    std::vector<std::vector<std::tuple<std::uint64_t, bool, int, int>>> large_paths(120, {{100, false, 3, 3}});
+    std::vector<std::vector<int>> large_next(120);
+    for (int i = 0; i < 119; ++i) large_next[i].push_back(i + 1);
+    auto large_read = dag(large_paths, large_next);
+    const auto large_expected = TextNodeScoreResolver(shared_source, NodeScoreExecution::enumerate_oracle)
+                                    .resolve({&large_read}, repeated_profiles);
+    require(same(repeated_resolver.resolve({&large_read}, repeated_profiles), large_expected),
+            "large record must preserve explicit-route oracle");
+    for (unsigned repeat = 0; repeat < 8; ++repeat)
+        require(same(repeated_resolver.resolve({&shared_read}, repeated_profiles), shared_modes.automatic),
+                "independent calls after an outlier must preserve assignments");
+    vg::MultipathAlignment empty_record;
+    (void)differential_modes(shared_source, {&empty_record}, "zero-subpath record parity");
+    (void)differential_modes(shared_source, {}, "empty read group parity");
+    auto unannotated_read = dag({{{105, false, 1, 1}}}, {{}});
+    (void)differential_modes(subset_source, {&unannotated_read}, "annotation-free record parity");
+    auto invalid_read = shared_read;
+    invalid_read.mutable_subpath(0)->mutable_path()->mutable_mapping(0)->mutable_position()->set_offset(9999);
+    bool invalid_rejected = false;
+    try { (void)repeated_resolver.resolve({&invalid_read}, repeated_profiles); }
+    catch (const std::runtime_error&) { invalid_rejected = true; }
+    require(invalid_rejected &&
+                same(repeated_resolver.resolve({&shared_read}, repeated_profiles), shared_modes.automatic),
+            "an exception must not alter later independent assignments");
+
+    std::array<std::exception_ptr, 2> concurrent_failures;
+    const auto concurrent_calls = [&](std::size_t index) {
+        try {
+            for (int round = 0; round < 8; ++round)
+                require(same(repeated_resolver.resolve({&shared_read}, repeated_profiles), shared_modes.automatic),
+                        "concurrent calls must be safe on one shared resolver");
+        } catch (...) { concurrent_failures[index] = std::current_exception(); }
+    };
+    {
+        std::jthread first(concurrent_calls, 0);
+        std::jthread second(concurrent_calls, 1);
+    }
+    for (const auto& failure : concurrent_failures) if (failure) std::rethrow_exception(failure);
 
     // Three read bases make the start/end bonuses common: three matches score
     // 13, one mismatch then two matches scores 8, and a one-base deletion

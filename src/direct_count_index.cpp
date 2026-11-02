@@ -1001,6 +1001,7 @@ std::span<const PolicyRecord> Source::policies() const { return {impl_->policies
 const std::string& Source::content_id() const { return impl_->content; }
 std::size_t Source::model_count() const { return impl_->model_count; }
 ModelRecord Source::model(std::uint32_t id) const { if (id >= impl_->model_count) fail("model id"); return impl_->models[id]; }
+std::span<const ModelRecord> Source::ready_models() const { return {impl_->models, impl_->model_count}; }
 count_reference::ScoringClassRecord Source::scoring_class(std::uint32_t) const { fail("unsupported scoring query"); }
 
 std::optional<count_reference::NodeView> Source::node_view(std::uint64_t id) const {

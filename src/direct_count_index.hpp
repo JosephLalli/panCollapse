@@ -84,6 +84,7 @@ class Source final : public count_reference::Source {
     const std::string& content_id() const override;
     std::size_t model_count() const override;
     ModelRecord model(std::uint32_t id) const override;
+    std::span<const ModelRecord> ready_models() const override;
     std::size_t scoring_class_count() const override { return 0; }
     count_reference::ScoringClassRecord scoring_class(std::uint32_t) const override;
     std::optional<count_reference::NodeView> node_view(std::uint64_t id) const override;

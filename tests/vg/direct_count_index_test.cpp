@@ -133,6 +133,16 @@ int main() try {
             "source identity round trip");
     require(source->model_count() == 2 && source->model(1).transcript_string == 3,
             "ready model round trip");
+    const auto ready_models = source->ready_models();
+    require(ready_models.size() == source->model_count(), "ready model table size");
+    for (std::uint32_t i = 0; i < ready_models.size(); ++i) {
+        const auto expected = source->model(i);
+        const auto actual = ready_models[i];
+        require(actual.transcript_string == expected.transcript_string &&
+                    actual.exon_policy == expected.exon_policy &&
+                    actual.body_policy == expected.body_policy && actual.strand == expected.strand,
+                "ready model table changed mapped values");
+    }
     const auto one = source->node_view(1), two = source->node_view(2), three = source->node_view(3);
     require(one && two && three && one->length == 4 && two->length == 7 && three->length == 5,
             "node lengths");
