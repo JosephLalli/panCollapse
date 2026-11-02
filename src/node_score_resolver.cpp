@@ -101,9 +101,6 @@ struct ClassPosting {
     std::uint32_t class_id = 0, flags = 0, support_slot = 0;
 };
 
-std::uint64_t saturated_add(std::uint64_t a, std::uint64_t b) {
-    return b > UINT64_MAX - a ? UINT64_MAX : a + b;
-}
 std::int64_t signed_bases(std::uint64_t value) {
     if (value > static_cast<std::uint64_t>(INT64_MAX))
         throw std::overflow_error("node-score base-count overflow");
@@ -132,10 +129,6 @@ void atomic_max(std::atomic<std::uint64_t>& value, std::uint64_t next) {
     auto old = value.load(std::memory_order_relaxed);
     while (old < next && !value.compare_exchange_weak(old, next, std::memory_order_relaxed)) {}
 }
-void atomic_saturated_add(std::atomic<std::uint64_t>& value, std::uint64_t delta) {
-    auto old = value.load(std::memory_order_relaxed);
-    while (!value.compare_exchange_weak(old, saturated_add(old, delta), std::memory_order_relaxed)) {}
-}
 }  // namespace
 
 std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
@@ -144,7 +137,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
     reference_.begin_read_group();
     const auto ready_models = reference_.ready_models();
     const bool use_sets = reference_.has_model_sets();
-    model_set::Set all_models, body_models;
+    model_set::Set all_models, body_models, union_scratch;
     std::unordered_map<std::uint64_t, Node> nodes;
     std::unordered_map<std::uint32_t, std::uint32_t> model_index;
     std::vector<Model> models;
@@ -171,8 +164,8 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                                                            record->model_set_count);
                     decoded.count = record->model_set_count;
                     for (const auto& flags : decoded.sets) {
-                        all_models = model_set::unite(all_models, flags.models);
-                        if (flags.flags & body_flags) body_models = model_set::unite(body_models, flags.models);
+                        model_set::unite(all_models, flags.models, union_scratch);
+                        if (flags.flags & body_flags) model_set::unite(body_models, flags.models, union_scratch);
                     }
                     decoded.has_annotation = !decoded.sets.empty();
                     ++membership_lists_decoded;
@@ -275,7 +268,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                 winner.support_sets.push_back(support);
         }
     };
-    std::uint64_t alignments_scored = 0, piece_visits = 0, model_visits = 0;
+    std::uint64_t piece_visits = 0, model_visits = 0;
     std::uint64_t membership_groups = 0, raw_model_transfers = 0;
     std::uint64_t incidence_node_rows = 0, incidence_list_rows = 0;
     std::uint64_t frontier_compactions = 0;
@@ -332,16 +325,6 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
         // prefix: threshold-based merging cannot reduce its frontier.
         const bool single_start_no_join = starts.size() == 1 && !has_join;
 
-        // Count represented routes cheaply for telemetry only; never enumerate.
-        std::vector<std::uint64_t> routes(size, 0);
-        for (std::size_t i = size; i-- > 0;) {
-            const auto& subpath = alignment->subpath(static_cast<int>(i));
-            if (!subpath.next_size() && !subpath.connection_size()) routes[i] = 1;
-            for (const auto next : subpath.next()) routes[i] = saturated_add(routes[i], routes[next]);
-            for (const auto& edge : subpath.connection()) routes[i] = saturated_add(routes[i], routes[edge.next()]);
-        }
-        for (const auto start : starts) alignments_scored = saturated_add(alignments_scored, routes[start]);
-
         // Preserve the existing per-piece scorer's read-offset interpretation.
         // Report nonconvergent offsets instead of adding a biological rejection.
         std::vector<bool> reachable(size, false);
@@ -358,7 +341,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
         }
 
         // No model can emit evidence from this record; avoid annotation-free
-        // cross-edge lookups while preserving route/offset telemetry above.
+        // cross-edge lookups while preserving offset validation above.
         if (!has_annotation) continue;
 
         // Collect every splice effect a complete route can encounter, without
@@ -420,25 +403,24 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
             for (const auto id : record_lists) {
                 const auto& list = decoded_membership_lists[id];
                 incidence_list_rows += list.count;
-                for (const auto& flag : list.sets) candidates = model_set::unite(candidates, flag.models);
+                for (const auto& flag : list.sets) model_set::unite(candidates, flag.models, union_scratch);
             }
             std::vector<Partition> parts;
-            auto body = model_set::intersection(candidates, body_models);
-            auto exon_only = model_set::difference(candidates, body_models);
+            model_set::Set body, exon_only, yes, no;
+            model_set::split(candidates, body_models, body, exon_only);
             if (!exon_only.empty()) parts.push_back({std::move(exon_only), {}, 0});
             if (!body.empty()) parts.push_back({std::move(body), {}, 1});
             for (const auto id : record_lists) for (const auto& flag : decoded_membership_lists[id].sets) {
                 const auto size_before = parts.size();
                 for (std::size_t p = 0; p < size_before; ++p) {
-                    auto yes = model_set::intersection(parts[p].models, flag.models);
+                    model_set::split(parts[p].models, flag.models, yes, no);
                     if (yes.empty()) continue;
-                    auto no = model_set::difference(parts[p].models, flag.models);
                     if (no.empty()) {
                         parts[p].memberships.emplace_back(id, flag.flags, 0);
                     } else {
                         auto membership = parts[p].memberships;
                         membership.emplace_back(id, flag.flags, 0);
-                        parts[p].models = std::move(no);
+                        parts[p].models.swap(no);
                         parts.push_back({std::move(yes), std::move(membership), parts[p].mode});
                     }
                 }
@@ -725,7 +707,6 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
     for (std::size_t i = 0; i < profiles.size(); ++i) {
         result[i].result = resolve_numeric_assignment(profiles[i], result[i].facts, true);
     }
-    atomic_saturated_add(complete_alignments_, alignments_scored);
     subpath_visits_.fetch_add(piece_visits, std::memory_order_relaxed);
     model_visits_.fetch_add(model_visits, std::memory_order_relaxed);
     dp_states_.fetch_add(dp_states, std::memory_order_relaxed);

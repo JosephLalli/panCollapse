@@ -7940,3 +7940,49 @@ the production compiler/default, and no full rebuild/count/release is authorized
 Before promotion, full native compilation must address model-ID translation and
 body/transcript ownership, and distinguish full sparse-edge coverage from strict
 fixture coverage while retaining V2 behavior. No next phase is automatic.
+
+## D119 — V3 profile and bounded set-operation optimization gate (2026-11-02)
+
+**Decision source: User. Status: exact ABBA gate passed; bounded candidate
+retained.** First profile the
+reviewed V3 candidate; then make only profile-supported fused set-operation or
+temporary-copy-removal changes and delete redundant represented-route telemetry.
+The objective is exact-count parity and measured original-first-1M savings, not
+full native compiler support, full-index rebuild/count, release, or default
+promotion. Each selected change requires tests and exact both-profile comparison
+at the same first-1M scope, V3/V2 indexes, frozen R7 outputs, 64 threads, 300
+GB, and no swap: four Parquet/six MEX plus decoded/logical/profile/prior/counter
+evidence. No input/index hashing, GAMP/XG/RI, scoring/biology/CB/UMI/cap, spill,
+or other-job change is authorized.
+
+D118 is the sealed baseline at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_modelset_prototype_20261102_eeAQQR/RESULTS.json`:
+177/177 tests, exact both-profile four-Parquet/six-MEX parity, V3 mean 84.78 s
+versus V2 126.455 s, and a 6,943,796,424-B matched V3 slice. Its production
+compiler/default remains V2.
+
+**D119 execution status:** At
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_v3_setops_20261102_bwI7Wf`,
+the profiled baseline passed exact R7 parity. Capture quality was 11,118 samples/
+60.124407 s, zero lost/empty; caller resolver 92.7145%, direct splice 0.1979%,
+`combine` self 1.41%, `malloc` 5.04%, and `cfree` 4.25%. These shares are not
+causal forecasts; some leaf attribution remains unknown. The candidate contains
+only reusable union scratch plus fused split and removes obsolete telemetry
+plumbing; validation, reachability, and `GampAlignmentComplexity` are unchanged.
+SolMax post-review found no blockers. Build was warning-free; CTest passed
+177/177 in 29.92 s. The candidate removes diagnostic `represented_alignments`
+telemetry and its redundant reverse-DAG pass; scientific counters and the
+complexity admission filter (937 drops) are unchanged.
+
+**D119 terminal status:** Sealed `RESULTS.json` records all four same-V3 ABBA
+cases exiting 0 with exact frozen-R7 four-Parquet/six-MEX, decoded/logical/
+profile/prior/scientific-counter parity. Baseline wall was 92.62/101.31 s and
+CPU 4,792.55/5,233.60 s; candidate wall 86.23/95.86 s and CPU
+4,372.42/4,916.47 s. Means were 96.965→91.045 s (-6.1053%) and
+5,013.075→4,644.445 CPU-s (-7.3534%); mean RSS increased 0.295%
+(22,033,376→22,098,398 KiB), with each case below 23.2 GB and zero
+OOM/max/swap/major faults/spill. Candidate binary matches current build; source
+is net -3 production lines. Retain it after review and exact gate. This is a
+shared-host original-first-1M ABBA observation, not isolated component ROI,
+full-GAMP, F1, full-rebuild, or default-promotion evidence. Production V3
+compiler/default remains unpromoted.

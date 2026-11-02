@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -40,32 +41,50 @@ inline bool contains(const Set& set, std::uint32_t id) {
     return found != set.end() && found->id == (id >> 8) &&
         (found->words[(id & 255) >> 6] & (std::uint64_t{1} << (id & 63)));
 }
+// Outputs must not alias inputs. Scratch keeps capacity, never stale logical rows.
 // Sorted block operations never construct one object per transcript membership.
-inline Set combine(const Set& a, const Set& b, bool intersect, bool subtract = false) {
-    Set out;
-    out.reserve(intersect ? std::min(a.size(), b.size()) : a.size() + b.size());
+inline void unite(Set& a, const Set& b, Set& scratch) {
+    assert(&scratch != &a && &scratch != &b);
+    scratch.clear();
+    scratch.reserve(a.size() + b.size());
     std::size_t i = 0, j = 0;
-    while (i < a.size() || (!intersect && !subtract && j < b.size())) {
+    while (i < a.size() || j < b.size()) {
         if (i == a.size() || (j < b.size() && b[j].id < a[i].id)) {
-            if (!intersect && !subtract) out.push_back(b[j]);
-            ++j;
+            scratch.push_back(b[j++]);
         } else if (j == b.size() || a[i].id < b[j].id) {
-            if (!intersect || subtract) out.push_back(a[i]);
-            ++i;
+            scratch.push_back(a[i++]);
         } else {
             Block block{a[i].id, {}};
             for (unsigned w = 0; w < 4; ++w)
-                block.words[w] = subtract ? a[i].words[w] & ~b[j].words[w] :
-                    intersect ? a[i].words[w] & b[j].words[w] : a[i].words[w] | b[j].words[w];
-            if (!empty(block)) out.push_back(block);
+                block.words[w] = a[i].words[w] | b[j].words[w];
+            scratch.push_back(block);
             ++i; ++j;
         }
     }
-    return out;
+    a.swap(scratch);
 }
-inline Set unite(const Set& a, const Set& b) { return combine(a, b, false); }
-inline Set intersection(const Set& a, const Set& b) { return combine(a, b, true); }
-inline Set difference(const Set& a, const Set& b) { return combine(a, b, true, true); }
+// Produce a & b and a & ~b in one monotone merge; retain both output capacities.
+inline void split(const Set& a, const Set& b, Set& yes, Set& no) {
+    assert(&yes != &a && &yes != &b && &no != &a && &no != &b && &yes != &no);
+    yes.clear(); no.clear();
+    yes.reserve(std::min(a.size(), b.size()));
+    no.reserve(a.size());
+    std::size_t j = 0;
+    for (const auto& block : a) {
+        while (j < b.size() && b[j].id < block.id) ++j;
+        if (j == b.size() || b[j].id != block.id) {
+            no.push_back(block);
+        } else {
+            Block intersection{block.id, {}}, difference{block.id, {}};
+            for (unsigned w = 0; w < 4; ++w) {
+                intersection.words[w] = block.words[w] & b[j].words[w];
+                difference.words[w] = block.words[w] & ~b[j].words[w];
+            }
+            if (!empty(intersection)) yes.push_back(intersection);
+            if (!empty(difference)) no.push_back(difference);
+        }
+    }
+}
 
 inline void put32(std::vector<std::byte>& out, std::uint32_t value) {
     for (unsigned i = 0; i < 4; ++i) out.push_back(static_cast<std::byte>(value >> (i * 8)));

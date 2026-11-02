@@ -1,6 +1,45 @@
 # Progress
 
-## CURRENT: D118 first-1M V3 prototype gate passed; experimental only (2026-11-02)
+## CURRENT: D119 fused set operations retained after exact ABBA gate (2026-11-02)
+
+**D119 authorization scope:** The user authorizes profiling the reviewed V3
+candidate, then only profile-supported fused set operations/temporary-copy
+removal and deletion of redundant represented-route telemetry. The objective is
+exact-count parity and measured same-first-1M savings, not production compiler
+work, full-index rebuild, full count, or release. Every selected change requires
+tests and exact comparison at the original first-1M scope, both profiles, with
+the same V3/V2 indexes, frozen R7 outputs, 64 threads, 300 GB, and no swap;
+validate four Parquet, six MEX, decoded/logical/profile/prior/counter evidence.
+No input/index hashing, GAMP/XG/RI, scoring/biology/CB/UMI/cap, spill, or other-
+job change is authorized.
+
+D118 is the baseline, not a production promotion: its sealed result at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_modelset_prototype_20261102_eeAQQR/RESULTS.json`
+had 177/177 tests, exact both-profile four-Parquet/six-MEX parity, V3 mean
+84.78 s versus V2 126.455 s, and a 6,943,796,424-B matched V3 slice. Its
+production compiler/default remains V2.
+
+**D119 profile and candidate:** At
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_v3_setops_20261102_bwI7Wf`,
+the profiled baseline passed exact R7 parity; capture quality was 11,118 samples
+over 60.124407 s with zero lost/empty. Caller resolver was 92.7145%, direct
+splice 0.1979%; `combine` self was 1.41%, `malloc` 5.04%, and `cfree` 4.25%.
+These shares are not causal forecasts and some leaf attribution remains unknown.
+The retained candidate implements only reusable union scratch and fused split,
+removing `represented_alignments` diagnostics and its redundant reverse-DAG pass;
+validation, reachability, `GampAlignmentComplexity`, scientific counters, and
+the 937 complexity drops are unchanged. SolMax post-review found no blockers;
+the warning-free build and 177/177 CTest pass (29.92 s) are recorded.
+
+The sealed same-V3 ABBA result (`RESULTS.json`) passed all four exact R7
+four-Parquet/six-MEX, decoded/logical/profile/prior/scientific-counter checks:
+baseline wall 92.62/101.31 s and CPU 4,792.55/5,233.60 s; candidate 86.23/95.86
+s and 4,372.42/4,916.47 s. Means were 96.965→91.045 s (-6.1053%) and
+5,013.075→4,644.445 CPU-s (-7.3534%); mean RSS rose 0.295% (22,033,376→
+22,098,398 KiB), below 23.2 GB in every case. There were zero OOM/max/swap/major
+faults/spill. The candidate binary matches current build and source is net -3
+production lines. This shared-host original-first-1M ABBA observation is not an
+isolated component ROI, full-GAMP, F1, full-rebuild, or default-promotion claim.
 
 **D118 terminal prototype evidence:** The authoritative receipts are
 `/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_modelset_prototype_20261102_eeAQQR/RESULTS.json`

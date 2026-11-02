@@ -235,8 +235,7 @@ int run(const Config& config) {
     const auto processing_started = std::chrono::steady_clock::now();
     const auto report_native_queries = [&] {
         const auto node_stats = node_resolver.stats();
-        std::osyncstream(std::cerr) << "panCollapse: node-score-stats: represented_alignments="
-            << node_stats.complete_alignments << " subpath_visits=" << node_stats.subpath_visits
+        std::osyncstream(std::cerr) << "panCollapse: node-score-stats: subpath_visits=" << node_stats.subpath_visits
             << " model_visits=" << node_stats.model_visits
             << " dp_states=" << node_stats.dp_states << " dp_transitions=" << node_stats.dp_transitions
             << " max_frontier_states=" << node_stats.max_frontier_states

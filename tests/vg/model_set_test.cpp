@@ -10,24 +10,54 @@ std::set<std::uint32_t> values(const Set& set) {
     each(set, [&](auto value) { result.insert(value); });
     return result;
 }
+void check_operations(const Set& a, const Set& b, Set& scratch, Set& yes, Set& no) {
+    const auto va = values(a), vb = values(b);
+    std::set<std::uint32_t> expected_union = vb, expected_intersection, expected_difference;
+    for (auto id : va) {
+        expected_union.insert(id);
+        (vb.contains(id) ? expected_intersection : expected_difference).insert(id);
+    }
+    auto merged = a;
+    unite(merged, b, scratch);
+    require(values(merged) == expected_union);
+    split(a, b, yes, no);
+    require(values(yes) == expected_intersection && values(no) == expected_difference);
+    require(!overlaps(yes, no));
+    auto restored = yes;
+    unite(restored, no, scratch);
+    require(values(restored) == va);
+    for (const auto* set : {&merged, &yes, &no}) {
+        std::uint32_t prior = 0;
+        bool first = true;
+        for (const auto& block : *set) {
+            require(!empty(block) && (first || block.id > prior));
+            first = false; prior = block.id;
+        }
+    }
+}
 int main() try {
+    Set scratch, yes, no;
+    const Set none;
+    Set a_edges, b_edges;
+    for (auto id : {0U, 1U, 63U, 64U, 255U, 512U, UINT32_MAX}) append(a_edges, id);
+    for (auto id : {1U, 62U, 64U, 256U, 513U, UINT32_MAX}) append(b_edges, id);
+    for (unsigned repeat = 0; repeat < 3; ++repeat) {
+        check_operations(a_edges, b_edges, scratch, yes, no);
+        check_operations(a_edges, a_edges, scratch, yes, no);
+        check_operations(none, b_edges, scratch, yes, no);
+        check_operations(a_edges, none, scratch, yes, no);
+        check_operations(none, none, scratch, yes, no);
+    }
     std::mt19937 random(118);
     for (unsigned trial = 0; trial < 300; ++trial) {
         Set a, b;
-        std::set<std::uint32_t> va, vb, expected_union, expected_intersection, expected_difference;
+        std::set<std::uint32_t> va;
         for (unsigned i = 0; i < 8192; ++i) {
             if ((random() % (trial % 7 + 2)) == 0) { append(a, i); va.insert(i); }
-            if ((random() % (trial % 5 + 2)) == 0) { append(b, i); vb.insert(i); }
+            if ((random() % (trial % 5 + 2)) == 0) append(b, i);
         }
-        for (auto id : va) {
-            expected_union.insert(id);
-            (vb.contains(id) ? expected_intersection : expected_difference).insert(id);
-        }
-        expected_union.insert(vb.begin(), vb.end());
         require(values(decode(encode(a), 8192)) == va);
-        require(values(unite(a, b)) == expected_union);
-        require(values(intersection(a, b)) == expected_intersection);
-        require(values(difference(a, b)) == expected_difference);
+        check_operations(a, b, scratch, yes, no);
         for (unsigned i = 0; i < 8192; ++i) require(contains(a, i) == va.contains(i));
     }
     for (unsigned pattern = 0; pattern < 3; ++pattern) {
