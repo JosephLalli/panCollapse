@@ -1,6 +1,22 @@
 # Progress
 
-## CURRENT: D119 fused set operations retained after exact ABBA gate (2026-11-02)
+## CURRENT: D120 local source-to-main fast-forward merge gate pending (2026-11-02)
+
+**D120 authorized local integration (not started):** Source HEAD
+`0ce807f02f09e5cb5e0131501256dceed7774f02` contains the sealed D118/D119
+177-test and exact-first-1M receipts. Main
+`02c7f8fc013daae76cc7531d18089a89b3ec38d9` is its ancestor: 12 source-only
+commits (`990872c..0ce807f`) and zero main-only commits, so the intended merge is
+a local fast-forward. Root main currently has an uncommitted historical
+`PROGRESS.md` repair pointer and untracked `.codex/`; both are user state and
+must be preserved, not committed or discarded.
+
+The authorized sequence is: commit this checkpoint, back up or narrowly stash
+only root-main `PROGRESS.md` if necessary, fast-forward main, restore that
+working edit without dropping its stash, then take a full CTest snapshot in
+Docker reusing the build only if the merged tree is exact. D118/D119 receipts,
+scope limits, and claims remain unchanged. No push, tag, release, full rebuild/
+count, or default V3 compiler promotion is authorized.
 
 **D119 authorization scope:** The user authorizes profiling the reviewed V3
 candidate, then only profile-supported fused set operations/temporary-copy
