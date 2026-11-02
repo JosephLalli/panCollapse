@@ -1,6 +1,42 @@
 # Progress
 
-## CURRENT: D117 A posting-decode fast path retained; gate complete (2026-11-02)
+## CURRENT: D118 first-1M V3 prototype gate passed; experimental only (2026-11-02)
+
+**D118 terminal prototype evidence:** The authoritative receipts are
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_modelset_prototype_20261102_eeAQQR/RESULTS.json`
+and four `PARITY_PASSED` reports. Fixture V3 retains exact flag sets with the
+stable gene-local model-ID bijection; runtime refinement, common class list,
+DAG scoring, metadata aliases/restoration, and no gene union remain exact.
+The existing splice target/owner tables and edge logic were retained; compiled
+veto sets remain deferred. Full 95,130,819-model metadata remain, with identical
+fixture coverage of 5,075,917 nodes, 3,207,824 lists, and 6,874,449,025 logical
+postings.
+
+The sequential ABBA first-1M gate, same verified image/64 CPUs/300 GB/no swap,
+passed all four exact four-Parquet/six-MEX, decoded/logical/profile/prior, and
+scientific-counter checks (937 complexity drops unchanged), with zero OOM/swap/
+major faults. V2 controls were 121.96/130.95 s and 6,589.55/7,203.56 CPU-s;
+V3 was 85.41/84.15 s and 4,337.12/4,329.96 CPU-s. Means: wall 126.455→84.78 s
+(-32.956%), CPU 6,896.555→4,333.54 s (-37.164%), RSS 33.3394→22.5657 GB
+(-32.315%), about 11.8k reads/s. V2/V3 slice bytes were 15,918,721,384/
+6,943,796,424 (-56.38%); membership payload 11,954,749,417→2,979,824,464 B
+(-75.07%). These are strict fixture/first-1M results, not a whole-168-GB index
+size, full-GAMP, F1, or production-throughput claim. Final `ctest-final.log`
+passed 177/177 in 29.75 s, including an interleaved-gene permutation and
+alias-specific support regression. The final test-only edits leave the measured
+production binary byte-identical to `panCollapse-reviewed`.
+
+The old sparse-ID/disk attempts were deliberately stopped by this session, not
+OOM; staging is preserved. Final RAM builders exited 0 in 7m30.98/8m58.80 and
+their `/dev/shm/pancollapse-d118-3q7ycW` indexes are mode 0644. Persistent
+`fixture-v3.pci` is complete in the receipt directory: copy exit 0, atomic rename,
+and verified size 6,943,796,424 B; no input/index hashing was performed.
+Inputs, the 168-GB V2 index, and other jobs were untouched. V3 is experimental:
+the production index compiler/default is not promoted and no full rebuild/count/
+release is authorized. Before promotion, full native compilation must implement
+model-ID translation and body/transcript ownership, and distinguish full sparse
+edge coverage from strict fixture coverage while retaining V2 behavior. No next
+phase is automatically authorized.
 
 **D117 A selected after review:** The consequential review selected A, a one-byte
 `PostingView` decode fast path that retains the original multi-byte loop and all
@@ -33,7 +69,7 @@ empty). Its self decode/lambda/malloc/free shares were 9.02/15.07/4.68/3.72%,
 with 95.5448% resolver callers and 0.081997% splice. The earlier E `PostingView`
 9.62% share and these fractions are not counterfactual CPU times, so they do not
 prove the entire observed 5.94535% CPU difference. Profiled count timing is
-excluded from the comparison. Current build binary matches frozen A; source
+excluded from the comparison. At D117 completion, the build binary matched frozen A; source
 archive, patch, and commands are retained. No next work is automatically
 authorized.
 

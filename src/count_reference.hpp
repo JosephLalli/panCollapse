@@ -230,6 +230,9 @@ struct NodeView {
     // group. Equal non-missing IDs guarantee an identical ordered logical
     // Posting sequence; zero is a valid identity for an empty list.
     std::uint32_t shared_membership_id = missing;
+    // V3: flag-partitioned compressed model sets, mutually exclusive with rows.
+    std::span<const std::byte> model_sets = {};
+    std::uint32_t model_set_count = 0;
 };
 struct ScoringPosting {
     std::uint32_t class_id = missing, forward = 0, reverse = 0;
@@ -347,6 +350,10 @@ class Source {
     // Optional, immutable ID-indexed table, valid for the Source lifetime.
     // Empty means use model(id); exposing a table must not prepare or scan it.
     virtual std::span<const ModelRecord> ready_models() const { return {}; }
+    virtual bool has_model_sets() const { return false; }
+    virtual std::uint32_t model_support(std::uint32_t) const {
+        throw std::logic_error("source does not expose fixed model support");
+    }
     virtual std::size_t scoring_class_count() const = 0;
     virtual ScoringClassRecord scoring_class(std::uint32_t id) const = 0;
     virtual const NodeRecord* node(std::uint64_t id) const = 0;

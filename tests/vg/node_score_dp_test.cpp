@@ -1,4 +1,6 @@
 #include "count_reference.hpp"
+#include "direct_count_index.hpp"
+#include "model_set_fixture_support.hpp"
 #include "node_score_test_support.hpp"
 
 #include <algorithm>
@@ -10,6 +12,8 @@
 #include <string>
 #include <tuple>
 #include <thread>
+#include <set>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -246,6 +250,78 @@ struct DifferentialModes {
     NodeScoreStats sparse_stats, automatic_stats;
 };
 
+class ShortSetModels final : public MembershipViewSource {
+  public:
+    explicit ShortSetModels(const direct_index::Source& source)
+        : MembershipViewSource(source, false), source_(source) {}
+    bool has_model_sets() const override { return true; }
+    std::uint32_t model_support(std::uint32_t id) const override { return source_.model_support(id); }
+    std::span<const ModelRecord> ready_models() const override { return source_.ready_models().first(1); }
+  private:
+    const direct_index::Source& source_;
+};
+
+void check_set_index(const Source& reference, const std::vector<const vg::MultipathAlignment*>& records,
+                     const std::vector<ResolvedAssignment>& expected, const char* name) {
+    std::set<std::uint64_t> nodes;
+    std::map<std::uint32_t, std::uint32_t> supports;
+    bool uses_nonzero_model = false;
+    for (const auto* read : records) for (const auto& subpath : read->subpath())
+        for (const auto& mapping : subpath.path().mapping()) nodes.insert(mapping.position().node_id());
+    if (nodes.empty()) return;
+    for (const auto id : nodes) {
+      const auto view = reference.node_view(id);
+      require(view.has_value(), "V3 test fixture node missing");
+      for (const auto row : view->postings) {
+        if (!(row.flags & 12)) continue;
+        auto [found, inserted] = supports.emplace(row.model, row.support_set);
+        // Generic sources allow mixed per-posting support, unlike V2/V3.
+        if (!inserted && found->second != row.support_set) return;
+      }
+    }
+    direct_index::Metadata metadata;
+    metadata.strings = reference.strings(); metadata.sets = reference.sets();
+    metadata.genes.assign(reference.genes().begin(), reference.genes().end());
+    metadata.policies.assign(reference.policies().begin(), reference.policies().end());
+    for (std::uint32_t i = 0; i < reference.model_count(); ++i) metadata.models.push_back(reference.model(i));
+    metadata.content_id = reference.content_id();
+    const auto order = pancollapse::test::gene_local_ids(metadata);
+    static std::uint64_t serial = 0;
+    const auto path = std::filesystem::temp_directory_path() /
+        ("pancollapse-d118-differential-" + std::to_string(++serial) + ".pci");
+    direct_index::Writer writer(path, std::move(metadata), *nodes.rbegin(), 64U << 20, 0, true);
+    std::vector<Posting> rows;
+    for (const auto id : nodes) {
+        const auto node = reference.node_view(id);
+        rows.clear(); for (const auto row : node->postings) rows.push_back(row);
+        for (auto& row : rows) {
+            row.model = order.at(row.model);
+            uses_nonzero_model = uses_nonzero_model || row.model != 0;
+        }
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.model < b.model; });
+        writer.append_node(id, node->length, rows);
+    }
+    writer.seal_nodes();
+    for (const auto a : nodes) for (const auto b : nodes) {
+        if (a < b) writer.append_splice(a, b, reference.splice_targets(a, b));
+        for (unsigned ra = 0; ra < 2; ++ra) for (unsigned rb = 0; rb < 2; ++rb)
+            writer.append_junction((a << 1) | ra, (b << 1) | rb,
+                                  reference.junction_owners((a << 1) | ra, (b << 1) | rb));
+    }
+    writer.finish();
+    auto source = direct_index::Source::load(path);
+    if (uses_nonzero_model) {
+        bool failed = false;
+        try { static_cast<void>(TextNodeScoreResolver(ShortSetModels(*source)).resolve(records, profiles())); }
+        catch (const std::exception&) { failed = true; }
+        require(failed, "V3 accepted truncated ready-model metadata");
+    }
+    for (const auto mode : {NodeScoreExecution::automatic, NodeScoreExecution::force_sparse,
+                            NodeScoreExecution::force_map})
+        require(same(expected, TextNodeScoreResolver(*source, mode).resolve(records, profiles())), name);
+    source.reset(); std::filesystem::remove(path);
+}
+
 DifferentialModes differential_modes(const Source& reference,
                                      const std::vector<const vg::MultipathAlignment*>& records,
                                      const char* name) {
@@ -260,6 +336,7 @@ DifferentialModes differential_modes(const Source& reference,
     require(same(oracle, sparse), name);
     require(same(oracle, automatic), name);
     require(same(oracle, map_resolver.resolve(records, profile_set)), name);
+    check_set_index(reference, records, automatic, name);
     for (const std::size_t batch : {1U, 2U, 7U})
         require(same(oracle, TextNodeScoreResolver(reference, NodeScoreExecution::automatic, batch)
                                 .resolve(records, profile_set)), name);
@@ -270,6 +347,21 @@ DifferentialModes differential_modes(const Source& reference,
 void differential(const Reference& reference, const std::vector<const vg::MultipathAlignment*>& records,
                   const char* name) {
     (void)differential_modes(reference, records, name);
+}
+
+void permuted_gene_cases(const std::filesystem::path& root) {
+    auto facts = data();
+    facts.models = {{5, 1, 1, 0}, {4, 0, 0, 1}, {5, 1, 1, 1}, {4, 0, 0, 0}};
+    facts.sets = {{}, {1}, {2}, {3}, {4}};
+    node(facts, 900, 5, {{0, 1, 5}, {1, 2, 5}, {2, 3, 5}, {3, 4, 5}});
+    node(facts, 901, 10, {{0, 1, 4}, {1, 2, 4}, {2, 3, 4}, {3, 4, 4}});
+    node(facts, 902, 5, {{1, 0, 1}});
+    auto reference = write_load(root / "permuted-genes.pcr", facts);
+    auto body = dag({{{900, false, 5, 5}, {901, false, 10, 10}}}, {{}});
+    auto exon = dag({{{902, false, 5, 5}}}, {{}});
+    differential(reference, {&body}, "gene permutation lost alias-specific support");
+    differential(reference, {&body, &exon}, "gene permutation changed read-wide support mode");
+    differential(reference, {&exon}, "old nonzero model remapped to valid ready-table entry zero");
 }
 
 void threshold_bypass_cases(const std::filesystem::path& root) {
@@ -321,6 +413,7 @@ int main() try {
     const auto root = std::filesystem::temp_directory_path() / "pancollapse-node-score-dp-test";
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root);
+    permuted_gene_cases(root);
     threshold_bypass_cases(root);
 
     // Named hostile fixture: threshold crossing, late strand flips, all four

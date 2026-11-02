@@ -47,11 +47,13 @@ struct Stats {
 class Writer {
   public:
     Writer(std::filesystem::path output, Metadata metadata, std::uint64_t max_node_id,
-           std::size_t memory_limit_bytes, unsigned testing_digest_bits = 64);
+           std::size_t memory_limit_bytes, unsigned testing_digest_bits = 64,
+           bool model_sets = false);
     ~Writer();
     Writer(const Writer&) = delete;
     Writer& operator=(const Writer&) = delete;
     void append_node(std::uint64_t id, std::uint64_t length, std::span<const Posting> postings);
+    void append_shared_node(std::uint64_t id, std::uint64_t length, std::uint64_t existing_node);
     void append_splice(std::uint64_t physical_a, std::uint64_t physical_b,
                        std::span<const std::uint32_t> targets);
     void append_junction(std::uint64_t oriented_from, std::uint64_t oriented_to,
@@ -85,6 +87,8 @@ class Source final : public count_reference::Source {
     std::size_t model_count() const override;
     ModelRecord model(std::uint32_t id) const override;
     std::span<const ModelRecord> ready_models() const override;
+    bool has_model_sets() const override;
+    std::uint32_t model_support(std::uint32_t id) const override;
     std::size_t scoring_class_count() const override { return 0; }
     count_reference::ScoringClassRecord scoring_class(std::uint32_t) const override;
     std::optional<count_reference::NodeView> node_view(std::uint64_t id) const override;

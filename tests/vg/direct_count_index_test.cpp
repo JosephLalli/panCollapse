@@ -1,4 +1,5 @@
 #include "direct_count_index.hpp"
+#include "model_set.hpp"
 
 #include <algorithm>
 #include <array>
@@ -175,11 +176,50 @@ void build_buffered(const std::filesystem::path& output) {
             "buffered posting list lost pending or mapped values");
     writer.finish();
 }
+
+void model_set_roundtrip(const std::filesystem::path& path) {
+    auto data = metadata();
+    data.models.assign(1025, ModelRecord{2, 0, 0, 0});
+    Writer writer(path, std::move(data), 4, 8U << 20, 0, true);
+    std::vector<Posting> rows;
+    for (std::uint32_t i = 0; i < 1025; ++i) {
+        const auto flags = i % 15 + 1;
+        rows.push_back({i, (flags & 12U) ? 1U : 0U, flags});
+    }
+    writer.append_node(1, 7, rows);
+    writer.append_shared_node(2, 8, 1);
+    writer.append_node(3, 0, {});
+    writer.append_node(4, 9, rows);
+    writer.seal_nodes();
+    writer.append_splice(1, 2, {});
+    writer.append_junction(2, 4, {});
+    writer.finish();
+    require(is_index(path), "V3 index not detected");
+    auto source = Source::load(path);
+    require(source->has_model_sets(), "V3 capability missing");
+    const auto a = source->node_view(1), b = source->node_view(2), c = source->node_view(4);
+    require(a && b && c && a->model_sets.data() == b->model_sets.data() &&
+            a->model_sets.data() == c->model_sets.data(), "V3 shared/interned list changed");
+    const auto sets = pancollapse::model_set::decode_flags(a->model_sets, 1025, a->model_set_count);
+    std::size_t count = 0;
+    for (const auto& set : sets) pancollapse::model_set::each(set.models, [&](auto id) {
+        require(set.flags == rows[id].flags && source->model_support(id) ==
+            ((rows[id].flags & 12U) ? 1U : 0U), "V3 posting/support changed");
+        ++count;
+    });
+    require(count == rows.size() && source->node_view(3)->model_set_count == 0,
+            "V3 empty or nonempty list cardinality changed");
+    require(source->splice_targets(1, 2).empty() && source->junction_owners(2, 4).empty(),
+            "V3 covered-empty edge changed");
+    fails([&] { static_cast<void>(source->splice_targets(1, 4)); }, "V3 accepted uncovered splice");
+    fails([&] { static_cast<void>(source->junction_owners(2, 8)); }, "V3 accepted uncovered junction");
+}
 }
 
 int main() try {
     posting_view_boundaries();
     Temp temp;
+    model_set_roundtrip(temp.path / "modelsets.pci");
     const auto path = temp.path / "direct.pci";
     build(path);
     require(is_index(path), "completed index not detected");

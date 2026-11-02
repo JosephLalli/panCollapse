@@ -2,6 +2,7 @@
 #include "compact_score_frontier.hpp"
 #include "pathtally.hpp"
 #include "threshold_balance.hpp"
+#include "model_set.hpp"
 
 #include <algorithm>
 #include <array>
@@ -51,6 +52,8 @@ struct LocalPosting {
 };
 struct LocalPostingList {
     std::vector<LocalPosting> postings;
+    std::vector<model_set::FlagSet> sets;
+    std::size_t count = 0;
     std::uint64_t local_id = 0;
     bool has_annotation = false;
 };
@@ -140,6 +143,8 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
     std::span<const NumericAssignmentProfile> profiles) const {
     reference_.begin_read_group();
     const auto ready_models = reference_.ready_models();
+    const bool use_sets = reference_.has_model_sets();
+    model_set::Set all_models, body_models;
     std::unordered_map<std::uint64_t, Node> nodes;
     std::unordered_map<std::uint32_t, std::uint32_t> model_index;
     std::vector<Model> models;
@@ -161,6 +166,18 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                 decoded_membership_lists.emplace_back();
                 auto& decoded = decoded_membership_lists.back();
                 decoded.local_id = decoded_membership_lists.size() - 1;
+                if (use_sets) {
+                    decoded.sets = model_set::decode_flags(record->model_sets, reference_.model_count(),
+                                                           record->model_set_count);
+                    decoded.count = record->model_set_count;
+                    for (const auto& flags : decoded.sets) {
+                        all_models = model_set::unite(all_models, flags.models);
+                        if (flags.flags & body_flags) body_models = model_set::unite(body_models, flags.models);
+                    }
+                    decoded.has_annotation = !decoded.sets.empty();
+                    ++membership_lists_decoded;
+                    return &decoded;
+                }
                 decoded.postings.reserve(record->postings.size());
                 for (const auto posting : record->postings) {
                     auto [found, inserted] = model_index.try_emplace(posting.model, models.size());
@@ -180,6 +197,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                     if (posting.flags & body_flags) models[found->second].support_sets.push_back(posting.support_set);
                 }
                 ++membership_lists_decoded;
+                decoded.count = decoded.postings.size();
                 posting_rows_decoded += decoded.postings.size();
                 return &decoded;
             };
@@ -193,12 +211,21 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                 } else {
                     node.posting_list = found->second;
                     ++membership_lists_reused;
-                    posting_rows_reused += node.posting_list->postings.size();
+                    posting_rows_reused += node.posting_list->count;
                 }
             }
             nodes.emplace(id, std::move(node));
         }
     }
+    if (use_sets) model_set::each(all_models, [&](std::uint32_t id) {
+        model_index.emplace(id, models.size());
+        Model model;
+        if (!ready_models.empty() && id >= ready_models.size())
+            throw std::runtime_error("invalid node-score model id");
+        model.record = ready_models.empty() ? reference_.model(id) : ready_models[id];
+        if (model_set::contains(body_models, id)) model.support_sets.push_back(reference_.model_support(id));
+        models.push_back(std::move(model));
+    });
     std::map<WinnerKey, Winner> winners;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> transcript_models;
     for (std::uint32_t index = 0; index < models.size(); ++index) {
@@ -378,13 +405,65 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
         for (const auto id : record_nodes) {
             const auto& list = *nodes.at(id).posting_list;
             record_lists.push_back(list.local_id);
-            incidence_node_rows += list.postings.size();
+            incidence_node_rows += list.count;
         }
         unique(record_lists);
+        std::vector<MemberClass> classes;
+        std::vector<std::vector<ClassPosting>> class_lists(decoded_membership_lists.size());
+        if (use_sets) {
+            struct Partition {
+                model_set::Set models;
+                std::vector<Membership> memberships;
+                std::uint8_t mode = 0;
+            };
+            model_set::Set candidates;
+            for (const auto id : record_lists) {
+                const auto& list = decoded_membership_lists[id];
+                incidence_list_rows += list.count;
+                for (const auto& flag : list.sets) candidates = model_set::unite(candidates, flag.models);
+            }
+            std::vector<Partition> parts;
+            auto body = model_set::intersection(candidates, body_models);
+            auto exon_only = model_set::difference(candidates, body_models);
+            if (!exon_only.empty()) parts.push_back({std::move(exon_only), {}, 0});
+            if (!body.empty()) parts.push_back({std::move(body), {}, 1});
+            for (const auto id : record_lists) for (const auto& flag : decoded_membership_lists[id].sets) {
+                const auto size_before = parts.size();
+                for (std::size_t p = 0; p < size_before; ++p) {
+                    auto yes = model_set::intersection(parts[p].models, flag.models);
+                    if (yes.empty()) continue;
+                    auto no = model_set::difference(parts[p].models, flag.models);
+                    if (no.empty()) {
+                        parts[p].memberships.emplace_back(id, flag.flags, 0);
+                    } else {
+                        auto membership = parts[p].memberships;
+                        membership.emplace_back(id, flag.flags, 0);
+                        parts[p].models = std::move(no);
+                        parts.push_back({std::move(yes), std::move(membership), parts[p].mode});
+                    }
+                }
+            }
+            // Splice masks are already computed by the existing exact edge
+            // logic. Refine each incidence class rather than duplicating DP.
+            for (auto& part : parts) {
+                std::map<std::pair<std::uint32_t, std::vector<SpliceOp>>, std::vector<std::uint32_t>> split;
+                model_set::each(part.models, [&](std::uint32_t global) {
+                    const auto local = model_index.at(global);
+                    const auto identity = execution_ == NodeScoreExecution::force_sparse ? local + 1 : 0;
+                    split[{identity, splice_operations[local]}].push_back(local);
+                });
+                for (auto& [key, aliases] : split) {
+                    const auto class_id = static_cast<std::uint32_t>(classes.size());
+                    for (const auto& [list, flags, slot] : part.memberships)
+                        class_lists[list].push_back({class_id, flags, slot});
+                    classes.push_back({std::move(aliases), {}, key.second, part.mode == 1});
+                }
+            }
+        } else {
         std::vector<std::vector<Membership>> memberships(models.size());
         for (const auto id : record_lists) {
             const auto& list = decoded_membership_lists[id];
-            incidence_list_rows += list.postings.size();
+            incidence_list_rows += list.count;
             for (const auto posting : list.postings) {
                 if (!(posting.flags & (exon_flags | body_flags))) continue;
                 const auto& support = models[posting.local_model].support_sets;
@@ -404,13 +483,12 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
             partitions[{identity, mode, std::move(memberships[model]),
                         std::move(splice_operations[model])}].push_back(model);
         }
-        std::vector<MemberClass> classes;
-        std::vector<std::vector<ClassPosting>> class_lists(decoded_membership_lists.size());
         for (auto& [signature, aliases] : partitions) {
             const auto class_id = static_cast<std::uint32_t>(classes.size());
             for (const auto& [list, flags, slot] : std::get<2>(signature))
                 class_lists[list].push_back({class_id, flags, slot});
             classes.push_back({std::move(aliases), {}, std::get<3>(signature), std::get<1>(signature) == 1});
+        }
         }
         membership_groups += classes.size();
         std::vector<Delta> deltas(classes.size());

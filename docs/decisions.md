@@ -7901,6 +7901,42 @@ empty; self decode/lambda/malloc/free were 9.02/15.07/4.68/3.72%, resolver
 callers 95.5448%, splice 0.081997%. Neither those fractions nor the prior E
 `PostingView` 9.62% fraction is a counterfactual CPU time, so the profile does
 not prove the entire observed 5.94535% CPU difference; profiled count timing is
-excluded from the comparison. Current binary matches frozen A; source archive,
+excluded from the comparison. At D117 completion, the binary matched frozen A; source archive,
 patch, and commands are retained. This is not whole-GAMP, F1, release, or causal
 speedup evidence. No next work is automatically authorized.
+
+## D118 — Index-native compressed-modelset prototype gate (2026-11-02)
+
+**Decision source: User. Status: first-1M prototype gate passed; experimental
+only.** Authoritative evidence is
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_modelset_prototype_20261102_eeAQQR/RESULTS.json`
+and four `PARITY_PASSED` reports. Fixture V3 uses exact flag sets with stable
+gene-local model-ID translation while retaining runtime refinement, common class
+list, DAG scoring, metadata aliases/restoration, and no gene union. Existing
+splice target/owner tables and edge logic remain; compiled veto sets are deferred.
+Coverage matches V2: 5,075,917 nodes, 3,207,824 lists, 6,874,449,025 logical
+postings, and all 95,130,819 model metadata.
+
+The same-image ABBA first-1M, 64-CPU/300-GB/no-swap comparison passed exact
+four-Parquet/six-MEX, decoded/logical/profile/prior, and scientific-counter
+parity in all four runs (937 complexity drops unchanged; zero OOM/swap/major
+faults). V2 controls: 121.96/130.95 s and 6,589.55/7,203.56 CPU-s. V3:
+85.41/84.15 s and 4,337.12/4,329.96 CPU-s. Means were wall 126.455→84.78 s
+(-32.956%), CPU 6,896.555→4,333.54 s (-37.164%), and RSS 33.3394→22.5657 GB
+(-32.315%), about 11.8k reads/s. Matched slice bytes were
+15,918,721,384→6,943,796,424 (-56.38%); membership payload
+11,954,749,417→2,979,824,464 B (-75.07%). Final `ctest-final.log` passed 177/177
+in 29.75 s, including an interleaved-gene permutation and alias-specific support
+regression. Final test-only edits did not change the measured production binary.
+
+These are strict fixture/first-1M results, not a whole-168-GB index-size,
+full-GAMP, F1, or production-throughput claim. Old sparse-ID/disk builders were
+stopped by this session, not OOM, with staging preserved. Final RAM builders
+exited 0 in 7m30.98/8m58.80; RAM indexes are mode 0644. Persistent
+`fixture-v3.pci` is complete in the receipt directory: copy exit 0, atomic rename,
+and verified size 6,943,796,424 B; no input/index hashing was performed.
+Inputs, the existing V2 index, and other jobs are untouched. V3 does not promote
+the production compiler/default, and no full rebuild/count/release is authorized.
+Before promotion, full native compilation must address model-ID translation and
+body/transcript ownership, and distinguish full sparse-edge coverage from strict
+fixture coverage while retaining V2 behavior. No next phase is automatic.

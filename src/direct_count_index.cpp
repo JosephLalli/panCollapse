@@ -1,4 +1,5 @@
 #include "direct_count_index.hpp"
+#include "model_set.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,6 +29,7 @@ static_assert(sizeof(GeneRecord) == 36 && sizeof(PolicyRecord) == 16 &&
 constexpr std::array<char, 8> magic = {'P', 'C', 'D', 'I', 'R', 'E', 'C', 'T'};
 constexpr std::array<char, 8> trailer = {'P', 'C', 'D', 'E', 'N', 'D', '0', '1'};
 constexpr std::uint32_t version = 2;
+constexpr std::uint32_t model_set_version = 3;
 constexpr std::uint32_t complete = 1;
 constexpr std::uint64_t endian = 0x0102030405060708ULL;
 constexpr std::size_t metadata_words = 14;
@@ -465,6 +467,7 @@ struct Writer::Impl {
     unsigned digest_bits = 64;
     Budget budget;
     bool sealed = false, done = false;
+    bool model_sets = false;
     std::uint64_t nodes = 0, stored_postings = 0, index_bytes = 0;
     std::size_t intern_charge = 0;
     std::vector<std::uint32_t> model_supports;
@@ -478,9 +481,9 @@ struct Writer::Impl {
     Mapping sealed_posting_file;
 
     Impl(std::filesystem::path requested_output, Metadata requested_metadata, std::uint64_t requested_max,
-         std::size_t limit, unsigned requested_bits)
+         std::size_t limit, unsigned requested_bits, bool use_model_sets)
         : output(std::move(requested_output)), metadata(std::move(requested_metadata)),
-          max_node_id(requested_max), digest_bits(requested_bits), budget(limit) {
+          max_node_id(requested_max), digest_bits(requested_bits), budget(limit), model_sets(use_model_sets) {
         if (digest_bits > 64) fail("digest bits");
         struct stat state {};
         if (::lstat(output.c_str(), &state) == 0) fail("output already exists");
@@ -530,7 +533,7 @@ struct Writer::Impl {
         }
     }
     bool same_list(std::uint32_t list, std::span<const Posting> values,
-                   std::uint64_t encoded_bytes) const {
+                   std::uint64_t encoded_bytes, std::span<const std::byte> compiled = {}) const {
         if (list >= list_info.size()) fail("intern list id");
         const auto& saved = list_info[list];
         if (saved.count != values.size()) return false;
@@ -543,22 +546,36 @@ struct Writer::Impl {
         for (std::uint64_t offset = 0; offset < encoded_bytes;) {
             const auto amount = static_cast<std::size_t>(
                 std::min<std::uint64_t>(scratch_bytes, encoded_bytes - offset));
-            if (encoder.read(expected.data(), amount) != amount) fail("posting encoder length");
+            if (model_sets) std::memcpy(expected.data(), compiled.data() + offset, amount);
+            else if (encoder.read(expected.data(), amount) != amount) fail("posting encoder length");
             posting_file.read(add(saved.offset, offset), actual.data(), amount);
             if (std::memcmp(expected.data(), actual.data(), amount) != 0) return false;
             offset = add(offset, amount);
         }
-        if (!encoder.done()) fail("posting encoder length");
+        if (!model_sets && !encoder.done()) fail("posting encoder length");
         return true;
     }
     std::uint32_t list(std::span<const Posting> values) {
         if (values.size() > UINT32_MAX) fail("posting list width");
         if (values.empty()) return 0;
         const auto summary = summarize(values, digest_bits);
+        std::vector<std::byte> compiled;
+        if (model_sets) {
+            std::array<model_set::Set, 16> flags;
+            for (const auto& value : values) model_set::append(flags[value.flags], value.model);
+            for (std::uint32_t f = 1; f < 16; ++f) if (!flags[f].empty()) {
+                const auto encoded = model_set::encode(flags[f]);
+                model_set::put32(compiled, f);
+                if (encoded.size() > UINT32_MAX) fail("model-set list width");
+                model_set::put32(compiled, static_cast<std::uint32_t>(encoded.size()));
+                compiled.insert(compiled.end(), encoded.begin(), encoded.end());
+            }
+        }
+        const auto encoded_bytes = model_sets ? compiled.size() : summary.bytes;
         const auto found = intern.find(summary.digest);
         if (found != intern.end()) {
             for (const auto candidate : found->second)
-                if (same_list(candidate, values, summary.bytes)) return candidate;
+                if (same_list(candidate, values, encoded_bytes, compiled)) return candidate;
         }
         if (list_info.size() >= count_reference::missing) fail("list id width");
         constexpr std::size_t list_bookkeeping = sizeof(ListInfo);
@@ -568,12 +585,13 @@ struct Writer::Impl {
         const auto offset = posting_file.size;
         PostingEncoder encoder(values);
         std::array<std::byte, scratch_bytes> scratch{};
-        while (!encoder.done()) {
+        if (model_sets) posting_file.append(compiled.data(), compiled.size());
+        while (!model_sets && !encoder.done()) {
             const auto count = encoder.read(scratch.data(), scratch.size());
             if (count == 0) fail("posting encoder stalled");
             posting_file.append(scratch.data(), count);
         }
-        if (posting_file.size - offset != summary.bytes) fail("posting encoder length");
+        if (posting_file.size - offset != encoded_bytes) fail("posting encoder length");
         const auto id = static_cast<std::uint32_t>(list_info.size());
         list_info.push_back({offset, static_cast<std::uint32_t>(values.size()), 0});
         intern[summary.digest].push_back(id);
@@ -605,9 +623,9 @@ struct Writer::Impl {
 };
 
 Writer::Writer(std::filesystem::path output, Metadata metadata, std::uint64_t max_node_id,
-               std::size_t memory_limit_bytes, unsigned testing_digest_bits)
+               std::size_t memory_limit_bytes, unsigned testing_digest_bits, bool model_sets)
     : impl_(std::make_unique<Impl>(std::move(output), std::move(metadata), max_node_id,
-                                   memory_limit_bytes, testing_digest_bits)) {}
+                                   memory_limit_bytes, testing_digest_bits, model_sets)) {}
 Writer::~Writer() = default;
 
 void Writer::append_node(std::uint64_t id, std::uint64_t length, std::span<const Posting> values) {
@@ -638,6 +656,16 @@ void Writer::seal_nodes() {
     state.budget.release(support_seen_bytes);
 }
 
+void Writer::append_shared_node(std::uint64_t id, std::uint64_t length, std::uint64_t existing_node) {
+    auto& state = *impl_; state.open();
+    if (state.sealed || id > state.max_node_id || length > UINT32_MAX) fail("shared node width or state");
+    state.endpoint(existing_node);
+    auto& slot = state.node_slots[static_cast<std::size_t>(id)];
+    if (slot.list != count_reference::missing) fail("duplicate node");
+    slot = {static_cast<std::uint32_t>(length), state.node_slots[static_cast<std::size_t>(existing_node)].list};
+    ++state.nodes;
+}
+
 std::optional<count_reference::NodeView> Writer::node_view(std::uint64_t id) const {
     const auto& state = *impl_;
     if (!state.sealed || id > state.max_node_id) return std::nullopt;
@@ -649,6 +677,8 @@ std::optional<count_reference::NodeView> Writer::node_view(std::uint64_t id) con
     const auto end = state.list_end(slot.list);
     if (state.sealed_posting_file.data == nullptr || list.offset > end ||
         end > state.sealed_posting_file.size) fail("node posting range");
+    if (state.model_sets) return count_reference::NodeView{slot.length, {}, slot.list,
+        {state.sealed_posting_file.data + list.offset, static_cast<std::size_t>(end - list.offset)}, list.count};
     return count_reference::NodeView{slot.length, count_reference::PostingView::encoded(
         {state.sealed_posting_file.data + list.offset, static_cast<std::size_t>(end - list.offset)},
         list.count, state.model_supports, state.metadata.sets.size())};
@@ -702,6 +732,11 @@ void validate_lists(const State& state) {
             if (end != list.offset) fail("empty list payload");
         } else {
             if (state.sealed_posting_file.data == nullptr) fail("posting payload mapping");
+            if (state.model_sets) {
+                static_cast<void>(model_set::decode_flags(
+                    {state.sealed_posting_file.data + list.offset, static_cast<std::size_t>(end - list.offset)},
+                    state.metadata.models.size(), list.count));
+            } else {
             const auto view = count_reference::PostingView::encoded(
                 {state.sealed_posting_file.data + list.offset, static_cast<std::size_t>(end - list.offset)},
                 list.count, state.model_supports, state.metadata.sets.size());
@@ -711,6 +746,7 @@ void validate_lists(const State& state) {
                 ++seen;
             }
             if (seen != list.count) fail("stored posting count");
+            }
         }
         logical = add(logical, list.count);
         expected = end;
@@ -785,7 +821,7 @@ void write_index(State& state) {
     const auto ranges = layout(state);
     const auto final_size = add(align8(add(ranges.back().offset, ranges.back().size)), trailer_bytes);
     TempFile output; output.create(state.output, "index");
-    output.append(magic.data(), magic.size()); put32(output, version); put32(output, complete);
+    output.append(magic.data(), magic.size()); put32(output, state.model_sets ? model_set_version : version); put32(output, complete);
     put64(output, endian); put64(output, section_count);
     for (const auto& range : ranges) { put64(output, range.offset); put64(output, range.size); }
     pad(output, ranges[meta].offset);
@@ -840,12 +876,13 @@ bool is_index(const std::filesystem::path& path) noexcept {
     static_cast<void>(::close(fd));
     const auto file_version = seen == header.size() ? get32(header.data() + 8) : 0;
     return seen == header.size() && std::memcmp(header.data(), magic.data(), magic.size()) == 0 &&
-           file_version == version &&
+           (file_version == version || file_version == model_set_version) &&
            get32(header.data() + 12) == complete &&
            get64(header.data() + 16) == endian && get64(header.data() + 24) == section_count;
 }
 
 struct Source::Impl {
+    bool model_sets = false;
     int fd = -1; Mapping map;
     std::vector<std::string> strings, catalog;
     std::vector<std::vector<std::uint32_t>> sets;
@@ -910,7 +947,7 @@ FramedRanges frame(const State& state) {
     const auto* base = state.map.data;
     const auto file_version = get32(base + 8);
     if (std::memcmp(base, magic.data(), magic.size()) != 0 ||
-        file_version != version || get32(base + 12) != complete ||
+        (file_version != version && file_version != model_set_version) || get32(base + 12) != complete ||
         get64(base + 16) != endian || get64(base + 24) != section_count) fail("frame header");
     const auto trailer_at = state.map.size - trailer_bytes;
     if (std::memcmp(base + trailer_at, trailer.data(), trailer.size()) != 0 ||
@@ -941,6 +978,7 @@ std::unique_ptr<Source> Source::load(const std::filesystem::path& path) {
     state.map.map(state.fd, static_cast<std::uint64_t>(status.st_size));
     const auto ranges = frame(state);
     const auto* base = state.map.data;
+    state.model_sets = get32(base + 8) == model_set_version;
     if (ranges[Section::meta].size < metadata_words * 8) fail("metadata framing");
     const auto* fields = base + as_size(ranges[Section::meta].offset, "metadata framing");
     state.max_node = get64(fields); const auto nstrings = get64(fields + 8), ncatalog = get64(fields + 16), nsets = get64(fields + 24);
@@ -1002,6 +1040,11 @@ const std::string& Source::content_id() const { return impl_->content; }
 std::size_t Source::model_count() const { return impl_->model_count; }
 ModelRecord Source::model(std::uint32_t id) const { if (id >= impl_->model_count) fail("model id"); return impl_->models[id]; }
 std::span<const ModelRecord> Source::ready_models() const { return {impl_->models, impl_->model_count}; }
+bool Source::has_model_sets() const { return impl_->model_sets; }
+std::uint32_t Source::model_support(std::uint32_t id) const {
+    if (id >= impl_->model_count || impl_->model_supports[id] >= impl_->sets.size()) fail("model support id");
+    return impl_->model_supports[id];
+}
 count_reference::ScoringClassRecord Source::scoring_class(std::uint32_t) const { fail("unsupported scoring query"); }
 
 std::optional<count_reference::NodeView> Source::node_view(std::uint64_t id) const {
@@ -1017,17 +1060,22 @@ std::optional<count_reference::NodeView> Source::node_view(std::uint64_t id) con
         if (first != last) fail("empty node posting range");
         return count_reference::NodeView{slot.length, {}, slot.list};
     }
+    if (state.model_sets) return count_reference::NodeView{slot.length, {}, slot.list,
+        {state.encoded_postings + first, as_size(last - first, "model-set bytes")}, count};
     return count_reference::NodeView{slot.length, count_reference::PostingView::encoded(
         {state.encoded_postings + first, as_size(last - first, "node posting bytes")}, count,
         {state.model_supports, state.model_count}, state.sets.size()), slot.list};
 }
 
 std::span<const std::uint32_t> Source::splice_targets(std::uint64_t a, std::uint64_t b) const {
-    if (a == b || impl_->splice_count == 0) return {};
+    if (a == b) return {};
     if (b < a) std::swap(a, b);
     const auto* begin = impl_->splice_rows; const auto* end = begin + impl_->splice_count;
     const auto found = std::lower_bound(begin, end, std::pair(a, b), [](const PairRow& row, const auto& key) { return std::pair(row.from, row.to) < key; });
-    if (found == end || found->from != a || found->to != b) return {};
+    if (found == end || found->from != a || found->to != b) {
+        if (impl_->model_sets) fail("V3 fixture splice query outside coverage");
+        return {};
+    }
     if (found->first > impl_->splice_value_count || found->count > impl_->splice_value_count - found->first) fail("splice range");
     const auto result = std::span<const std::uint32_t>(impl_->splice_values + found->first, found->count);
     std::uint32_t prior = 0;
@@ -1038,10 +1086,12 @@ std::span<const std::uint32_t> Source::splice_targets(std::uint64_t a, std::uint
     return result;
 }
 std::span<const JunctionOwner> Source::junction_owners(std::uint64_t from, std::uint64_t to) const {
-    if (impl_->junction_count == 0) return {};
     const auto* begin = impl_->junction_rows; const auto* end = begin + impl_->junction_count;
     const auto found = std::lower_bound(begin, end, std::pair(from, to), [](const PairRow& row, const auto& key) { return std::pair(row.from, row.to) < key; });
-    if (found == end || found->from != from || found->to != to) return {};
+    if (found == end || found->from != from || found->to != to) {
+        if (impl_->model_sets) fail("V3 fixture junction query outside coverage");
+        return {};
+    }
     if (found->first > impl_->junction_value_count || found->count > impl_->junction_value_count - found->first) fail("junction range");
     const auto result = std::span<const JunctionOwner>(impl_->junction_values + found->first, found->count);
     std::uint32_t prior = 0;
