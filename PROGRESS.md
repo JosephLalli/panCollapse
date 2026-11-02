@@ -1,26 +1,52 @@
 # Progress
 
-## CURRENT: D116 checkpoint: commit E, profile E, then one measured exact-count iteration (2026-11-02)
+## CURRENT: D116 support guard rejected; restored E verification complete (2026-11-02)
 
-**D116 authorized next phase (not yet started):** The user has authorized this
-strict sequence only: commit the already validated E source on base `a4138e0`;
-obtain the missing E profile on the same real first-1M input at 64 threads; use
-that profile to select and implement one smallest measured exact-count
-optimization; then run the full 175-test suite, exact 1M parity, and a repeat
-timing at the same 64-thread scope. The commit, profile, implementation, and
-measurements remain pending at this documentation checkpoint. Preserve the
-existing inputs and resource envelope: no whole-GAMP count, index rebuild,
-GAMP/XG/RI or input-hash work, biology/CB/UMI/profile/scorer/cap change, spill,
-release, or other job manipulation.
+**D116 state:** The validated E source was committed as
+`fba7ebad9f8ca07bdaa73eb8b4422299de9a8078`. At
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_e_hotpath_20261102_Qpl24N`,
+the first profile capture (6,086 samples/46.985 s) failed quality and is retained
+but not selection evidence; the second observer failed because `rg` was absent
+in the container and its late manual capture ended status 255. The corrected
+third capture passed: 11,274 samples over 60.057764 s, zero lost/empty, capture
+exit 0 after 100k groups, and the existing quality checks. It attributes 95.875%
+of caller samples to the resolver (splice 0.03548%, FastLocate 0); reliable
+ELF-self attribution is decode lambda 15.31%, `PostingView` 9.62%, `malloc`
+4.95%, `free` 3.18%, and `unique<uint>` 1.04%. Do not rank source-inline reports:
+their addr2line evidence is erroneous. Profiled3 native wall was 120.18 s
+(6,204.78 + 76.30 CPU-s) and is instrumentation context, not a comparison;
+120.14 s belongs to failed-observer profiled2. All E native counts passed exact
+R7 parity.
 
-The D115 R7/E observation is the only current E timing: a sequential,
+The selected smallest change, the adjacent duplicate body-support push guard
+(+5 net production lines; final sort/unique retained), passed proof review and
+175 tests in 30.00 s without build warnings. Terminal driver results in the D116
+root were exact R7 parity for all four first-1M cases (four Parquet/six MEX plus
+decoded/logical/profile/prior/counter evidence), same verified image, zero
+max/OOM/swap and zero major faults: E-control1/2 wall 117.58/127.11 s, CPU
+6,139.38/6,763.52 s, HWM 68,175,273,984/68,506,148,864 B; guard support1/2 wall
+118.39/124.94 s, CPU 6,242.49/6,727.88 s, HWM 67,495,948,288/68,155,641,856 B.
+Mean guard wall was -0.5558% and CPU +0.5229%, noise without gain. The guard is
+rejected and removed; source is restored to committed E `fba7eba`, with no added
+production complexity. Frozen candidate artifacts remain preserved and the new
+27-line generic regression remains. Restored-E rebuild/full-175 passed in
+29.58 s without warnings, and `build/src/panCollapse` is byte-identical to the
+frozen E binary used by both fresh controls; no extra 1M run is needed. The D116
+gate is complete. No automatic next run, release, whole-GAMP count, or index
+work is authorized.
+
+Preserve the existing inputs and resource envelope: no whole-GAMP count, index
+rebuild, GAMP/XG/RI or input-hash work, biology/CB/UMI/profile/scorer/cap change,
+spill, release, or other job manipulation.
+
+The D115 R7/E observation supplies the original-R7-versus-E comparison: a sequential,
 shared-host `n=1` comparison showing E 15.702% lower wall and 17.172% lower CPU
 than original R7 under its stated confounders. It is neither a causal E speedup
 nor a latest-E-versus-F comparison: R7 is not asserted to be later intermediate
 F, cache warmth differed, major faults were 87/0, and an unrelated 128-thread
-job remained busy. The missing same-scope E profile is therefore the required
-selection evidence; the later repeat timing can assess only the one selected
-iteration under its observed host conditions, not whole-GAMP or <2h performance.
+job remained busy. D116's current E controls are separate, host-conditioned
+iteration evidence and do not convert D115 into E-versus-F, whole-GAMP, or <2h
+evidence.
 
 **Matched benchmark terminal:** The two sequential real-first-1M cases completed
 with terminal driver exit 0 at

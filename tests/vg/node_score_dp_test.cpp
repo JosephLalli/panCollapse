@@ -665,6 +665,33 @@ int main() try {
                 mixed_modes.automatic_stats.frontier_compactions == 0,
             "variable support models must retain singleton construction and DP");
 
+    // Run-compressing support IDs must retain A,A,B,A across nodes/records,
+    // without suppressing opposite body flags, repeated mappings or insertions.
+    Data recurring_support = data();
+    recurring_support.sets = {{}, {10}, {20}};
+    node(recurring_support, 90, 5, {{0, 1, 4}});
+    node(recurring_support, 91, 11, {{0, 1, 8}});
+    node(recurring_support, 92, 5, {{0, 2, 4}});
+    node(recurring_support, 93, 5, {{0, 1, 4}});
+    auto recurring_reference = write_load(root / "recurring-support.pcr", recurring_support);
+    auto recurring_first = dag({{{90, false, 5, 5}, {91, true, 11, 11},
+                                  {92, false, 5, 5}, {90, false, 0, 1}}}, {{}});
+    auto recurring_second = dag({{{93, false, 5, 5}}}, {{}});
+    const auto recurring_modes = differential_modes(recurring_reference,
+        {&recurring_first, &recurring_second}, "adjacent and recurring mixed support IDs");
+    const std::string recurring_gene = "A";
+    for (const auto& assignment : recurring_modes.automatic) {
+        const auto& candidate = candidate_for(assignment, recurring_gene);
+        require(candidate.body_support_units == std::vector<std::string>({"10", "20"}) &&
+                    candidate.tier == direct_count::EvidenceTier::body &&
+                    candidate.strand == direct_count::EvidenceStrand::forward,
+                "support dedup must retain mixed support, strand and body eligibility");
+    }
+    require(recurring_modes.automatic_stats.posting_rows_decoded == 4 &&
+                recurring_modes.automatic_stats.incidence_list_rows == 4 &&
+                recurring_modes.automatic_stats.incidence_node_rows == 4,
+            "support dedup must not remove node postings or record memberships");
+
     Data across_records = data();
     across_records.sets = {{}, {10}, {20}, {30}};
     node(across_records, 84, 5, {{0, 1, 4}, {1, 2, 4}});

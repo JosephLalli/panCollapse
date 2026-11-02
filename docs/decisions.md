@@ -7791,21 +7791,53 @@ full run, or release occurred. R7 is not asserted to be later intermediate F.
 
 ## D116 — E commit, profile, and one measured exact-count iteration (2026-11-02)
 
-**Decision source: User. Status: authorized next phase; no phase action started
-by this checkpoint.** Commit the already validated E source on base `a4138e0`,
-then take the missing E profile on the same real first-1M input at 64 threads.
-Select from that profile and implement exactly one smallest measured exact-count
-optimization. Require the full 175-test suite, exact 1M parity (four Parquet,
-six MEX, decoded/logical/profile/prior/counter evidence), and a repeat timing at
-the same 64-thread scope after that one change. This sequence does not authorize
-a whole-GAMP run, index rebuild, GAMP/XG/RI or input-hash work, biology/CB/UMI,
-profile/scorer/cap changes, spill, release, or manipulation of other jobs.
+**Decision source: User. Status: complete; one implementation rejected and
+restored E verified.** D116 authorized committing the validated E
+source on base `a4138e0`, profiling E on the same real first-1M input at 64
+threads, selecting exactly one smallest measured exact-count optimization, then
+requiring full 175, exact 1M parity (four Parquet, six MEX,
+decoded/logical/profile/prior/counter evidence), and repeat timing at the same
+64-thread scope. It does not authorize a whole-GAMP run, index rebuild,
+GAMP/XG/RI or input-hash work, biology/CB/UMI, profile/scorer/cap changes,
+spill, release, or manipulation of other jobs.
 
-The current E timing evidence remains D115's single sequential shared-host R7→E
+**D115 supplies the original-R7-versus-E observation:** its single sequential shared-host R7→E
 observation: E was 15.702% lower wall and 17.172% lower CPU, but major faults
 were 87/0, cache warmth was not controlled, and an unrelated 128-thread job was
 busy throughout. It is not an isolated causal E effect, a whole-GAMP/<2h claim,
 or a latest-E-versus-F result: original R7 is not asserted to be later
-intermediate F. The missing same-scope E profile is required to choose the one
-optimization; its post-change repeat timing remains host-conditioned iteration
-evidence only.
+intermediate F. D116 current E controls are separate host-conditioned iteration
+evidence, not a latest-E-versus-F, whole-GAMP, or <2h result.
+
+**D116 execution status:** E was committed as
+`fba7ebad9f8ca07bdaa73eb8b4422299de9a8078`. In
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_e_hotpath_20261102_Qpl24N`,
+profiled1 (6,086 samples/46.985 s) failed quality and profiled2 failed its
+observer because `rg` was absent in the container; its late manual capture
+ended status 255. Retain both as failed attempts, not selection evidence.
+Corrected profiled3 passed capture exit 0 after 100k groups and the existing
+quality checks: 11,274 samples/60.057764 s, zero lost/empty, 95.875% resolver
+caller samples, 0.03548% splice, and zero FastLocate. Reliable ELF-self shares
+are decode lambda 15.31%, `PostingView` 9.62%, `malloc` 4.95%, `free` 3.18%, and
+`unique<uint>` 1.04%; addr2line errors invalidate source-inline rankings.
+Profiled3's 120.18-s native wall (6,204.78 + 76.30 CPU-s) is profile context
+only; 120.14 s belongs to failed-observer profiled2. All E native counts passed
+exact R7 parity.
+
+The profile selected the adjacent duplicate body-support push guard (+5 net
+production lines), retaining final sort/unique; its proof review approved the
+specified regressions and full 175 passed in 30.00 s without build warnings.
+Terminal driver exit was 0. All four same-first-1M, both-profile Parquet+MEX,
+64-CPU/300-GB/no-swap cases passed exact R7 four-Parquet/six-MEX plus decoded,
+logical, profile, prior, and counter parity on the same verified image, with
+zero max/OOM/swap and zero major faults. E-control1/2 wall was 117.58/127.11 s,
+CPU 6,139.38/6,763.52 s, HWM 68,175,273,984/68,506,148,864 B; support1/2 wall
+was 118.39/124.94 s, CPU 6,242.49/6,727.88 s, HWM
+67,495,948,288/68,155,641,856 B. Mean guard wall was -0.5558% and CPU +0.5229%,
+noise without gain. Parent rejected and removed the guard. Candidate artifacts
+remain preserved; production is committed E `fba7eba` with no added production
+complexity, while the new 27-line generic regression remains. Restored-E
+rebuild/full-175 passed in 29.58 s without warnings, and `build/src/panCollapse`
+is byte-identical to frozen E used by both fresh controls; no extra 1M run is
+needed. The D116 gate is complete. No automatic next run, release, whole-GAMP
+count, or index work is authorized.
