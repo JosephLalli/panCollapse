@@ -452,7 +452,9 @@ int run(const Config& config) {
               << " lists_decoded=" << membership_stats.membership_lists_decoded
               << " lists_reused=" << membership_stats.membership_lists_reused
               << " posting_rows_decoded=" << membership_stats.posting_rows_decoded
-              << " posting_rows_reused=" << membership_stats.posting_rows_reused << '\n';
+              << " posting_rows_reused=" << membership_stats.posting_rows_reused
+              << " incidence_node_rows=" << membership_stats.incidence_node_rows
+              << " incidence_list_rows=" << membership_stats.incidence_list_rows << '\n';
     const auto assignment_cache_entries = assignment_cache->entries();
     const auto assignment_cache_hits = assignment_cache->hits();
     const auto assignment_cache_misses = assignment_cache->misses();

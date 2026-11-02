@@ -85,6 +85,11 @@ set_tests_properties(ordered_gamp_reader_test PROPERTIES LABELS "vg;input;gamp;t
 add_executable(pancollapse_gamp_prefix ../../scripts/gamp_prefix.cpp)
 target_include_directories(pancollapse_gamp_prefix PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(pancollapse_gamp_prefix PRIVATE panCollapse::vg_boundary panCollapse::warnings Threads::Threads)
+add_executable(gamp_prefix_window_test gamp_prefix_window_test.cpp)
+target_include_directories(gamp_prefix_window_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(gamp_prefix_window_test PRIVATE panCollapse::vg_boundary panCollapse::warnings Threads::Threads)
+add_test(NAME gamp_prefix_window_test COMMAND gamp_prefix_window_test $<TARGET_FILE:pancollapse_gamp_prefix>)
+set_tests_properties(gamp_prefix_window_test PROPERTIES LABELS "vg;input;gamp;fixture" TIMEOUT 120)
 
 add_executable(pancollapse_gamp_sort_envelope ../../scripts/gamp_sort_envelope.cpp)
 target_include_directories(pancollapse_gamp_sort_envelope PRIVATE "${CMAKE_SOURCE_DIR}/src")

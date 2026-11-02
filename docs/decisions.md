@@ -7602,3 +7602,94 @@ overhead. No new index build; no XG/GAMP/RI input, biology/scoring/UMI/policy or
 complexity-limit change; no artificial representative-family counts or spill.
 R7/C64 and STAR receipts remain scoped controls, not output-equivalence or causal
 claims.
+
+**D113 current-C profile / candidate-D preimplementation checkpoint (2026-11-01):**
+Fresh `profile-c-{early,middle,late}-profile` quality passed: 11,229/11,199/
+11,563 samples in 59.96/59.96/61.36s, zero lost/empty. Resolver callers are
+~96%; flat-self decode lambda ~9%, `PostingView` decode 8.3–9.7%, `Source::model`
+6.1–6.4%, malloc+free 7.8–8.5%, plus model-map insert/destruction. Caller/self
+scopes overlap and cannot be summed. Selected D is only read-local
+`model_index` `std::unordered_map<uint32,uint32>` to existing
+`absl::flat_hash_map`, no reserve/other maps; source review found sole
+`try_emplace`, no iteration/exposed references, insertion-safe iterator use,
+unchanged first encounter/model calls. Require 256-model growth/nonmonotone
+differential, focused/full 175, unprofiled C/D 64-core windows and exact
+four-Parquet/six-MEX parity before a gain-justified full gate. New [30m,31m)/
+[60m,61m) fixtures have 2,496,209/2,492,376 records and preserved payload;
+cold-cache/global-prior limits apply. Observer wrapper failed after valid capture
+while editing running orchestration; manual analysis passed, no count failure.
+
+**D113 candidate-D terminal / E1 preimplementation checkpoint (2026-11-01):**
+D preserved exact four-Parquet/six-MEX parity and `changed_counters={}` in all
+windows but is rejected/restored to C for inconsistent insufficient CPU result:
+early/middle/late C/D CPU-s 7479.97/6876.14 (-8.07%), 7158.10/7339.67 (+2.54%),
+6773.12/6758.63 (-0.21%); total 21411.19/20974.44 (-2.04%), with shared-host
+walls likewise nonuniform. Frozen D artifact/growth test remain retained. E1 is
+an independent C-baseline trial only: `CompactScoreFrontier` cells
+`std::vector`→`absl::InlinedVector<Cell,1>`, owned by value; reservation and
+compaction thresholds unchanged, no eager E2 merge. Sol accepts future
+StateKey/objective/lifetime exactness and production `auto` consumption; empty
+frontier embedded-cell memory cost must measure. Require inline-capacity/lifetime/
+growth/reuse goldens, batches 1/2/7/64, explicit Abseil pure dependency,
+focused/full 175 then early unprofiled trial. Extend middle/late only if material
+gain; no full run until enough evidence. Full C 117.4B states/110.9B compactions
+motivate, not prove, singleton/histogram/CPU gain. No input/index/policy change.
+
+**D113 candidate-E1 terminal / F preimplementation checkpoint (2026-11-01):**
+E1 full 175 passed 29.83s and exact early four-Parquet/six-MEX/logical/priors/
+counters passed, but is rejected/restored to C: native 139.75s/7,665.11 CPU-s
+vs C 135.62s/7,479.97, HWM 66,387,428KiB; no middle/late/full E1. F is
+conditionally exact: quotient per-record model-incidence coordinates by immutable
+decoded `LocalPostingList` identity (identical global model/flags/support rows),
+assigning 64-bit read-local IDs in existing deque. Actual per-node bases, score,
+orientation, first/last oriented endpoints and all splice edges remain; list ID
+only selects memberships/classes. Missing source falls back unique; ID 0 valid.
+No index format/build/input/score/cap/policy/UMI/new cache. Add aggregate
+per-record node-vs-list row telemetry only. Require shared-ID/missing/duplicate-
+ID unequal-flags-support/subset/zero-base/empty/mixed-support oracle differentials,
+full 175, then early 64-core exact unprofiled C comparison; middle/late only if
+material gain. Readwide decoded/reused rows do not predict per-record F benefit.
+
+**D113 F profile result / controlled affinity-comparison checkpoint (2026-11-01):**
+F focused 5/5/full 175 passed 30.51s. Early exact parity C→F improved
+135.62/7479.97 to 123.07/6630.32 wall/CPU-s (-9.25/-11.36%), HWM 66,267,936KiB,
+and node/list rows 25,868,945,316→16,969,675,586 (-34.4%). Middle exact parity
+regressed 131.83/7158.10→137.90/7562.25 (+5.65% CPU), HWM 65,365,640KiB. Late
+remains live and is confounded by independent 128-thread PID 2694947; preserve
+both jobs, no retention/full claim. Then, after both finish, run C(S1), F(S1),
+F(S2), C(S2): S1 0-31,64-95/S2 32-63,96-127 physical cores (2x64-core AMD
+7713, SMT2), each 64 workers/quota/300GB/no swap, same flags/input, fresh output,
+default cache/page policy. No CPU-policy/cacheflush/NUMA/other-job mutation.
+Capture GNU wall/CPU/HWM/faults/IO/context switches+cgroup stats and full parity.
+Retain F only if both set CPU ratios favor >=3% and wall nonworse; opposing
+results inconclusive, no averaging. Full only if gain justifies it.
+
+**D113 affinity interruption / offline-analysis checkpoint (2026-11-02):** All
+three F windows passed exact four-Parquet/six-MEX parity, but late was
+confounded: 149.12s/8,212.56 CPU-s, HWM 66,279,268KiB, while unrelated
+128-thread count PID 2694947 ran. The planned C(S1) control was subsequently
+confounded by a different trace-enabled, original-GAMP 128-thread count PID
+2848085. Its benchmark driver was stopped before F(S1), F(S2), or C(S2) could
+launch; the already-running C(S1) continues through native work and validation,
+and neither unrelated count is stopped. Consequently F is an exact-count
+candidate pending controlled performance evidence, not retained or promoted;
+the C64 2h26m terminal remains authoritative. Defer the four-run affinity
+comparison to a quiet window or coordinated CPU allocation. The only newly
+safe diagnostic step is offline attribution of existing early-profile data under
+`R/line-attribution` (1 CPU, 8GB, 180s, new files only): no live profiler,
+count/index/input change, or result interpretation before root review.
+
+**D113 terminal evidence before resource coordination (2026-11-02):** C(S1)
+finished native and all independent/parity validation with exit 0: 275.63s,
+14,172.86 CPU-s, HWM 65,513,268KiB and zero major faults. This is a confounded
+control, not a matched C/F result. The parent driver exited 143 by deliberate
+SIGTERM; remaining timing cases were not launched and no unrelated job stopped.
+Offline source-line report exited 0 but attribution quality failed: 35 first-
+record and 575 sentinel/protocol addr2line errors. Do not rank its partial line
+labels or sum expanded inline percentages; use the prior quality-passed flat/
+caller profiles. Candidate F's receipt and frozen source are in
+`R/candidate-f/RECEIPT.json`; exact three-window parity and 175 tests stand,
+but under-two-hour/64-core throughput and full F parity are not established.
+F is an optimization-branch candidate only; a quiet/coordinated CPU allocation
+is needed before the counterbalanced C/F performance gate and any justified
+full-input run. No production index rebuild, policy, or input change occurred.

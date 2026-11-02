@@ -37,7 +37,7 @@ struct Delta {
 struct Veto { std::uint32_t model = 0; bool forward = false, reverse = false; };
 using EdgeEffects = std::vector<Veto>;
 struct Credit {
-    std::uint64_t node = 0, bases = 0;
+    std::uint64_t membership = 0, bases = 0;
     std::int64_t score = 0;
     bool reverse = false;
 };
@@ -52,6 +52,7 @@ struct LocalPosting {
 };
 struct LocalPostingList {
     std::vector<LocalPosting> postings;
+    std::uint64_t local_id = 0;
     bool has_annotation = false;
 };
 struct Node {
@@ -159,6 +160,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
             const auto decode = [&] {
                 decoded_membership_lists.emplace_back();
                 auto& decoded = decoded_membership_lists.back();
+                decoded.local_id = decoded_membership_lists.size() - 1;
                 decoded.postings.reserve(record->postings.size());
                 for (const auto posting : record->postings) {
                     auto [found, inserted] = model_index.try_emplace(posting.model, models.size());
@@ -243,6 +245,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
     };
     std::uint64_t alignments_scored = 0, piece_visits = 0, model_visits = 0;
     std::uint64_t membership_groups = 0, raw_model_transfers = 0;
+    std::uint64_t incidence_node_rows = 0, incidence_list_rows = 0;
     std::uint64_t frontier_compactions = 0;
     std::uint64_t balance_saturated_groups = 0, balance_unsaturated_groups = 0;
     std::uint64_t dp_states = 0, dp_transitions = 0, max_frontier = 0, group_count = 0, offset_conflicts = 0;
@@ -275,7 +278,7 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                 if (piece.last) piece.internal_edges.push_back(edge_effects(*piece.last, endpoint));
                 piece.last = endpoint;
                 piece.bases += bases;
-                piece.credits.push_back({id, bases, scores[m], reverse});
+                piece.credits.push_back({node.posting_list->local_id, bases, scores[m], reverse});
                 has_annotation = has_annotation || node.posting_list->has_annotation;
             }
             const auto mark = [&](std::uint32_t next) {
@@ -351,14 +354,24 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                 if (mask != 3) splice_operations[effect.model].emplace_back(edge, mask);
             }
 
-        // Refine raw aliases on distinct node incidence before constructing
-        // mapping-by-model tallies. These labels determine every later Delta.
-        // Zero-base mappings still contributed to read-wide support modes.
+        // Shared lists give exactly the same model incidence on each member
+        // node. Refine aliases once per touched list, but keep every original
+        // node credit and actual splice endpoint. Zero-base nodes still belong
+        // to this record's incidence set.
         unique(record_nodes);
-        std::vector<std::vector<Membership>> memberships(models.size());
+        std::vector<std::uint64_t> record_lists;
+        record_lists.reserve(record_nodes.size());
         for (const auto id : record_nodes) {
-            const auto& node = nodes.at(id);
-            for (const auto posting : node.posting_list->postings) {
+            const auto& list = *nodes.at(id).posting_list;
+            record_lists.push_back(list.local_id);
+            incidence_node_rows += list.postings.size();
+        }
+        unique(record_lists);
+        std::vector<std::vector<Membership>> memberships(models.size());
+        for (const auto id : record_lists) {
+            const auto& list = decoded_membership_lists[id];
+            incidence_list_rows += list.postings.size();
+            for (const auto posting : list.postings) {
                 if (!(posting.flags & (exon_flags | body_flags))) continue;
                 const auto& support = models[posting.local_model].support_sets;
                 const auto slot = posting.flags & body_flags ? static_cast<std::uint32_t>(
@@ -378,11 +391,11 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
                         std::move(splice_operations[model])}].push_back(model);
         }
         std::vector<MemberClass> classes;
-        std::unordered_map<std::uint64_t, std::vector<ClassPosting>> class_nodes;
+        std::unordered_map<std::uint64_t, std::vector<ClassPosting>> class_lists;
         for (auto& [signature, aliases] : partitions) {
             const auto class_id = static_cast<std::uint32_t>(classes.size());
-            for (const auto& [node, flags, slot] : std::get<2>(signature))
-                class_nodes[node].push_back({class_id, flags, slot});
+            for (const auto& [list, flags, slot] : std::get<2>(signature))
+                class_lists[list].push_back({class_id, flags, slot});
             classes.push_back({std::move(aliases), {}, std::get<3>(signature), std::get<1>(signature) == 1});
         }
         membership_groups += classes.size();
@@ -391,8 +404,8 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
         for (std::uint32_t i = 0; i < size; ++i) {
             touched_classes.clear();
             for (const auto& credit : pieces[i].credits) {
-                const auto found = class_nodes.find(credit.node);
-                if (found == class_nodes.end()) continue;
+                const auto found = class_lists.find(credit.membership);
+                if (found == class_lists.end()) continue;
                 for (const auto& posting : found->second) {
                     auto& delta = deltas[posting.class_id];
                     if (!delta.touched) {
@@ -635,6 +648,8 @@ std::vector<NumericResolvedAssignment> NodeScoreResolver::resolve(
     membership_lists_reused_.fetch_add(membership_lists_reused, std::memory_order_relaxed);
     posting_rows_decoded_.fetch_add(posting_rows_decoded, std::memory_order_relaxed);
     posting_rows_reused_.fetch_add(posting_rows_reused, std::memory_order_relaxed);
+    incidence_node_rows_.fetch_add(incidence_node_rows, std::memory_order_relaxed);
+    incidence_list_rows_.fetch_add(incidence_list_rows, std::memory_order_relaxed);
     return result;
 }
 }  // namespace pancollapse

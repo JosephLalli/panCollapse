@@ -38,6 +38,42 @@ overhead. No index build, XG/GAMP/RI input change, policy/complexity change,
 representative UMI-family shortcut, or spill. R7/C64 and STAR scope limitations
 remain controls, not causal comparisons.
 
+**D113 profiles complete; D/E1 rejected, F timing deferred:** Fresh current-C early/
+middle/late profiles (`profile-c-{early,middle,late}-profile`) passed quality:
+11,229/11,199/11,563 samples over 59.96/59.96/61.36s, zero lost/empty. About
+96% are resolver callers; flat self decode lambda ~9%, `PostingView` decode
+8.3–9.7%, `Source::model` 6.1–6.4%, malloc+free 7.8–8.5%, with model-map
+insert/destruction extra. Caller and self scopes overlap and are not additive.
+D passed all parity but is rejected/restored to C: early/middle/late C/D CPU-s
+7479.97/6876.14 (-8.07%), 7158.10/7339.67 (+2.54%), 6773.12/6758.63 (-0.21%);
+total only -2.04%, inconsistent shared-host. E1 also passed exact early parity
+but regressed (139.75s/7,665.11 CPU-s vs C 135.62/7,479.97; HWM 66,387,428KiB),
+so it is restored to C with no middle/late/full trial. Candidate F now quotients per-record
+model incidences by immutable decoded `LocalPostingList` identity: assign a
+64-bit read-local list ID in the existing deque, retain every actual node's
+bases/score/orientation/endpoints/edges, and use ID only for class lookup.
+No index/input/score/cap/policy/UMI/cache change. Require shared/missing,
+unequal flags/support, subset/zero-base/empty/mixed-support oracle differentials,
+full 175, then early 64-core exact unprofiled C comparison; middle/late only on
+material gain. F now passed focused 5/5/full 175 (30.51s): early exact parity
+improved C→F 135.62/7479.97 to 123.07/6630.32 wall/CPU-s (-9.25/-11.36%) and
+rows 25,868,945,316→16,969,675,586; middle exact parity regressed
+131.83/7158.10→137.90/7562.25 (+5.65% CPU). All three F windows passed exact
+four-Parquet/six-MEX parity, but late (149.12s/8,212.56 CPU-s; HWM
+66,279,268KiB) is confounded by an independent 128-thread count. A second,
+whole-GAMP 128-thread count then confounded C(S1); its benchmark driver was
+terminated before F(S1), F(S2), or C(S2) could launch. C(S1) finished native
+work and all parity checks: 275.63s/14,172.86 CPU-s, HWM 65,513,268KiB, zero
+major faults. Thus no F retention/speed/full-throughput
+claim follows. Defer the four-run physical-core comparison to a quiet window or
+coordinated CPU allocation; C64's 2h26m result remains authoritative. A separate
+offline, existing-early-profile line-attribution analysis in `R/line-attribution`
+(1 CPU, 8GB, 180s) exited 0 but failed attribution quality: addr2line protocol
+errors invalidate source-line rankings. Existing caller/flat profiles remain
+the reliable evidence. No new live profiler, full count, index or input change.
+F remains a count-validated optimization-branch candidate, not a promoted
+performance result. The next speed gate needs a quiet/coordinated 64-core window.
+
 **64-core feasibility/comparator question (read-only):** Current HEAD is
 `5003be0` over source `3b4c76f`. C64 consumed 534,792.51 CPU-s = 148.553475
 CPU-hours for both count profiles including MEX, and is 1,570.10s/21.8% over

@@ -180,7 +180,9 @@ Reference write_load(const std::filesystem::path& path, const Data& value) {
 
 class MembershipViewSource final : public Source {
   public:
-    MembershipViewSource(const Source& source, bool share) : source_(source), share_(share) {}
+    MembershipViewSource(const Source& source, bool share,
+                         std::vector<std::pair<std::uint64_t, std::uint32_t>> ids = {{100, 7}, {101, 7}})
+        : source_(source), share_(share), ids_(std::move(ids)) {}
     const std::vector<std::string>& strings() const override { return source_.strings(); }
     const std::vector<std::vector<std::uint32_t>>& sets() const override { return source_.sets(); }
     std::span<const GeneRecord> genes() const override { return source_.genes(); }
@@ -211,7 +213,11 @@ class MembershipViewSource final : public Source {
     }
     std::optional<NodeView> node_view(std::uint64_t id) const override {
         auto view = source_.node_view(id);
-        if (view) view->shared_membership_id = share_ && (id == 100 || id == 101) ? 7 : missing;
+        if (view) {
+            view->shared_membership_id = missing;
+            if (share_) for (const auto& [node, list] : ids_)
+                if (node == id) { view->shared_membership_id = list; break; }
+        }
         return view;
     }
     void begin_read_group() const override { source_.begin_read_group(); }
@@ -219,6 +225,7 @@ class MembershipViewSource final : public Source {
   private:
     const Source& source_;
     bool share_ = false;
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> ids_;
 };
 
 struct DifferentialModes {
@@ -289,7 +296,7 @@ int main() try {
 
     // Two differently sized nodes intentionally share their exact ordered
     // postings. A third list overlaps one model, while the 100->101 edge is
-    // directional, so the reused decoded list cannot replace node incidence.
+    // directional, so shared membership must retain actual node credits/edges.
     Data shared_memberships = data();
     shared_memberships.sets = {{}, {10}, {20}, {30}};
     const std::vector<Posting> shared_rows{{0, 1, 5}, {1, 2, 10}};
@@ -318,8 +325,51 @@ int main() try {
                 missing_modes.automatic_stats.nodes_with_shared_id == 0 &&
                 missing_modes.automatic_stats.membership_lists_decoded == 3 &&
                 missing_modes.automatic_stats.membership_lists_reused == 0 &&
-                missing_modes.automatic_stats.posting_rows_decoded == 6,
-            "shared membership reuse must only skip equivalent posting-list decode");
+                missing_modes.automatic_stats.posting_rows_decoded == 6 &&
+                shared_modes.automatic_stats.incidence_node_rows == 6 &&
+                shared_modes.automatic_stats.incidence_list_rows == 4 &&
+                missing_modes.automatic_stats.incidence_node_rows == 6 &&
+                missing_modes.automatic_stats.incidence_list_rows == 6 &&
+                shared_modes.automatic_stats.membership_groups == missing_modes.automatic_stats.membership_groups &&
+                shared_modes.automatic_stats.model_groups == missing_modes.automatic_stats.model_groups &&
+                shared_modes.automatic_stats.model_visits == missing_modes.automatic_stats.model_visits,
+            "shared membership must preserve class transfers while reducing incidence rows");
+
+    // Equal payload under distinct IDs remains legal; unequal flags/supports
+    // remain distinct. Record-local subsets, repeated/partial/reverse credits,
+    // zero-base nodes, mixed support and a shared empty list exercise the
+    // coordinate quotient independently of the node-by-node oracle.
+    node(shared_memberships, 103, 9, shared_rows);
+    node(shared_memberships, 104, 3, {{0, 3, 4}});
+    node(shared_memberships, 105, 2, {});
+    node(shared_memberships, 106, 4, {});
+    auto subset_reference = write_load(root / "shared-membership-subsets.pcr", shared_memberships);
+    MembershipViewSource subset_source(subset_reference, true,
+        {{100, 7}, {101, 7}, {102, 8}, {103, 9}, {104, 10}, {105, 0}, {106, 0}});
+    MembershipViewSource subset_missing(subset_reference, false);
+    auto subset_one = dag({{{100, false, 3, 3}, {100, false, 2, 2}},
+                           {{101, true, 4, 4}}, {{102, false, 5, 5}}}, {{1}, {2}, {}});
+    auto subset_two = dag({{{101, false, 3, 3}, {103, true, 0, 0}},
+                           {{104, false, 3, 3}}, {{105, false, 1, 1}, {106, true, 2, 2}}},
+                          {{1}, {2}, {}});
+    const auto subset_shared_modes = differential_modes(subset_source, {&subset_one, &subset_two},
+        "list incidence must preserve partial/repeated/empty/mixed-support node facts");
+    const auto subset_missing_modes = differential_modes(subset_missing, {&subset_one, &subset_two},
+        "node incidence control must preserve partial/repeated/empty/mixed-support facts");
+    const auto& subset_stats = subset_shared_modes.automatic_stats;
+    const auto& subset_control = subset_missing_modes.automatic_stats;
+    require(same(subset_shared_modes.automatic, subset_missing_modes.automatic) &&
+                subset_stats.nodes_with_shared_id == 7 && subset_stats.membership_lists_decoded == 5 &&
+                subset_stats.membership_lists_reused == 2 && subset_stats.posting_rows_decoded == 7 &&
+                subset_stats.posting_rows_reused == 2 && subset_stats.incidence_node_rows == 11 &&
+                subset_stats.incidence_list_rows == 9 && subset_control.incidence_node_rows == 11 &&
+                subset_control.incidence_list_rows == 11 &&
+                subset_stats.membership_groups == subset_control.membership_groups &&
+                subset_stats.model_groups == subset_control.model_groups &&
+                subset_stats.model_visits == subset_control.model_visits &&
+                subset_stats.dp_states == subset_control.dp_states &&
+                subset_stats.dp_transitions == subset_control.dp_transitions,
+            "shared-list quotient must preserve record-local partitions and DP work");
 
     // Three read bases make the start/end bonuses common: three matches score
     // 13, one mismatch then two matches scores 8, and a one-base deletion
@@ -402,6 +452,27 @@ int main() try {
             "body evidence retains an independent Gene fallback winner");
     differential(support_reference, {&tied_support, &losing_support},
                  "raw-alias support union and losing support exclusion");
+
+    // Grow the read-local model-ID map repeatedly, encounter odd IDs before
+    // even IDs, and revisit old IDs after insertion. Bucket order must never
+    // become local model order or change the restored aliases.
+    Data growth = data();
+    const auto alias_model = growth.models.front();
+    growth.models.assign(256, alias_model);
+    std::vector<Posting> odd_models, all_models;
+    for (std::uint32_t id = 0; id < 256; ++id) {
+        all_models.push_back({id, 0, 1});
+        if (id & 1U) odd_models.push_back({id, 0, 1});
+    }
+    node(growth, 700, 4, std::move(odd_models));
+    node(growth, 701, 7, std::move(all_models));
+    auto growth_reference = write_load(root / "model-id-growth.pcr", growth);
+    auto growth_read = dag({{{700, false, 4, 4}}, {{701, false, 7, 7}}}, {{1}, {}});
+    const auto growth_modes = differential_modes(growth_reference, {&growth_read},
+                                                 "model-ID map growth preserves encounter-order aliases");
+    require(growth_modes.automatic_stats.raw_models == 256 &&
+                growth_modes.automatic[0].result.genes == std::vector<std::string>{"A"},
+            "model-ID growth lost or reassigned raw models");
 
     // Distinct transcript IDs with the same transfers and forward splice mask
     // share automatic work. Their policy IDs and fixed support units remain
