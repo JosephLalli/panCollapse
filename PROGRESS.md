@@ -1,17 +1,33 @@
 # Progress
 
-## CURRENT: D120 local source-to-main fast-forward merge gate pending (2026-11-02)
+## CURRENT: D120 local main integration verified (2026-11-02)
 
-**D120 authorized local integration (not started):** Source HEAD
+**D120 merged-code terminal:** Main fast-forwarded from `02c7f8f` to checkpoint
+`b94dce157ca4e1443a76a13e0f6908526a42187b`. The merged-equivalent tree passed
+177/177 CTest in 30.00 s (exit 0) at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_main_merge_20261102_EtVk4o/ctest.log`;
+`build.log` reports no work. `git diff` main/source was zero, source was clean
+before checks, and the binary byte-compares to the D119 measured candidate.
+
+**D120 preservation boundary:** Root main's original `PROGRESS.md` is retained
+as `main-PROGRESS-before.md`, `main-progress-before.patch`, and narrow-stash
+receipt `main-progress-stash.txt`; do not drop that stash. Untracked `.codex/`
+is untouched. Keep the historical 21-line October 28 note exact, uncommitted,
+and in its historical section, outside the integration commits. Final ref and
+note-restoration verification are recorded in the receipt directory's
+`RESULTS.json`.
+No count/index/promotion/push/tag occurred; release 0.10 remains unchanged.
+
+**D120 authorization history:** Source HEAD
 `0ce807f02f09e5cb5e0131501256dceed7774f02` contains the sealed D118/D119
 177-test and exact-first-1M receipts. Main
 `02c7f8fc013daae76cc7531d18089a89b3ec38d9` is its ancestor: 12 source-only
 commits (`990872c..0ce807f`) and zero main-only commits, so the intended merge is
-a local fast-forward. Root main currently has an uncommitted historical
+a local fast-forward. At phase entry, root main had an uncommitted historical
 `PROGRESS.md` repair pointer and untracked `.codex/`; both are user state and
 must be preserved, not committed or discarded.
 
-The authorized sequence is: commit this checkpoint, back up or narrowly stash
+The authorized sequence was: commit this checkpoint, back up or narrowly stash
 only root-main `PROGRESS.md` if necessary, fast-forward main, restore that
 working edit without dropping its stash, then take a full CTest snapshot in
 Docker reusing the build only if the merged tree is exact. D118/D119 receipts,

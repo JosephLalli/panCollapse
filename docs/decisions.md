@@ -7989,7 +7989,7 @@ compiler/default remains unpromoted.
 
 ## D120 — Local source-to-main fast-forward integration gate (2026-11-02)
 
-**Decision source: User. Status: authorized; not started.** Source HEAD
+**Decision source: User. Status: local merged-code gate passed.** Source HEAD
 `0ce807f02f09e5cb5e0131501256dceed7774f02` contains sealed D118/D119 177-test
 and exact-first-1M evidence. Main
 `02c7f8fc013daae76cc7531d18089a89b3ec38d9` is an ancestor: 12 source-only
@@ -7998,9 +7998,18 @@ fast-forward. Root main's uncommitted historical `PROGRESS.md` repair pointer
 and untracked `.codex/` are user state: preserve them and do not commit, drop,
 or otherwise broaden their scope.
 
-Next steps are commit this checkpoint; back up or narrowly stash only root-main
-`PROGRESS.md` if required; fast-forward main; restore that edit without dropping
-its stash; then take a full CTest snapshot in Docker, reusing the build only if
-the merged tree is exact. Preserve D118/D119 receipts, limits, and interpretation.
-No push, tag, release, full rebuild/count, or default V3 compiler promotion is
-authorized.
+Main fast-forwarded `02c7f8f` to checkpoint
+`b94dce157ca4e1443a76a13e0f6908526a42187b`. The merged-equivalent tree passed
+177/177 CTest in 30.00 s, exit 0, at
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_main_merge_20261102_EtVk4o/ctest.log`;
+`build.log` reports no work. Main/source diff was zero, source was clean before
+checks, and the binary byte-compares to the D119 measured candidate.
+
+Root main's original `PROGRESS.md` is preserved in `main-PROGRESS-before.md`,
+`main-progress-before.patch`, and narrow-stash receipt `main-progress-stash.txt`;
+do not drop that stash. Untracked `.codex/` remains untouched. The historical
+21-line October 28 note must remain exact and uncommitted in its historical
+section, outside integration commits. Final ref and note-restoration verification
+are recorded in the receipt directory's `RESULTS.json`.
+No count/index/promotion/push/tag occurred; release 0.10 is
+unchanged. Preserve D118/D119 limits and interpretation.
