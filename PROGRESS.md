@@ -1,6 +1,51 @@
 # Progress
 
-## CURRENT: D116 support guard rejected; restored E verification complete (2026-11-02)
+## CURRENT: D117 A posting-decode fast path retained; gate complete (2026-11-02)
+
+**D117 A selected after review:** The consequential review selected A, a one-byte
+`PostingView` decode fast path that retains the original multi-byte loop and all
+common lazy validation. It is an eight-net-line change in `src/count_reference.hpp`:
+no format, index, API, cache, scoring, or policy change. Dense per-worker lookup
+is rejected for this phase, not deferred as a proven hotspot: 95,130,819 models
+would require 380.5 MB per worker / 24.35 GB at 64 workers, plus ownership,
+reset, and memory-plan complexity, without an isolated map-cost measurement.
+Do not subtract decode-lambda and `PostingView` self percentages; they are
+separate leaf symbols.
+
+New oracle coverage spans delta 0/7/8, all 15 nonzero flags at first/non-first
+position, and malformed empty/truncated/noncanonical/zero-flag/zero-later-delta/
+trailing/model/support-bound inputs. An initial missing test-only `PostingView`
+namespace import was fixed; the final warning-free 175-test run passed in 30.01 s.
+Frozen A source patch/binary and root scripts are in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_membership_hotpath_20261102_jVo19n/candidate-a`.
+The terminal E/A/A/E comparison driver exited 0: the same verified image and all
+four cases passed exact frozen-R7 four-Parquet/six-MEX plus decoded/logical/
+profile/prior/counter parity with unchanged counters, zero max/OOM/swap/major
+faults. E controls were 132.05/131.26 s and 7,017.96/6,992.48 CPU-s; A was
+123.21/129.81 s and 6,317.44/6,860.03 CPU-s, with A HWM
+67,823,218,688/68,434,071,552 B. Mean wall was 131.655→126.51 s (-3.90794%) and
+CPU -5.94535%. A is retained; dense B is not. This shared-host first-1M result
+is not whole-GAMP, F1, release, or causal attribution evidence.
+
+Follow-up A profiling passed exact parity, capture exit 0, driver exit 0, and
+quality (10,976 samples/60.112568 s; zero lost/empty/FastLocate; noinline stderr
+empty). Its self decode/lambda/malloc/free shares were 9.02/15.07/4.68/3.72%,
+with 95.5448% resolver callers and 0.081997% splice. The earlier E `PostingView`
+9.62% share and these fractions are not counterfactual CPU times, so they do not
+prove the entire observed 5.94535% CPU difference. Profiled count timing is
+excluded from the comparison. Current build binary matches frozen A; source
+archive, patch, and commands are retained. No next work is automatically
+authorized.
+
+No whole-GAMP run, index rebuild, input hashing, GAMP/XG/RI change, scoring,
+biology, CB/UMI, cap, spill, release, or other-job action is authorized. D117's
+terminal receipts are `TERMINAL.json` and `RESULTS.json` in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_membership_hotpath_20261102_jVo19n`.
+D116 supplies baseline evidence: valid profiled3 had 11,274 samples over 60.057764 s with
+zero lost/empty samples; resolver caller share was 95.875%, and reliable self
+shares were decode lambda 15.31%, `PostingView` 9.62%, `malloc` 4.95%, and
+`free` 3.18%. The adjacent-support guard was rejected (-0.5558% mean wall,
++0.5229% CPU), removed from production, and E at `fba7eba` was the D117 baseline.
 
 **D116 state:** The validated E source was committed as
 `fba7ebad9f8ca07bdaa73eb8b4422299de9a8078`. At

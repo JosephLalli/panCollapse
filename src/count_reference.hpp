@@ -132,23 +132,31 @@ class PostingView {
         void decode() {
             std::uint64_t code = 0;
             const std::byte* cursor = encoded_;
-            bool complete = false;
-            for (unsigned index = 0; index < 6; ++index) {
-                if (cursor == encoded_end_)
-                    throw std::runtime_error("truncated compact posting varint");
-                const auto byte = std::to_integer<unsigned char>(*cursor++);
-                const auto payload = static_cast<std::uint64_t>(byte & 0x7fU);
-                if (index == 5 && payload > 1)
-                    throw std::runtime_error("compact posting varint overflow");
-                code |= payload << (7 * index);
-                if ((byte & 0x80U) == 0) {
-                    if (index != 0 && payload == 0)
-                        throw std::runtime_error("non-canonical compact posting varint");
-                    complete = true;
-                    break;
+            if (cursor == encoded_end_)
+                throw std::runtime_error("truncated compact posting varint");
+            const auto first_byte = std::to_integer<unsigned char>(*cursor);
+            if ((first_byte & 0x80U) == 0) {
+                code = first_byte;
+                ++cursor;
+            } else {
+                bool complete = false;
+                for (unsigned index = 0; index < 6; ++index) {
+                    if (cursor == encoded_end_)
+                        throw std::runtime_error("truncated compact posting varint");
+                    const auto byte = std::to_integer<unsigned char>(*cursor++);
+                    const auto payload = static_cast<std::uint64_t>(byte & 0x7fU);
+                    if (index == 5 && payload > 1)
+                        throw std::runtime_error("compact posting varint overflow");
+                    code |= payload << (7 * index);
+                    if ((byte & 0x80U) == 0) {
+                        if (index != 0 && payload == 0)
+                            throw std::runtime_error("non-canonical compact posting varint");
+                        complete = true;
+                        break;
+                    }
                 }
+                if (!complete) throw std::runtime_error("compact posting varint overflow");
             }
-            if (!complete) throw std::runtime_error("compact posting varint overflow");
             const auto flags = static_cast<std::uint32_t>(code & 0x0fU);
             const auto delta = code >> 4;
             if (flags == 0 || delta > std::numeric_limits<std::uint32_t>::max())

@@ -1,11 +1,13 @@
 #include "direct_count_index.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <span>
@@ -17,6 +19,7 @@
 namespace {
 using namespace pancollapse::direct_index;
 using pancollapse::count_reference::missing;
+using pancollapse::count_reference::PostingView;
 
 void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
@@ -66,6 +69,60 @@ std::uint64_t get64(std::string_view input, std::size_t offset) {
     for (unsigned index = 0; index < 8; ++index)
         value |= static_cast<std::uint64_t>(static_cast<unsigned char>(input[offset + index])) << (8 * index);
     return value;
+}
+void posting_view_boundaries() {
+    std::vector<std::uint32_t> supports(9, 1);
+    for (const std::uint32_t delta : {0U, 7U, 8U}) {
+        for (std::uint32_t flags = 1; flags < 16; ++flags) {
+            const auto code = (delta << 4) | flags;
+            std::vector<std::byte> encoded;
+            if (code < 128) encoded.push_back(static_cast<std::byte>(code));
+            else {
+                encoded.push_back(static_cast<std::byte>((code & 127U) | 128U));
+                encoded.push_back(static_cast<std::byte>(code >> 7));
+            }
+            const auto check = [&](std::size_t count) {
+                const auto view = PostingView::encoded(encoded, count, supports, 2);
+                auto cursor = view.begin();
+                if (count == 2) {
+                    require((*cursor).model == 0 && (*cursor).flags == 1,
+                            "first posting changed before boundary delta");
+                    ++cursor;
+                }
+                const auto posting = *cursor;
+                require(posting.model == delta && posting.flags == flags &&
+                            posting.support_set == ((flags & 12U) ? 1U : 0U),
+                        "compact first/nonfirst one-byte/two-byte boundary changed");
+                require(++cursor == view.end(), "compact boundary iterator did not end");
+            };
+            check(1);
+            if (delta != 0) { encoded.insert(encoded.begin(), std::byte{1}); check(2); }
+        }
+    }
+    const auto rejects = [&](std::initializer_list<unsigned char> input, std::size_t count) {
+        std::vector<std::byte> encoded;
+        for (const auto byte : input) encoded.push_back(static_cast<std::byte>(byte));
+        fails([&] {
+            const auto view = PostingView::encoded(encoded, count, supports, 2);
+            for (const auto posting : view) static_cast<void>(posting);
+        }, "malformed compact fast-path input accepted");
+    };
+    rejects({0}, 1);             // zero flags, first model 0
+    rejects({0x70}, 1);          // zero flags, first model 7
+    rejects({1, 1}, 2);          // zero nonfirst delta
+    rejects({0x81, 0}, 1);       // noncanonical multibyte code
+    rejects({0x80}, 1);          // truncated multibyte code
+    rejects({1, 1}, 1);          // trailing byte after terminal posting
+    const std::array<std::byte, 1> model7{std::byte{0x7f}};
+    fails([&] { static_cast<void>(*PostingView::encoded(
+        std::span<const std::byte>(model7).first(0), 1, supports, 2).begin()); },
+        "empty compact first posting accepted");
+    fails([&] { static_cast<void>(*PostingView::encoded(model7, 1,
+        std::span<const std::uint32_t>(supports).first(7), 2).begin()); },
+        "one-byte out-of-range model accepted");
+    supports[7] = 2;
+    fails([&] { static_cast<void>(*PostingView::encoded(model7, 1, supports, 2).begin()); },
+        "one-byte out-of-range support accepted");
 }
 void build(const std::filesystem::path& output) {
     // Deliberately collide EVERY annotation-list digest. Equality must compare
@@ -121,6 +178,7 @@ void build_buffered(const std::filesystem::path& output) {
 }
 
 int main() try {
+    posting_view_boundaries();
     Temp temp;
     const auto path = temp.path / "direct.pci";
     build(path);

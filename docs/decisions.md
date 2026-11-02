@@ -7841,3 +7841,66 @@ rebuild/full-175 passed in 29.58 s without warnings, and `build/src/panCollapse`
 is byte-identical to frozen E used by both fresh controls; no extra 1M run is
 needed. The D116 gate is complete. No automatic next run, release, whole-GAMP
 count, or index work is authorized.
+
+## D117 — Membership-decode and model-bookkeeping optimization gate (2026-11-02)
+
+**Decision source: User. Status: A retained after completed repeated validation.** Target membership decoding and model bookkeeping after the valid D116
+E profile; do not target splicing. The accepted objective is less work/code where
+exact counting permits, not a blanket authorization for a particular data
+structure or algorithm. The selected implementation required a bounded proof/
+feasibility review. Each selected candidate requires appropriate tests and
+repeated same-first-1M comparisons at 64 CPUs, 300 GB, and no swap, with exact
+frozen-R7 four-Parquet/six-MEX plus decoded/logical/profile/prior/counter parity.
+
+No whole-GAMP run, index rebuild, input hashing, GAMP/XG/RI change, scoring,
+biology, CB/UMI, cap, spill, release, or other-job action is authorized. D116's
+baseline authority is
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_e_hotpath_20261102_Qpl24N/TERMINAL.json`
+and `RESULTS.json`: profiled3 passed at 11,274 samples/60.057764 s with zero
+lost/empty samples; resolver caller share was 95.875%, reliable self decode
+lambda 15.31%, `PostingView` 9.62%, `malloc` 4.95%, and `free` 3.18%. The
+adjacent-support guard's -0.5558% mean wall and +0.5229% CPU outcome was rejected
+as no gain and removed. Production at phase entry was E at `fba7eba`, byte-identical to the
+frozen E binary used by the controls.
+
+**D117 execution status:** Consequential review selected A: a one-byte
+`PostingView` decode fast path preserving the original multi-byte loop and all
+common lazy validation. It is eight net lines in `src/count_reference.hpp`, with
+no format, index, API, cache, scoring, or policy change. Dense per-worker lookup
+is rejected for this phase because 95,130,819 models imply 380.5 MB/worker,
+24.35 GB at 64 workers, plus ownership/reset/memory-plan complexity; no isolated
+map-cost measurement supports it. Decode-lambda (15.31%) and `PostingView`
+(9.62%) are separate leaf self symbols and must not be subtracted.
+
+New tests cover delta 0/7/8; all 15 nonzero flags at first/non-first position;
+and malformed empty/truncated/noncanonical/zero-flag/zero-later-delta/trailing/
+model/support-bound inputs. The first build lacked a test-only `PostingView`
+namespace import; after that correction, final warning-free 175 passed in 30.01
+s. Frozen A source patch/binary are under
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_membership_hotpath_20261102_jVo19n/candidate-a`.
+Fresh E-control1 passed exact R7 parity at 132.05 s/7,017.96 CPU-s/66,460,300 KiB
+HWM and zero major faults. The ensuing A1→A2→E-control2 sequence used the same
+64-CPU/300-GB/no-swap first-1M, all-profile/all-format scope with exact R7 gates;
+its terminal result follows. It remains neither ROI proof nor whole-GAMP, F1,
+release, or causal-speedup evidence.
+
+**D117 terminal status:** The A1→A2→E-control2 driver exited 0. Same image was
+verified for all four first-1M, 64-CPU/300-GB/no-swap, all-profile/all-format
+cases; all passed exact frozen-R7 four-Parquet/six-MEX plus decoded/logical/
+profile/prior/counter parity with unchanged counters and zero max/OOM/swap/major
+faults. E-control1/2 wall was 132.05/131.26 s and CPU 7,017.96/6,992.48 s; A1/2
+wall was 123.21/129.81 s and CPU 6,317.44/6,860.03 s, with A HWM
+67,823,218,688/68,434,071,552 B. Mean wall was 131.655→126.51 s (-3.90794%) and
+CPU -5.94535%. Parent retains the eight-net-line A fast path, not dense B.
+Receipts are `TERMINAL.json` and `RESULTS.json` in
+`/mnt/ssd/lalli/hprc_v2_vg_rna/whole_genome_runs/pancollapse_membership_hotpath_20261102_jVo19n`.
+
+Follow-up A profile passed exact parity, capture exit 0, driver exit 0, and
+quality: 10,976 samples/60.112568 s, zero lost/empty/FastLocate, noinline stderr
+empty; self decode/lambda/malloc/free were 9.02/15.07/4.68/3.72%, resolver
+callers 95.5448%, splice 0.081997%. Neither those fractions nor the prior E
+`PostingView` 9.62% fraction is a counterfactual CPU time, so the profile does
+not prove the entire observed 5.94535% CPU difference; profiled count timing is
+excluded from the comparison. Current binary matches frozen A; source archive,
+patch, and commands are retained. This is not whole-GAMP, F1, release, or causal
+speedup evidence. No next work is automatically authorized.
